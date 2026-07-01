@@ -7,6 +7,95 @@ on:
   pull_request:
 
 jobs:
+  build_windows:
+    name: Windows Build
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            git
+            make
+            diffutils
+            perl
+            python
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-pixman
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libjpeg-turbo
+            mingw-w64-x86_64-libslirp
+            mingw-w64-x86_64-libssh
+            mingw-w64-x86_64-libusb
+            mingw-w64-x86_64-lzo2
+            mingw-w64-x86_64-snappy
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-gnutls
+            mingw-w64-x86_64-nettle
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-gtk3
+
+      - name: Configure
+        shell: msys2 {0}
+        run: |
+          mkdir build
+          cd build
+
+          ../configure \
+            --target-list=aarch64-softmmu,x86_64-softmmu \
+            --disable-guest-agent \
+            --enable-slirp \
+            --enable-nettle \
+            --enable-gnutls \
+            --enable-gtk \
+            --enable-sdl \
+            --disable-werror \
+            --disable-qom-cast-debug \
+            --disable-debug-info
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          ninja -C build
+
+      - name: Prepare Windows artifact
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+
+          cp build/qemu-system-aarch64.exe dist/
+          cp build/qemu-system-x86_64.exe dist/
+          cp build/qemu-img.exe dist/ 2>/dev/null || true
+
+          ldd build/qemu-system-aarch64.exe \
+            | awk '/\/mingw64\// { print $3 }' \
+            | sort -u \
+            | xargs -r -I '{}' cp '{}' dist/
+
+          cp -r pc-bios dist/ 2>/dev/null || true
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferno-windows-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+          
   build_linux:
     name: Linux Build
     runs-on: ubuntu-latest
