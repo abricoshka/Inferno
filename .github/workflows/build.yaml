@@ -59,6 +59,7 @@ jobs:
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/mingw64 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DBUILD_SHARED_LIBS=ON
 
           cmake --build lzfse-build
