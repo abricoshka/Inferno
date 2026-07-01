@@ -49,6 +49,19 @@ jobs:
             mingw-w64-x86_64-SDL2
             mingw-w64-x86_64-gtk3
 
+      - name: Build and install LZFSE
+        shell: msys2 {0}
+        run: |
+          git clone https://github.com/lzfse/lzfse.git
+          cmake -S lzfse -B lzfse-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/mingw64 \
+            -DBUILD_SHARED_LIBS=ON
+
+          cmake --build lzfse-build
+          cmake --install lzfse-build
+
       - name: Configure
         shell: msys2 {0}
         run: |
