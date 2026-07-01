@@ -38,6 +38,14 @@ jobs:
           PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig ../configure --target-list=aarch64-softmmu,x86_64-softmmu --disable-guest-agent --enable-slirp --enable-lzfse --enable-nettle --enable-gnutls --disable-werror
           make -j$(nproc)
 
+      - name: Upload Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferno-linux-x86_64
+          path: build/
+          if-no-files-found: error
+          retention-days: 14
+
   build_macos:
     name: macOS Build
     runs-on: macos-26
