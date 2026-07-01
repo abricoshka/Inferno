@@ -30,6 +30,7 @@ jobs:
             perl
             python
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
@@ -52,7 +53,8 @@ jobs:
       - name: Build and install LZFSE
         shell: msys2 {0}
         run: |
-          git clone https://github.com/lzfse/lzfse.git
+          git clone --depth 1 https://github.com/lzfse/lzfse.git
+
           cmake -S lzfse -B lzfse-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -61,6 +63,9 @@ jobs:
 
           cmake --build lzfse-build
           cmake --install lzfse-build
+
+          test -f /mingw64/include/lzfse.h
+          ls -la /mingw64/lib/*lzfse*
 
       - name: Configure
         shell: msys2 {0}
@@ -72,6 +77,7 @@ jobs:
             --target-list=aarch64-softmmu,x86_64-softmmu \
             --disable-guest-agent \
             --enable-slirp \
+            --enable-lzfse \
             --enable-nettle \
             --enable-gnutls \
             --enable-gtk \
