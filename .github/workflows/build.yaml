@@ -98,19 +98,40 @@ jobs:
         run: |
           set -euxo pipefail
 
-          rm -rf dist
-          mkdir -p dist
+          rm -rf stage dist
+          mkdir -p stage dist
 
-          meson install -C build --destdir "$PWD/dist"
+          meson install -C build --destdir "$PWD/stage"
 
-          test -f dist/bin/qemu-system-aarch64.exe
-          test -f dist/bin/qemu-system-x86_64.exe
+          install_root="$(
+            dirname "$(
+              find stage -type f -name 'qemu-system-aarch64.exe' \
+                -print -quit
+            )"
+          )"
+
+          if [ -z "$install_root" ] || [ ! -f "$install_root/qemu-system-aarch64.exe" ]; then
+            echo "Could not locate installed qemu-system-aarch64.exe"
+            find stage -type f | sort
+            exit 1
+          fi
+
+          echo "Detected Meson install root: $install_root"
+
+          cp -a "$install_root"/. dist/
+
+          test -f dist/qemu-system-aarch64.exe
+          test -f dist/qemu-system-x86_64.exe
+          test -f dist/qemu-img.exe
+          test -f dist/share/bios-256k.bin
           test -f dist/share/icons/hicolor/512x512/apps/CKQEMUBootSplash@2x.png
 
           for exe in \
-            dist/bin/qemu-system-aarch64.exe \
-            dist/bin/qemu-system-x86_64.exe \
-            dist/bin/qemu-img.exe
+            dist/qemu-system-aarch64.exe \
+            dist/qemu-system-x86_64.exe \
+            dist/qemu-img.exe \
+            dist/qemu-io.exe \
+            dist/qemu-nbd.exe
           do
             [ -f "$exe" ] || continue
 
@@ -119,12 +140,12 @@ jobs:
               | sort -u \
               | while read -r dll; do
                   if [ -n "$dll" ] && [ -f "$dll" ]; then
-                    cp -n "$dll" dist/bin/
+                    cp -n "$dll" dist/
                   fi
                 done
           done
 
-          echo "Final install tree:"
+          echo "Final artifact tree:"
           find dist -type f | sort
 
       - name: Upload Windows build
