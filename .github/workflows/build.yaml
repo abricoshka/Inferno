@@ -107,6 +107,13 @@ jobs:
             | xargs -r -I '{}' cp '{}' dist/
 
           cp -r pc-bios dist/ 2>/dev/null || true
+          
+          mkdir -p dist/share/icons/hicolor/512x512/apps
+
+          cp ui/icons/CKQEMUBootSplash_512x512@2x.png \
+            dist/share/icons/hicolor/512x512/apps/CKQEMUBootSplash@2x.png
+
+          test -f dist/share/icons/hicolor/512x512/apps/CKQEMUBootSplash@2x.png
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
