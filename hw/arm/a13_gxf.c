@@ -454,10 +454,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .resetvalue  = 0,
         .readfn      = raw_read,
         .writefn     = raw_write,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_config_el[1]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_config_el1),
     },
     {
-        .name        = "SPRR_CONFIG_EL0",
+        .name        = "SPRR_GTR_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -469,7 +469,7 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .resetvalue  = 0,
         .readfn      = raw_read,
         .writefn     = raw_write,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_config_el[0]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_gtr_el1),
     },
     {
         .name       = "SPRR_EL0BR0_EL1",

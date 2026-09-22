@@ -650,7 +650,8 @@ typedef struct CPUArchState
     struct
     {
         uint64_t sprr_el_br_el1[4][2];
-        uint64_t sprr_config_el[4];
+        uint64_t sprr_config_el1;
+        uint64_t sprr_gtr_el1;
         uint64_t mprr_el_br_el1[4][2];
     } sprr;
 
