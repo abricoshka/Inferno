@@ -117,32 +117,16 @@ static void far_el1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t val
 
 static void sprr_uperm_br0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
 {
-    // maybe use uint64_t for mask/umask?
-    uint64_t perm = raw_read(env, ri);
-    uint32_t mask = env->sprr.sprr_umprr_br[0];
+    uint64_t mask = 0;
+
     if (arm_current_el(env)) {
         raw_write(env, ri, value);
         return;
     }
 
-    for (int i = 0; i < 16; i++) {
-        uint32_t umask          = SPRR_MASK_EXTRACT_IDX_ATTR(mask, i);
-        uint64_t requested_perm = APRR_EXTRACT_IDX_ATTR(value, i);
-        uint64_t orig_perm      = APRR_EXTRACT_IDX_ATTR(perm, i);
-        uint64_t changed_perm   = ((requested_perm ^ orig_perm) & umask);
-        uint64_t result_perm    = orig_perm;
-        /* Only change bits that are set in mask */
+    for (int i = 0; i < 16; i++) { mask |= extract64(env->sprr.sprr_umprr_br[0], i * 2, 2) << (i * 4); }
 
-        result_perm &= ~changed_perm;
-        result_perm |= requested_perm & changed_perm;
-
-        perm &= ~(APRR_ATTR_MASK << APRR_SHIFT_FOR_IDX(i));
-        perm |= result_perm << APRR_SHIFT_FOR_IDX(i);
-    }
-    // what's about bit36?
-    // Visual also accidentally found it on his own "TPRO regions should not be writable on entry to dyld"
-
-    raw_write(env, ri, perm);
+    raw_write(env, ri, (raw_read(env, ri) & ~mask) | (value & mask));
 
     tlb_flush_by_mmuidx(env_cpu(env), ARMMMUIdxBit_E10_0);
 }
