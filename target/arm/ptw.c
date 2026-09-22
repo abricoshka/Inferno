@@ -839,80 +839,50 @@ static int simple_ap_to_rw_prot_is_user(int ap, bool is_user)
 static int simple_ap_to_rw_prot(ARMMMUIdx mmu_idx, int ap)
 { return simple_ap_to_rw_prot_is_user(ap, regime_is_user(mmu_idx)); }
 
-/* Translate section/page attributes to page
+static inline int sprr_index(int ap, int xn, int pxn) { return ((ap << 2) | (xn << 1) | pxn) & 0xf; }
+
+/* Translate an SPRR permission index to page
  * R/W/X protection flags.
  *
  * @env:     CPUARMState
  * @mmu_idx: The translation regime
  * @select:  The TTBR the address translates through
- * @ap:      The 2-bit simple AP (AP[2:1])
- * @xn:      XN (execute-never) bits
- * @pxn:     PXN (privileged-execute-never) bits
+ * @idx:     The SPRR permission index (AP[2:1], UXN, PXN)
  * @guarded: TRUE if accessing from GXF
  */
-static inline int sprr_index(int ap, int xn, int pxn) { return ((ap << 2) | (xn << 1) | pxn) & 0xf; }
-
-static inline int pte_to_sprr_prot_is_guarded(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int ap, int xn, int pxn,
-                                              bool guarded)
+static int sprr_to_prot(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int idx, bool guarded)
 {
-    int      sprr_idx;
-    uint64_t sprr_perm;
+    uint64_t perm;
     int      attr;
-    int      prot;
-
-    if (!arm_is_sprr_enabled(env)) { return PAGE_READ | PAGE_WRITE | PAGE_EXEC; }
 
     assert(regime_el(mmu_idx) == 1);
 
-    sprr_idx  = sprr_index(ap, xn, pxn);
-    sprr_perm = regime_is_user(mmu_idx) ? env->sprr.sprr_uperm_br[select] : env->sprr.sprr_pperm_br[select];
-
-    attr = extract64(sprr_perm, sprr_idx * 4, 4);
-    prot = 0;
+    perm = regime_is_user(mmu_idx) ? env->sprr.sprr_uperm_br[select] : env->sprr.sprr_pperm_br[select];
+    attr = extract64(perm, idx * 4, 4);
 
     if (guarded) {
         switch (attr >> 2) {
-            case 0 : prot = 0; break;
-            case 1 : prot = PAGE_READ | PAGE_EXEC; break;
-            case 2 : prot = PAGE_READ; break;
-            case 3 : prot = PAGE_READ | PAGE_WRITE; break;
-            default: qemu_build_not_reached();
-        }
-    }
-    else {
-        switch (attr & 3) {
-            case 0: prot = 0; break;
-            case 1:
-                prot = PAGE_READ | PAGE_EXEC;
-                if ((attr >> 2) == 2) { prot = PAGE_EXEC; }
-                break;
-            case 2: prot = PAGE_READ; break;
-            case 3:
-                prot = PAGE_READ | PAGE_WRITE;
-                if ((attr >> 2) == 1) {
-                    /* No R/W in EL if RX in GXF */
-                    prot = 0;
-                }
-                break;
+            case 0 : return 0;
+            case 1 : return PAGE_READ | PAGE_EXEC;
+            case 2 : return PAGE_READ;
+            case 3 : return PAGE_READ | PAGE_WRITE;
             default: qemu_build_not_reached();
         }
     }
 
-    return prot;
+    switch (attr & 3) {
+        case 0: return 0;
+        case 1:
+            if ((attr >> 2) == 2) { return PAGE_EXEC; }
+            return PAGE_READ | PAGE_EXEC;
+        case 2: return PAGE_READ;
+        case 3:
+            /* No R/W in EL if RX in GXF */
+            if ((attr >> 2) == 1) { return 0; }
+            return PAGE_READ | PAGE_WRITE;
+        default: qemu_build_not_reached();
+    }
 }
-
-/* Translate section/page attributes to page
- * R/W/X protection flags.
- *
- * @env:     CPUARMState
- * @mmu_idx: The translation regime
- * @select:  The TTBR the address translates through
- * @ap:      The 2-bit simple AP (AP[2:1])
- * @xn:      XN (execute-never) bits
- * @pxn:     PXN (privileged-execute-never) bits
- */
-static inline int pte_to_sprr_prot(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int ap, int xn, int pxn)
-{ return pte_to_sprr_prot_is_guarded(env, mmu_idx, select, ap, xn, pxn, arm_is_guarded(env)); }
 
 static bool get_phys_addr_v5(CPUARMState* env, S1Translate* ptw, uint32_t address, MMUAccessType access_type,
                              GetPhysAddrResult* result, ARMMMUFaultInfo* fi)
@@ -1151,14 +1121,6 @@ static bool get_phys_addr_v6(CPUARMState* env, S1Translate* ptw, uint32_t addres
             prot_rw = ap_to_rw_prot(env, mmu_idx, ap, domain_prot);
             user_rw = ap_to_rw_prot_is_user(env, mmu_idx, ap, domain_prot, 1);
         }
-#if 0
-        // does 32-bit AP have that functionality?
-        if (arm_is_sprr_enabled(env)) {
-            prot_rw = pte_to_sprr_prot(env, ap, xn, pxn) & (PAGE_READ | PAGE_WRITE);
-            pxn = !(pte_to_sprr_prot(env, ap, xn, pxn) & PAGE_EXEC);
-        }
-#endif
-
         result->f.prot = get_S1prot(env, mmu_idx, false, user_rw, prot_rw, xn, pxn, result->f.attrs.space, out_space);
         if (ptw->in_prot_check & ~result->f.prot) {
             /* Access permission fault.  */
@@ -1239,9 +1201,7 @@ static int get_S1prot(CPUARMState* env, ARMMMUIdx mmu_idx, bool is_aa64, int use
 
     assert(!regime_is_stage2(mmu_idx));
 
-    if (is_user) {
-        if (!arm_is_sprr_enabled(env)) { prot_rw = user_rw; }
-    }
+    if (is_user) { prot_rw = user_rw; }
     else {
         /*
          * PAN controls can forbid data accesses but don't affect insn fetch.
@@ -1302,8 +1262,6 @@ static int get_S1prot(CPUARMState* env, ARMMMUIdx mmu_idx, bool is_aa64, int use
 
     if (have_wxn) { wxn = regime_sctlr(env, mmu_idx) & SCTLR_WXN; }
 
-    if (arm_is_sprr_enabled(env)) { xn = pxn; }
-
     if (is_aa64) {
         if (regime_has_2_ranges(mmu_idx) && !is_user) { xn = pxn || (user_rw & PAGE_WRITE); }
     }
@@ -1327,6 +1285,23 @@ static int get_S1prot(CPUARMState* env, ARMMMUIdx mmu_idx, bool is_aa64, int use
 
     if (xn || (wxn && (prot_rw & PAGE_WRITE))) { return prot_rw; }
     return prot_rw | PAGE_EXEC;
+}
+
+/*
+ * Translate an SPRR permission index to protection flags, applying PAN
+ * @env:      CPUARMState
+ * @mmu_idx:  MMU index indicating required translation regime
+ * @select:   The TTBR the address translates through
+ * @sprr_idx: The SPRR permission index
+ * @user_rw:  Translated AP for user access
+ * @guarded:  TRUE if accessing from GXF
+ */
+static int get_S1prot_sprr(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int sprr_idx, int user_rw, bool guarded)
+{
+    int prot = sprr_to_prot(env, mmu_idx, select, sprr_idx, guarded);
+
+    if (!regime_is_user(mmu_idx) && user_rw && regime_is_pan(mmu_idx)) { prot &= PAGE_EXEC; }
+    return prot;
 }
 
 static ARMVAParameters aa32_va_parameters(CPUARMState* env, uint32_t va, ARMMMUIdx mmu_idx)
@@ -1535,7 +1510,6 @@ static bool get_phys_addr_lpae(CPUARMState* env, S1Translate* ptw, uint64_t addr
     int              addrsize, inputsize, outputsize;
     uint64_t         tcr = regime_tcr(env, mmu_idx);
     int              ap, xn, pxn;
-    int              sprr_xn, sprr_pxn;
     uint32_t         el = regime_el(mmu_idx);
     uint64_t         descaddrmask;
     bool             aarch64 = arm_el_is_aa64(env, el);
@@ -1925,35 +1899,30 @@ restart_atomic_update:
             ap  &= ~1;
         }
 
-        user_rw  = simple_ap_to_rw_prot_is_user(ap, true);
-        sprr_xn  = xn;
-        sprr_pxn = pxn;
+        user_rw = simple_ap_to_rw_prot_is_user(ap, true);
         if (arm_is_sprr_enabled(env)) {
-            int sprr_prot = pte_to_sprr_prot(env, mmu_idx, param.select, ap, xn, pxn);
-            prot_rw       = sprr_prot & (PAGE_READ | PAGE_WRITE);
-            xn = pxn                 = !(sprr_prot & PAGE_EXEC);
-            result->f.extra.arm.sprr = ARM_SPRR_TLB_KEY(param.select, sprr_index(ap, sprr_xn, sprr_pxn));
+            int  sprr_idx = sprr_index(ap, xn, pxn);
+            bool guarded  = arm_is_guarded(env);
+
+            result->f.prot           = get_S1prot_sprr(env, mmu_idx, param.select, sprr_idx, user_rw, guarded);
+            result->f.extra.arm.sprr = ARM_SPRR_TLB_KEY(param.select, sprr_idx);
+
+            if (access_type == MMU_INST_FETCH && !guarded && !(result->f.prot & PAGE_EXEC)
+                && (sprr_to_prot(env, mmu_idx, param.select, sprr_idx, true) & PAGE_EXEC))
+            {
+                fi->type = ARMFault_GXF_Abort;
+                goto do_fault;
+            }
         }
         else {
             prot_rw = simple_ap_to_rw_prot_is_user(ap, false);
-        }
 
-        /*
-         * Note that we modified ptw->in_space earlier for NSTable, but
-         * result->f.attrs retains a copy of the original security space.
-         */
-        result->f.prot = get_S1prot(env, mmu_idx, aarch64, user_rw, prot_rw, xn, pxn, result->f.attrs.space, out_space);
-
-        if (access_type == MMU_INST_FETCH) {
-            if (arm_is_sprr_enabled(env) && !arm_is_guarded(env)) {
-                if (!(result->f.prot & (1 << access_type))) {
-                    int gl_prot = pte_to_sprr_prot_is_guarded(env, mmu_idx, param.select, ap, sprr_xn, sprr_pxn, true);
-                    if (gl_prot & (1 << access_type)) {
-                        fi->type = ARMFault_GXF_Abort;
-                        goto do_fault;
-                    }
-                }
-            }
+            /*
+             * Note that we modified ptw->in_space earlier for NSTable, but
+             * result->f.attrs retains a copy of the original security space.
+             */
+            result->f.prot =
+                get_S1prot(env, mmu_idx, aarch64, user_rw, prot_rw, xn, pxn, result->f.attrs.space, out_space);
         }
 
         /* Index into MAIR registers for cache attributes */
