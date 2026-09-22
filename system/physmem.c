@@ -529,13 +529,18 @@ typedef struct TCGIOMMUNotifier
     bool          active;
 } TCGIOMMUNotifier;
 
+static void tcg_iommu_flush_work(CPUState* cpu, run_on_cpu_data data) { tlb_flush(cpu); }
+
 static void tcg_iommu_unmap_notify(IOMMUNotifier* n, IOMMUTLBEntry* iotlb)
 {
     TCGIOMMUNotifier* notifier = container_of(n, TCGIOMMUNotifier, n);
 
-    if (!notifier->active) { return; }
-    tlb_flush(notifier->cpu);
-    notifier->active = false;
+    if (!qatomic_read(&notifier->active)) { return; }
+    if (qemu_cpu_is_self(notifier->cpu)) { tlb_flush(notifier->cpu); }
+    else {
+        async_run_on_cpu(notifier->cpu, tcg_iommu_flush_work, RUN_ON_CPU_NULL);
+    }
+    qatomic_set(&notifier->active, false);
     /* We leave the notifier struct on the list to avoid reallocating it later.
      * Generally the number of IOMMUs a CPU deals with will be small.
      * In any case we can't unregister the iommu notifier from a notify
@@ -576,7 +581,7 @@ static void tcg_register_iommu_notifier(CPUState* cpu, IOMMUMemoryRegion* iommu_
         memory_region_register_iommu_notifier(notifier->mr, &notifier->n, &error_fatal);
     }
 
-    if (!notifier->active) { notifier->active = true; }
+    if (!qatomic_read(&notifier->active)) { qatomic_set(&notifier->active, true); }
 }
 
 void tcg_iommu_free_notifier_list(CPUState* cpu)
