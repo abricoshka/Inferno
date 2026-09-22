@@ -13,7 +13,8 @@
 #define TYPE_USB_VIRTUALHERE "usb-virtualhere"
 OBJECT_DECLARE_SIMPLE_TYPE(USBVirtualHereState, USB_VIRTUALHERE)
 
-typedef struct USBVirtualHereConn USBVirtualHereConn;
+#define TYPE_USB_VIRTUALHERE_CONN "usb-virtualhere-conn"
+OBJECT_DECLARE_SIMPLE_TYPE(USBVirtualHereConn, USB_VIRTUALHERE_CONN)
 
 typedef struct USBVirtualHerePacket
 {
@@ -30,8 +31,9 @@ typedef struct USBVirtualHerePacket
 
 struct USBVirtualHereConn
 {
+    Object parent_obj;
+
     USBVirtualHereState* s;
-    int                  refcount;
     QIOChannel*          ioc;
     CoMutex              write_mutex;
     QEMUTimer*           heartbeat_timer;

@@ -84,7 +84,6 @@ static void vh_debug_hexdump(const uint8_t* buf, uint32_t len)
 #define VIRTUALHERE_PAY(off) ((off) - VIRTUALHERE_PAYLOAD_OFF)
 
 static void vh_conn_close(USBVirtualHereConn* conn);
-static void vh_conn_unref(USBVirtualHereConn* conn);
 static void usb_virtualhere_exit_notifier(Notifier* n, void* data);
 
 static ssize_t coroutine_fn vh_read(QIOChannel* ioc, void* buf, size_t len)
@@ -322,7 +321,7 @@ static VHDeviceDesc* vh_build_long_info(USBVirtualHereState* s, const USBUplinkD
 
 static void vh_conn_spawn(USBVirtualHereConn* conn, CoroutineEntry* fn)
 {
-    conn->refcount++;
+    object_ref(OBJECT(conn));
     qemu_coroutine_enter(qemu_coroutine_create(fn, conn));
 }
 
@@ -330,7 +329,7 @@ static USBVirtualHerePacket* vh_packet_new(USBVirtualHereConn* conn)
 {
     USBVirtualHerePacket* pkt = g_new0(USBVirtualHerePacket, 1);
 
-    conn->refcount++;
+    object_ref(OBJECT(conn));
     pkt->conn = conn;
     usb_packet_init(&pkt->base.p);
     QLIST_INSERT_HEAD(&conn->packets, pkt, link);
@@ -345,7 +344,7 @@ static void vh_packet_free(USBVirtualHerePacket* pkt)
     usb_packet_cleanup(&pkt->base.p);
     g_free(pkt->buffer);
     g_free(pkt);
-    vh_conn_unref(conn);
+    object_unref(OBJECT(conn));
 }
 
 static void coroutine_fn vh_send_ack(USBVirtualHerePacket* pkt, const void* msg, uint32_t size)
@@ -596,7 +595,7 @@ static void coroutine_fn vh_notify_device_removed_co(void* opaque)
     g_autofree VHDeviceInfo*    gone   = notice->msg;
 
     vh_conn_send_lz4(notice->conn, (const uint8_t*)gone, sizeof(*gone));
-    vh_conn_unref(notice->conn);
+    object_unref(OBJECT(notice->conn));
 }
 
 /* The reference server removes a device by re-sending its announce with state 0. */
@@ -616,7 +615,7 @@ static void vh_notify_device_removed(USBVirtualHereConn* conn)
     VIRTUALHERE_DPRINTF("%s: sending gone for %04x:%04x (%s record)\n", __func__, le16_to_cpu(notice->msg->vendor_id),
                         le16_to_cpu(notice->msg->product_id), desc != NULL ? "full" : "bare");
 
-    conn->refcount++;
+    object_ref(OBJECT(conn));
     qemu_coroutine_enter(qemu_coroutine_create(vh_notify_device_removed_co, notice));
 }
 
@@ -626,7 +625,7 @@ static void coroutine_fn vh_announce_attach_co(void* opaque)
     USBVirtualHereConn* conn = opaque;
 
     if (!conn->closed) { vh_conn_announce_device(conn); }
-    vh_conn_unref(conn);
+    object_unref(OBJECT(conn));
 }
 
 static void vh_announce_attach_bh(void* opaque)
@@ -650,7 +649,7 @@ static void coroutine_fn vh_use_device_co(void* opaque)
 
     if (!conn->closed) { vh_handle_use_device(conn); }
     conn->use_pending = false;
-    vh_conn_unref(conn);
+    object_unref(OBJECT(conn));
 }
 
 static void coroutine_fn vh_heartbeat_co(void* opaque)
@@ -664,7 +663,7 @@ static void coroutine_fn vh_heartbeat_co(void* opaque)
         vh_conn_announce_device(conn);
     }
 
-    vh_conn_unref(conn);
+    object_unref(OBJECT(conn));
 }
 
 static void vh_heartbeat_cb(void* opaque)
@@ -798,7 +797,7 @@ static void coroutine_fn vh_conn_msg_loop_co(void* opaque)
 
 out:
     vh_conn_close(conn);
-    vh_conn_unref(conn);
+    object_unref(OBJECT(conn));
 }
 
 static void vh_conn_close(USBVirtualHereConn* conn)
@@ -827,13 +826,24 @@ static void vh_conn_close(USBVirtualHereConn* conn)
     }
 }
 
-static void vh_conn_unref(USBVirtualHereConn* conn)
+static void usb_virtualhere_conn_init(Object* obj)
 {
-    if (--conn->refcount > 0) { return; }
+    USBVirtualHereConn* conn = USB_VIRTUALHERE_CONN(obj);
+
+    qemu_co_mutex_init(&conn->write_mutex);
+    QLIST_INIT(&conn->packets);
+}
+
+static void usb_virtualhere_conn_finalize(Object* obj)
+{
+    USBVirtualHereConn* conn = USB_VIRTUALHERE_CONN(obj);
 
     object_unref(OBJECT(conn->ioc));
-    g_free(conn);
 }
+
+static void usb_virtualhere_conn_class_init(ObjectClass* klass, const void* data) { }
+
+OBJECT_DEFINE_SIMPLE_TYPE(USBVirtualHereConn, usb_virtualhere_conn, USB_VIRTUALHERE_CONN, OBJECT)
 
 static void virtualhere_accept(QIONetListener* listener, QIOChannelSocket* cioc, void* opaque)
 {
@@ -848,15 +858,12 @@ static void virtualhere_accept(QIONetListener* listener, QIOChannelSocket* cioc,
         return;
     }
 
-    conn           = g_new0(USBVirtualHereConn, 1);
-    conn->refcount = 1;
-    conn->s        = s;
-    conn->ioc      = QIO_CHANNEL(cioc);
+    conn      = USB_VIRTUALHERE_CONN(object_new(TYPE_USB_VIRTUALHERE_CONN));
+    conn->s   = s;
+    conn->ioc = QIO_CHANNEL(cioc);
     object_ref(OBJECT(conn->ioc));
     qio_channel_set_blocking(conn->ioc, false, NULL);
     qio_channel_set_follow_coroutine_ctx(conn->ioc, true);
-    qemu_co_mutex_init(&conn->write_mutex);
-    QLIST_INIT(&conn->packets);
     conn->heartbeat_timer = timer_new_ms(QEMU_CLOCK_REALTIME, vh_heartbeat_cb, conn);
 
     s->active_conn = conn;
@@ -900,7 +907,7 @@ static void usb_virtualhere_attach(USBPort* port)
     usb_uplink_invalidate(&s->usb);
 
     if (s->active_conn != NULL && !s->active_conn->closed) {
-        s->active_conn->refcount++;
+        object_ref(OBJECT(s->active_conn));
         aio_bh_schedule_oneshot(qemu_get_aio_context(), vh_announce_attach_bh, s->active_conn);
     }
 }
