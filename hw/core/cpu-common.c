@@ -279,6 +279,7 @@ static void cpu_common_initfn(Object* obj)
     cpu->thread    = g_new0(QemuThread, 1);
     cpu->halt_cond = g_new0(QemuCond, 1);
     qemu_cond_init(cpu->halt_cond);
+    qemu_event_init(&cpu->halt_event, false);
 
     qemu_mutex_init(&cpu->work_mutex);
     qemu_lockcnt_init(&cpu->in_ioctl_lock);
@@ -298,6 +299,7 @@ static void cpu_common_finalize(Object* obj)
     if (cpu->gdb_regs) { g_array_free(cpu->gdb_regs, TRUE); }
     qemu_lockcnt_destroy(&cpu->in_ioctl_lock);
     qemu_mutex_destroy(&cpu->work_mutex);
+    qemu_event_destroy(&cpu->halt_event);
     qemu_cond_destroy(cpu->halt_cond);
     g_free(cpu->halt_cond);
     g_free(cpu->thread);

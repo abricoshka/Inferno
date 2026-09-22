@@ -348,7 +348,13 @@ void qemu_process_cpu_events_common(CPUState* cpu)
 void qemu_process_cpu_events(CPUState* cpu)
 {
     qatomic_set(&cpu->exit_request, false);
-    while (cpu_thread_is_idle(cpu)) { qemu_cond_wait(cpu->halt_cond, &bql); }
+    while (true) {
+        qemu_event_reset(&cpu->halt_event);
+        if (!cpu_thread_is_idle(cpu)) { break; }
+        bql_unlock();
+        qemu_event_wait(&cpu->halt_event);
+        bql_lock();
+    }
 
     qemu_process_cpu_events_common(cpu);
 }
@@ -370,6 +376,7 @@ void cpus_kick_thread(CPUState* cpu)
 void qemu_cpu_kick(CPUState* cpu)
 {
     qemu_cond_broadcast(cpu->halt_cond);
+    qemu_event_set(&cpu->halt_event);
     if (cpus_accel->kick_vcpu_thread) { cpus_accel->kick_vcpu_thread(cpu); }
     else { /* default */ cpus_kick_thread(cpu);
     }
