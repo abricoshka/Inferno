@@ -64,7 +64,6 @@ uint64_t cpu_atomic_cmpxchgq_be_mmu(CPUArchState* env, vaddr addr, uint64_t cmpv
 #endif
 
 GEN_ATOMIC_HELPER_ALL(fetch_add)
-GEN_ATOMIC_HELPER_ALL(fetch_sub)
 GEN_ATOMIC_HELPER_ALL(fetch_and)
 GEN_ATOMIC_HELPER_ALL(fetch_or)
 GEN_ATOMIC_HELPER_ALL(fetch_xor)
@@ -72,16 +71,6 @@ GEN_ATOMIC_HELPER_ALL(fetch_smin)
 GEN_ATOMIC_HELPER_ALL(fetch_umin)
 GEN_ATOMIC_HELPER_ALL(fetch_smax)
 GEN_ATOMIC_HELPER_ALL(fetch_umax)
-
-GEN_ATOMIC_HELPER_ALL(add_fetch)
-GEN_ATOMIC_HELPER_ALL(sub_fetch)
-GEN_ATOMIC_HELPER_ALL(and_fetch)
-GEN_ATOMIC_HELPER_ALL(or_fetch)
-GEN_ATOMIC_HELPER_ALL(xor_fetch)
-GEN_ATOMIC_HELPER_ALL(smin_fetch)
-GEN_ATOMIC_HELPER_ALL(umin_fetch)
-GEN_ATOMIC_HELPER_ALL(smax_fetch)
-GEN_ATOMIC_HELPER_ALL(umax_fetch)
 
 GEN_ATOMIC_HELPER_ALL(xchg)
 

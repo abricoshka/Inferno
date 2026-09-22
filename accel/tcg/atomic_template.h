@@ -135,10 +135,6 @@ GEN_ATOMIC_HELPER(fetch_add)
 GEN_ATOMIC_HELPER(fetch_and)
 GEN_ATOMIC_HELPER(fetch_or)
 GEN_ATOMIC_HELPER(fetch_xor)
-GEN_ATOMIC_HELPER(add_fetch)
-GEN_ATOMIC_HELPER(and_fetch)
-GEN_ATOMIC_HELPER(or_fetch)
-GEN_ATOMIC_HELPER(xor_fetch)
 
     #undef GEN_ATOMIC_HELPER
 
@@ -171,11 +167,6 @@ GEN_ATOMIC_HELPER_FN(fetch_smin, MIN, SDATA_TYPE, old)
 GEN_ATOMIC_HELPER_FN(fetch_umin, MIN, DATA_TYPE, old)
 GEN_ATOMIC_HELPER_FN(fetch_smax, MAX, SDATA_TYPE, old)
 GEN_ATOMIC_HELPER_FN(fetch_umax, MAX, DATA_TYPE, old)
-
-GEN_ATOMIC_HELPER_FN(smin_fetch, MIN, SDATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(umin_fetch, MIN, DATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(smax_fetch, MAX, SDATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(umax_fetch, MAX, DATA_TYPE, new)
 
     #undef GEN_ATOMIC_HELPER_FN
 #endif /* DATA SIZE == 16 */
@@ -251,9 +242,6 @@ ABI_TYPE ATOMIC_NAME(fetch_or)(CPUArchState* env, vaddr addr, ABI_TYPE val, MemO
 GEN_ATOMIC_HELPER(fetch_and)
 GEN_ATOMIC_HELPER(fetch_or)
 GEN_ATOMIC_HELPER(fetch_xor)
-GEN_ATOMIC_HELPER(and_fetch)
-GEN_ATOMIC_HELPER(or_fetch)
-GEN_ATOMIC_HELPER(xor_fetch)
 
         #undef GEN_ATOMIC_HELPER
 
@@ -287,16 +275,10 @@ GEN_ATOMIC_HELPER_FN(fetch_umin, MIN, DATA_TYPE, old)
 GEN_ATOMIC_HELPER_FN(fetch_smax, MAX, SDATA_TYPE, old)
 GEN_ATOMIC_HELPER_FN(fetch_umax, MAX, DATA_TYPE, old)
 
-GEN_ATOMIC_HELPER_FN(smin_fetch, MIN, SDATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(umin_fetch, MIN, DATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(smax_fetch, MAX, SDATA_TYPE, new)
-GEN_ATOMIC_HELPER_FN(umax_fetch, MAX, DATA_TYPE, new)
-
         /* Note that for addition, we need to use a separate cmpxchg loop instead
            of bswaps for the reverse-host-endian helpers.  */
         #define ADD(X, Y) (X + Y)
 GEN_ATOMIC_HELPER_FN(fetch_add, ADD, DATA_TYPE, old)
-GEN_ATOMIC_HELPER_FN(add_fetch, ADD, DATA_TYPE, new)
         #undef ADD
 
         #undef GEN_ATOMIC_HELPER_FN

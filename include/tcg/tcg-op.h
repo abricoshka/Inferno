@@ -103,10 +103,6 @@ DEF_ATOMIC3(tcg_gen_atomic_cmpxchg, i32)
 DEF_ATOMIC3(tcg_gen_atomic_cmpxchg, i64)
 DEF_ATOMIC3(tcg_gen_atomic_cmpxchg, i128)
 
-DEF_ATOMIC3(tcg_gen_nonatomic_cmpxchg, i32)
-DEF_ATOMIC3(tcg_gen_nonatomic_cmpxchg, i64)
-DEF_ATOMIC3(tcg_gen_nonatomic_cmpxchg, i128)
-
 DEF_ATOMIC2(tcg_gen_atomic_xchg, i32)
 DEF_ATOMIC2(tcg_gen_atomic_xchg, i64)
 DEF_ATOMIC2(tcg_gen_atomic_xchg, i128)
@@ -130,23 +126,6 @@ DEF_ATOMIC2(tcg_gen_atomic_fetch_smax, i64)
 DEF_ATOMIC2(tcg_gen_atomic_fetch_umax, i32)
 DEF_ATOMIC2(tcg_gen_atomic_fetch_umax, i64)
 
-DEF_ATOMIC2(tcg_gen_atomic_add_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_add_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_and_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_and_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_or_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_or_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_xor_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_xor_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_smin_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_smin_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_umin_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_umin_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_smax_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_smax_fetch, i64)
-DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i32)
-DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
-
 #undef DEF_ATOMIC2
 #undef DEF_ATOMIC3
 
@@ -169,7 +148,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_sub_tl               tcg_gen_sub_i64
     #define tcg_gen_neg_tl               tcg_gen_neg_i64
     #define tcg_gen_abs_tl               tcg_gen_abs_i64
-    #define tcg_gen_subfi_tl             tcg_gen_subfi_i64
     #define tcg_gen_subi_tl              tcg_gen_subi_i64
     #define tcg_gen_and_tl               tcg_gen_and_i64
     #define tcg_gen_andi_tl              tcg_gen_andi_i64
@@ -189,14 +167,12 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_setcond_tl           tcg_gen_setcond_i64
     #define tcg_gen_setcondi_tl          tcg_gen_setcondi_i64
     #define tcg_gen_negsetcond_tl        tcg_gen_negsetcond_i64
-    #define tcg_gen_negsetcondi_tl       tcg_gen_negsetcondi_i64
     #define tcg_gen_mul_tl               tcg_gen_mul_i64
     #define tcg_gen_muli_tl              tcg_gen_muli_i64
     #define tcg_gen_div_tl               tcg_gen_div_i64
     #define tcg_gen_rem_tl               tcg_gen_rem_i64
     #define tcg_gen_divu_tl              tcg_gen_divu_i64
     #define tcg_gen_remu_tl              tcg_gen_remu_i64
-    #define tcg_gen_discard_tl           tcg_gen_discard_i64
     #define tcg_gen_trunc_tl_i32         tcg_gen_extrl_i64_i32
     #define tcg_gen_trunc_i64_tl         tcg_gen_mov_i64
     #define tcg_gen_extu_i32_tl          tcg_gen_extu_i32_i64
@@ -214,8 +190,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_bswap32_tl           tcg_gen_bswap32_i64
     #define tcg_gen_bswap64_tl           tcg_gen_bswap64_i64
     #define tcg_gen_bswap_tl             tcg_gen_bswap64_i64
-    #define tcg_gen_hswap_tl             tcg_gen_hswap_i64
-    #define tcg_gen_wswap_tl             tcg_gen_wswap_i64
     #define tcg_gen_concat_tl_i64        tcg_gen_concat32_i64
     #define tcg_gen_extr_i64_tl          tcg_gen_extr32_i64
     #define tcg_gen_andc_tl              tcg_gen_andc_i64
@@ -226,7 +200,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_clz_tl               tcg_gen_clz_i64
     #define tcg_gen_ctz_tl               tcg_gen_ctz_i64
     #define tcg_gen_clzi_tl              tcg_gen_clzi_i64
-    #define tcg_gen_ctzi_tl              tcg_gen_ctzi_i64
     #define tcg_gen_clrsb_tl             tcg_gen_clrsb_i64
     #define tcg_gen_ctpop_tl             tcg_gen_ctpop_i64
     #define tcg_gen_rotl_tl              tcg_gen_rotl_i64
@@ -241,11 +214,9 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_constant_tl              tcg_constant_i64
     #define tcg_gen_movcond_tl           tcg_gen_movcond_i64
     #define tcg_gen_add2_tl              tcg_gen_add2_i64
-    #define tcg_gen_sub2_tl              tcg_gen_sub2_i64
     #define tcg_gen_addcio_tl            tcg_gen_addcio_i64
     #define tcg_gen_mulu2_tl             tcg_gen_mulu2_i64
     #define tcg_gen_muls2_tl             tcg_gen_muls2_i64
-    #define tcg_gen_mulsu2_tl            tcg_gen_mulsu2_i64
     #define tcg_gen_smin_tl              tcg_gen_smin_i64
     #define tcg_gen_umin_tl              tcg_gen_umin_i64
     #define tcg_gen_smax_tl              tcg_gen_smax_i64
@@ -260,14 +231,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_atomic_fetch_umin_tl tcg_gen_atomic_fetch_umin_i64
     #define tcg_gen_atomic_fetch_smax_tl tcg_gen_atomic_fetch_smax_i64
     #define tcg_gen_atomic_fetch_umax_tl tcg_gen_atomic_fetch_umax_i64
-    #define tcg_gen_atomic_add_fetch_tl  tcg_gen_atomic_add_fetch_i64
-    #define tcg_gen_atomic_and_fetch_tl  tcg_gen_atomic_and_fetch_i64
-    #define tcg_gen_atomic_or_fetch_tl   tcg_gen_atomic_or_fetch_i64
-    #define tcg_gen_atomic_xor_fetch_tl  tcg_gen_atomic_xor_fetch_i64
-    #define tcg_gen_atomic_smin_fetch_tl tcg_gen_atomic_smin_fetch_i64
-    #define tcg_gen_atomic_umin_fetch_tl tcg_gen_atomic_umin_fetch_i64
-    #define tcg_gen_atomic_smax_fetch_tl tcg_gen_atomic_smax_fetch_i64
-    #define tcg_gen_atomic_umax_fetch_tl tcg_gen_atomic_umax_fetch_i64
     #define tcg_gen_dup_tl_vec           tcg_gen_dup_i64_vec
     #define tcg_gen_dup_tl               tcg_gen_dup_i64
     #define dup_const_tl                 dup_const
@@ -290,7 +253,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_sub_tl               tcg_gen_sub_i32
     #define tcg_gen_neg_tl               tcg_gen_neg_i32
     #define tcg_gen_abs_tl               tcg_gen_abs_i32
-    #define tcg_gen_subfi_tl             tcg_gen_subfi_i32
     #define tcg_gen_subi_tl              tcg_gen_subi_i32
     #define tcg_gen_and_tl               tcg_gen_and_i32
     #define tcg_gen_andi_tl              tcg_gen_andi_i32
@@ -310,14 +272,12 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_setcond_tl           tcg_gen_setcond_i32
     #define tcg_gen_setcondi_tl          tcg_gen_setcondi_i32
     #define tcg_gen_negsetcond_tl        tcg_gen_negsetcond_i32
-    #define tcg_gen_negsetcondi_tl       tcg_gen_negsetcondi_i32
     #define tcg_gen_mul_tl               tcg_gen_mul_i32
     #define tcg_gen_muli_tl              tcg_gen_muli_i32
     #define tcg_gen_div_tl               tcg_gen_div_i32
     #define tcg_gen_rem_tl               tcg_gen_rem_i32
     #define tcg_gen_divu_tl              tcg_gen_divu_i32
     #define tcg_gen_remu_tl              tcg_gen_remu_i32
-    #define tcg_gen_discard_tl           tcg_gen_discard_i32
     #define tcg_gen_trunc_tl_i32         tcg_gen_mov_i32
     #define tcg_gen_trunc_i64_tl         tcg_gen_extrl_i64_i32
     #define tcg_gen_extu_i32_tl          tcg_gen_mov_i32
@@ -334,7 +294,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_bswap16_tl           tcg_gen_bswap16_i32
     #define tcg_gen_bswap32_tl(D, S, F)  tcg_gen_bswap32_i32(D, S)
     #define tcg_gen_bswap_tl             tcg_gen_bswap32_i32
-    #define tcg_gen_hswap_tl             tcg_gen_hswap_i32
     #define tcg_gen_concat_tl_i64        tcg_gen_concat_i32_i64
     #define tcg_gen_extr_i64_tl          tcg_gen_extr_i64_i32
     #define tcg_gen_andc_tl              tcg_gen_andc_i32
@@ -345,7 +304,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_clz_tl               tcg_gen_clz_i32
     #define tcg_gen_ctz_tl               tcg_gen_ctz_i32
     #define tcg_gen_clzi_tl              tcg_gen_clzi_i32
-    #define tcg_gen_ctzi_tl              tcg_gen_ctzi_i32
     #define tcg_gen_clrsb_tl             tcg_gen_clrsb_i32
     #define tcg_gen_ctpop_tl             tcg_gen_ctpop_i32
     #define tcg_gen_rotl_tl              tcg_gen_rotl_i32
@@ -360,11 +318,9 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_constant_tl              tcg_constant_i32
     #define tcg_gen_movcond_tl           tcg_gen_movcond_i32
     #define tcg_gen_add2_tl              tcg_gen_add2_i32
-    #define tcg_gen_sub2_tl              tcg_gen_sub2_i32
     #define tcg_gen_addcio_tl            tcg_gen_addcio_i32
     #define tcg_gen_mulu2_tl             tcg_gen_mulu2_i32
     #define tcg_gen_muls2_tl             tcg_gen_muls2_i32
-    #define tcg_gen_mulsu2_tl            tcg_gen_mulsu2_i32
     #define tcg_gen_smin_tl              tcg_gen_smin_i32
     #define tcg_gen_umin_tl              tcg_gen_umin_i32
     #define tcg_gen_smax_tl              tcg_gen_smax_i32
@@ -379,14 +335,6 @@ DEF_ATOMIC2(tcg_gen_atomic_umax_fetch, i64)
     #define tcg_gen_atomic_fetch_umin_tl tcg_gen_atomic_fetch_umin_i32
     #define tcg_gen_atomic_fetch_smax_tl tcg_gen_atomic_fetch_smax_i32
     #define tcg_gen_atomic_fetch_umax_tl tcg_gen_atomic_fetch_umax_i32
-    #define tcg_gen_atomic_add_fetch_tl  tcg_gen_atomic_add_fetch_i32
-    #define tcg_gen_atomic_and_fetch_tl  tcg_gen_atomic_and_fetch_i32
-    #define tcg_gen_atomic_or_fetch_tl   tcg_gen_atomic_or_fetch_i32
-    #define tcg_gen_atomic_xor_fetch_tl  tcg_gen_atomic_xor_fetch_i32
-    #define tcg_gen_atomic_smin_fetch_tl tcg_gen_atomic_smin_fetch_i32
-    #define tcg_gen_atomic_umin_fetch_tl tcg_gen_atomic_umin_fetch_i32
-    #define tcg_gen_atomic_smax_fetch_tl tcg_gen_atomic_smax_fetch_i32
-    #define tcg_gen_atomic_umax_fetch_tl tcg_gen_atomic_umax_fetch_i32
     #define tcg_gen_dup_tl_vec           tcg_gen_dup_i32_vec
     #define tcg_gen_dup_tl               tcg_gen_dup_i32
 

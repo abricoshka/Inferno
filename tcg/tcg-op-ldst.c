@@ -518,14 +518,6 @@ static void tcg_gen_nonatomic_cmpxchg_i32_int(TCGv_i32 retv, TCGTemp* addr, TCGv
     tcg_temp_free_i32(t1);
 }
 
-void tcg_gen_nonatomic_cmpxchg_i32_chk(TCGv_i32 retv, TCGTemp* addr, TCGv_i32 cmpv, TCGv_i32 newv, TCGArg idx,
-                                       MemOp memop, TCGType addr_type)
-{
-    tcg_debug_assert(addr_type == tcg_ctx->addr_type);
-    tcg_debug_assert((memop & MO_SIZE) <= MO_32);
-    tcg_gen_nonatomic_cmpxchg_i32_int(retv, addr, cmpv, newv, idx, memop);
-}
-
 static void tcg_gen_atomic_cmpxchg_i32_int(TCGv_i32 retv, TCGTemp* addr, TCGv_i32 cmpv, TCGv_i32 newv, TCGArg idx,
                                            MemOp memop)
 {
@@ -587,14 +579,6 @@ static void tcg_gen_nonatomic_cmpxchg_i64_int(TCGv_i64 retv, TCGTemp* addr, TCGv
         tcg_gen_mov_i64(retv, t1);
     }
     tcg_temp_free_i64(t1);
-}
-
-void tcg_gen_nonatomic_cmpxchg_i64_chk(TCGv_i64 retv, TCGTemp* addr, TCGv_i64 cmpv, TCGv_i64 newv, TCGArg idx,
-                                       MemOp memop, TCGType addr_type)
-{
-    tcg_debug_assert(addr_type == tcg_ctx->addr_type);
-    tcg_debug_assert((memop & MO_SIZE) <= MO_64);
-    tcg_gen_nonatomic_cmpxchg_i64_int(retv, addr, cmpv, newv, idx, memop);
 }
 
 static void tcg_gen_atomic_cmpxchg_i64_int(TCGv_i64 retv, TCGTemp* addr, TCGv_i64 cmpv, TCGv_i64 newv, TCGArg idx,
@@ -700,14 +684,6 @@ static void tcg_gen_nonatomic_cmpxchg_i128_int(TCGv_i128 retv, TCGTemp* addr, TC
         tcg_temp_free_i128(tmpv);
         tcg_temp_free_i128(oldv);
     }
-}
-
-void tcg_gen_nonatomic_cmpxchg_i128_chk(TCGv_i128 retv, TCGTemp* addr, TCGv_i128 cmpv, TCGv_i128 newv, TCGArg idx,
-                                        MemOp memop, TCGType addr_type)
-{
-    tcg_debug_assert(addr_type == tcg_ctx->addr_type);
-    tcg_debug_assert((memop & (MO_SIZE | MO_SIGN)) == MO_128);
-    tcg_gen_nonatomic_cmpxchg_i128_int(retv, addr, cmpv, newv, idx, memop);
 }
 
 static void tcg_gen_atomic_cmpxchg_i128_int(TCGv_i128 retv, TCGTemp* addr, TCGv_i128 cmpv, TCGv_i128 newv, TCGArg idx,
@@ -952,15 +928,6 @@ GEN_ATOMIC_HELPER(fetch_smin, smin, 0)
 GEN_ATOMIC_HELPER(fetch_umin, umin, 0)
 GEN_ATOMIC_HELPER(fetch_smax, smax, 0)
 GEN_ATOMIC_HELPER(fetch_umax, umax, 0)
-
-GEN_ATOMIC_HELPER(add_fetch, add, 1)
-GEN_ATOMIC_HELPER(and_fetch, and, 1)
-GEN_ATOMIC_HELPER(or_fetch, or, 1)
-GEN_ATOMIC_HELPER(xor_fetch, xor, 1)
-GEN_ATOMIC_HELPER(smin_fetch, smin, 1)
-GEN_ATOMIC_HELPER(umin_fetch, umin, 1)
-GEN_ATOMIC_HELPER(smax_fetch, smax, 1)
-GEN_ATOMIC_HELPER(umax_fetch, umax, 1)
 
 static void tcg_gen_mov2_i32(TCGv_i32 r, TCGv_i32 a, TCGv_i32 b) { tcg_gen_mov_i32(r, b); }
 

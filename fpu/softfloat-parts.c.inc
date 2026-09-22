@@ -176,24 +176,6 @@ default_nan:
  */
 static void partsN(canonicalize)(FloatPartsN* p, float_status* status, const FloatFmt* fmt)
 {
-    /*
-     * It's target-dependent how to handle the case of exponent 0
-     * and Integer bit set. Intel calls these "pseudodenormals",
-     * and treats them as if the integer bit was 0, and never
-     * produces them on output. This is the default behaviour for QEMU.
-     * For m68k, the integer bit is considered validly part of the
-     * input value when the exponent is 0, and may be 0 or 1,
-     * giving extra range. They may also be generated as outputs.
-     * (The m68k manual actually calls these values part of the
-     * normalized number range, not the denormalized number range,
-     * but that distinction is not important for us, because
-     * m68k doesn't care about the input_denormal_used status flag.)
-     * floatx80_pseudo_denormal_valid selects the m68k behaviour,
-     * which changes both how we canonicalize such a value and
-     * how we uncanonicalize results.
-     */
-    bool has_pseudo_denormals = fmt->has_explicit_bit && (status->floatx80_behaviour & floatx80_pseudo_denormal_valid);
-
     if (unlikely(p->exp == 0)) {
         if (likely(frac_eqz(p))) { p->cls = float_class_zero; }
         else if (status->flush_inputs_to_zero) {
@@ -204,7 +186,7 @@ static void partsN(canonicalize)(FloatPartsN* p, float_status* status, const Flo
         else {
             int shift = frac_normalize(p);
             p->cls    = float_class_denormal;
-            p->exp    = fmt->frac_shift - fmt->exp_bias - shift + !has_pseudo_denormals;
+            p->exp    = fmt->frac_shift - fmt->exp_bias - shift + 1;
         }
         return;
     }
@@ -384,14 +366,12 @@ static void partsN(uncanon_normal)(FloatPartsN* p, float_status* s, const FloatF
     }
     else {
         bool is_tiny              = s->tininess_before_rounding || exp < 0;
-        bool has_pseudo_denormals = fmt->has_explicit_bit && (s->floatx80_behaviour & floatx80_pseudo_denormal_valid);
-
         if (!is_tiny) {
             FloatPartsN discard;
             is_tiny = !frac_addi(&discard, p, inc);
         }
 
-        frac_shrjam(p, !has_pseudo_denormals - exp);
+        frac_shrjam(p, 1 - exp);
 
         if (p->frac_lo & round_mask) {
             /* Need to recompute round-to-even/round-to-odd. */
@@ -418,7 +398,7 @@ static void partsN(uncanon_normal)(FloatPartsN* p, float_status* s, const FloatF
             p->frac_lo &= ~round_mask;
         }
 
-        exp = (p->frac_hi & DECOMPOSED_IMPLICIT_BIT) && !has_pseudo_denormals;
+        exp = (p->frac_hi & DECOMPOSED_IMPLICIT_BIT) != 0;
         frac_shr(p, frac_shift);
 
         if (is_tiny) {

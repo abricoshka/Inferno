@@ -59,11 +59,6 @@ static inline void set_float_rounding_mode(FloatRoundMode val, float_status* sta
 
 static inline void set_float_exception_flags(int val, float_status* status) { status->float_exception_flags = val; }
 
-static inline void set_floatx80_rounding_precision(FloatX80RoundPrec val, float_status* status)
-{ status->floatx80_rounding_precision = val; }
-
-static inline void set_floatx80_behaviour(FloatX80Behaviour b, float_status* status) { status->floatx80_behaviour = b; }
-
 static inline void set_float_2nan_prop_rule(Float2NaNPropRule rule, float_status* status)
 { status->float_2nan_prop_rule = rule; }
 
@@ -93,12 +88,6 @@ static inline bool get_float_detect_tininess(const float_status* status) { retur
 static inline FloatRoundMode get_float_rounding_mode(const float_status* status) { return status->float_rounding_mode; }
 
 static inline int get_float_exception_flags(const float_status* status) { return status->float_exception_flags; }
-
-static inline FloatX80RoundPrec get_floatx80_rounding_precision(const float_status* status)
-{ return status->floatx80_rounding_precision; }
-
-static inline FloatX80Behaviour get_floatx80_behaviour(const float_status* status)
-{ return status->floatx80_behaviour; }
 
 static inline Float2NaNPropRule get_float_2nan_prop_rule(const float_status* status)
 { return status->float_2nan_prop_rule; }
