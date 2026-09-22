@@ -1051,6 +1051,7 @@ static void dwc3_reset_enter(Object* obj, ResetType type)
     DWC3State* s = DWC3_USB(obj);
 
     dwc3_dcore_reset(s, false);
+    s->dctl    = 0;
     s->gsts    = GSTS_CURMOD_DRD;
     s->gsnpsid = GSNPSID_REVISION_180A;
     s->ggpio   = 0;
@@ -1072,7 +1073,10 @@ static void dwc3_reset_enter(Object* obj, ResetType type)
 
 static void dwc3_reset_hold(Object* obj, ResetType type)
 {
-    DWC3State* s = DWC3_USB(obj);
+    DWC3State* s    = DWC3_USB(obj);
+    USBDevice* udev = &s->device.parent_obj;
+
+    if (udev->attached) { usb_device_detach(udev); }
 
     dwc3_update_irq(s);
 }
