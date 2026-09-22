@@ -229,6 +229,7 @@ static void aess_raise_interrupt(AppleSEPAESSState* s)
         == (SEP_AESS_REGISTER_INTERRUPT_ENABLED_INTERRUPT_ENABLED
             | SEP_AESS_REGISTER_INTERRUPT_ENABLED_RAISE_ON_COMPLETION))
     {
+        QEMU_LOCK_GUARD(&sep->mailbox->lock);
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x10005);    // AESS
     }
