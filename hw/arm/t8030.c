@@ -182,7 +182,7 @@
 #define FUSE_DISABLED (0xA050C030)
 
 static uint32_t t8030_real_cpu_count(AppleT8030MachineState* t8030)
-{ return MACHINE(t8030)->smp.cpus - (t8030->sep_fw_filename != NULL); }
+{ return MACHINE(t8030)->smp.cpus - (t8030->sep_rom_filename != NULL); }
 
 static void t8030_start_cpus(AppleT8030MachineState* t8030, uint64_t cpu_mask)
 {
@@ -351,17 +351,6 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
     info_report("SEPFW Size: 0x" HWADDR_FMT_plx, info->sep_fw_size);
     phys_ptr += info->sep_fw_size;
 
-    if (t8030->sep_fw_filename != NULL) {
-        AppleSEP* sep     = APPLE_SEP(object_property_get_link(OBJECT(t8030), "sep", &error_fatal));
-        gchar*    fw_data = NULL;
-        gsize     sep_fw_size;
-        if (!g_file_get_contents(t8030->sep_fw_filename, &fw_data, &sep_fw_size, NULL)) {
-            error_setg(&error_fatal, "Failed to read SEP Firmware from `%s`", t8030->sep_fw_filename);
-            return;
-        }
-        apple_sep_set_fw(sep, info->sep_fw_addr, fw_data, sep_fw_size);
-    }
-
     // Kernel boot args
     info->kern_boot_args_addr  = phys_ptr;
     info->kern_boot_args_size  = 0x4000;
@@ -398,7 +387,7 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
         AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i), 0x2F);
     }
 
-    if (t8030->sep_rom_filename != NULL || t8030->sep_fw_filename != NULL) {
+    if (t8030->sep_rom_filename != NULL) {
         apple_sep_setup_tz0(APPLE_SEP(object_property_get_link(OBJECT(t8030), "sep", &error_fatal)), machine->ram,
                             info->tz0_addr - info->dram_base, info->tz0_size);
     }
@@ -2473,13 +2462,7 @@ static void t8030_init(MachineState* machine)
 
     t8030 = APPLE_T8030(machine);
 
-    if ((t8030->sep_fw_filename == NULL) != (t8030->sep_rom_filename == NULL)) {
-        error_setg(&error_fatal, "You need to specify both the SEPROM and the decrypted "
-                                 "SEPFW in order to use SEP emulation!");
-        return;
-    }
-
-    if (t8030->sep_fw_filename == NULL) {
+    if (t8030->sep_rom_filename == NULL) {
         if (machine->smp.cpus > A13_MAX_CPU) {
             error_setg(&error_fatal, "Too many CPU cores specified for simulated SEP!");
             return;
@@ -2656,7 +2639,7 @@ static void t8030_init(MachineState* machine)
     t8030_create_spi(t8030, 1);
     t8030_create_spi(t8030, 3);
 
-    if (t8030->sep_rom_filename && t8030->sep_fw_filename) { t8030_create_sep(t8030); }
+    if (t8030->sep_rom_filename) { t8030_create_sep(t8030); }
     else {
 #ifdef ENABLE_DATA_ENCRYPTION
         error_setg(&error_fatal, "Simulated SEP cannot be used with data "
@@ -2744,7 +2727,6 @@ PROP_GETTER_SETTER(bool, kaslr_off);
 PROP_GETTER_SETTER(bool, force_dfu);
 PROP_STR_GETTER_SETTER(trustcache_filename);
 PROP_STR_GETTER_SETTER(sep_rom_filename);
-PROP_STR_GETTER_SETTER(sep_fw_filename);
 PROP_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
 PROP_GETTER_SETTER(int, usb_uplink_type);
@@ -2777,8 +2759,6 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     object_class_property_set_description(klass, "trustcache", "TrustCache");
     object_class_property_add_str(klass, "sep-rom", t8030_get_sep_rom_filename, t8030_set_sep_rom_filename);
     object_class_property_set_description(klass, "sep-rom", "SEP ROM");
-    object_class_property_add_str(klass, "sep-fw", t8030_get_sep_fw_filename, t8030_set_sep_fw_filename);
-    object_class_property_set_description(klass, "sep-fw", "SEP Firmware");
     object_class_property_add_str(klass, "securerom", t8030_get_securerom_filename, t8030_set_securerom_filename);
     object_class_property_set_description(klass, "securerom", "SecureROM");
     oprop = object_class_property_add_str(klass, "boot-mode", t8030_get_boot_mode, t8030_set_boot_mode);

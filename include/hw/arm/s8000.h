@@ -61,7 +61,6 @@ typedef struct
     AppleVideoArgs  video_args;
     char*           trustcache_filename;
     char*           sep_rom_filename;
-    char*           sep_fw_filename;
     char*           securerom_filename;
     uint32_t        build_version;
     uint64_t        ecid;

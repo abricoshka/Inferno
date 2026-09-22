@@ -110,16 +110,6 @@ static void progress_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
 #ifdef SEP_DISABLE_ASLR
             if (data == 0x23BFDFE7) { disable_aslr(s); }
 #endif
-            if (data == 0x41A7 && (s->sep->chip_id >= 0x8015)) {
-                DPRINTF("%s: SEPFW_copy_test0: 0x" HWADDR_FMT_plx " 0x%" PRIX64 "\n", __func__, s->sep_fw_addr,
-                        s->sep_fw_size);
-#ifdef SEP_ENABLE_HARDCODED_FIRMWARE
-                AddressSpace* nsas = &address_space_memory;
-                address_space_write(nsas, s->sep->sep_fw_addr, MEMTXATTRS_UNSPECIFIED, s->sep->fw_data,
-                                    s->sep->sep_fw_size);
-#endif
-                // g_free(sep_fw);
-            }
 #ifdef SEP_ENABLE_TRACE_BUFFER
             // if (data == 0x6A5D128D && (s->chip_id == 0x8015))
             if (data == 0x6A5D128D) {

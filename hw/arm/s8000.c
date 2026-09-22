@@ -286,11 +286,8 @@ static void s8000_load_kernelcache(AppleS8000MachineState* s8000, const char* cm
         phys_ptr           += info->ramdisk_size;
     }
 
-    phys_ptr          = ROUND_UP_16K(phys_ptr);
-    info->sep_fw_addr = phys_ptr;
-    if (s8000->sep_fw_filename) {
-        // TODO
-    }
+    phys_ptr           = ROUND_UP_16K(phys_ptr);
+    info->sep_fw_addr  = phys_ptr;
     info->sep_fw_size  = 8 * MiB;
     phys_ptr          += info->sep_fw_size;
 
@@ -1481,7 +1478,6 @@ PROP_GETTER_SETTER(bool, kaslr_off);
 PROP_GETTER_SETTER(bool, force_dfu);
 PROP_STR_GETTER_SETTER(trustcache_filename);
 PROP_STR_GETTER_SETTER(sep_rom_filename);
-PROP_STR_GETTER_SETTER(sep_fw_filename);
 PROP_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
 PROP_GETTER_SETTER(int, usb_uplink_type);
@@ -1505,8 +1501,6 @@ static void s8000_class_init(ObjectClass* klass, const void* data)
     object_class_property_set_description(klass, "trustcache", "TrustCache");
     object_class_property_add_str(klass, "sep-rom", s8000_get_sep_rom_filename, s8000_set_sep_rom_filename);
     object_class_property_set_description(klass, "sep-rom", "SEP ROM");
-    object_class_property_add_str(klass, "sep-fw", s8000_get_sep_fw_filename, s8000_set_sep_fw_filename);
-    object_class_property_set_description(klass, "sep-fw", "SEP Firmware");
     object_class_property_add_str(klass, "securerom", s8000_get_securerom_filename, s8000_set_securerom_filename);
     object_class_property_set_description(klass, "securerom", "SecureROM");
     object_class_property_add_str(klass, "boot-mode", s8000_get_boot_mode, s8000_set_boot_mode);

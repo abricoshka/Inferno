@@ -40,7 +40,6 @@
 
 // #define ENABLE_CPU_DUMP_STATE
 
-#define SEP_ENABLE_HARDCODED_FIRMWARE
 // #define SEP_ENABLE_DEBUG_TRACE_MAPPING
 // #define SEP_ENABLE_TRACE_BUFFER
 // can cause conflicts with kernel and userspace, not anymore?
@@ -174,11 +173,8 @@ struct AppleSEP
     bool                      dma_refreshing;
     QEMUTimer*                timer;
     I2CSlave*                 nvram;
-    hwaddr                    sep_fw_addr;
-    gsize                     sep_fw_size;
     uint32_t                  chip_id;
     hwaddr                    shmbuf_base;
-    gchar*                    fw_data;
     AppleA7IOPMailbox*        mailbox;
     AppleSEPAESSState*        aess;
     AppleSEPAESHState*        aesh;

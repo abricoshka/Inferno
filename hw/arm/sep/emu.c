@@ -304,7 +304,8 @@ static void apple_sep_dma_build_windows(AppleSEP* s)
         section = memory_region_find(get_system_memory(), run.pa, run.len);
 
         if (section.mr == NULL) {
-            // warn_report("sep dma: unbacked 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova, run.len,
+            // warn_report("sep dma: unbacked 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova,
+            // run.len,
             //             run.pa);
             continue;
         }
@@ -312,10 +313,12 @@ static void apple_sep_dma_build_windows(AppleSEP* s)
         if (memory_region_is_ram(section.mr) && int128_get64(section.size) == run.len) {
             apple_sep_dma_add_window(s, get_system_memory(), run.iova, run.len, section.mr,
                                      section.offset_within_region);
-            // info_report("sep dma: 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova, run.len, run.pa);
+            // info_report("sep dma: 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova, run.len,
+            // run.pa);
         }
         else {
-            // warn_report("sep dma: skipped 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx " (%s)", run.iova,
+            // warn_report("sep dma: skipped 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx " (%s)",
+            // run.iova,
             //             run.len, run.pa, section.mr->name);
         }
 
@@ -694,13 +697,6 @@ OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSEP, apple_sep, APPLE_SEP, APPLE_A7IOP)
 
 bool apple_sep_get_fuse_changer_bit(AppleSEP* s, uint8_t bit)
 { return apple_sep_pmgr_get_fuse_changer_bit(s->pmgr, bit); }
-
-void apple_sep_set_fw(AppleSEP* s, hwaddr sep_fw_addr, gchar* fw_data, gsize sep_fw_size)
-{
-    s->sep_fw_addr = sep_fw_addr;
-    s->fw_data     = fw_data;
-    s->sep_fw_size = sep_fw_size;
-}
 
 void apple_sep_map_mmio(AppleSEP* s, AppleSEPMMIOIndex mmio_index, hwaddr addr)
 {
