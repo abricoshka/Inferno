@@ -464,10 +464,10 @@ static void tlb_flush_vtlb_page_mask_locked(CPUState* cpu, int mmu_idx, vaddr pa
 static inline void tlb_flush_vtlb_page_locked(CPUState* cpu, int mmu_idx, vaddr page)
 { tlb_flush_vtlb_page_mask_locked(cpu, mmu_idx, page, -1); }
 
-static bool tlb_entry_is_asid_tagged(const CPUTLBEntry* te, const CPUTLBEntryFull* full)
-{ return !tlb_entry_is_empty(te) && full->asid_tagged; }
+static bool tlb_entry_matches(const CPUTLBEntry* te, const CPUTLBEntryFull* full, TLBEntryMatchFn match, uint64_t data)
+{ return !tlb_entry_is_empty(te) && match(full, data); }
 
-static void tlb_flush_asid_tagged_locked(CPUState* cpu, int midx)
+static void tlb_flush_matching_locked(CPUState* cpu, int midx, TLBEntryMatchFn match, uint64_t data)
 {
     CPUTLBDesc*     desc = &cpu->neg.tlb.d[midx];
     CPUTLBDescFast* fast = cpu_tlb_fast(cpu, midx);
@@ -475,37 +475,42 @@ static void tlb_flush_asid_tagged_locked(CPUState* cpu, int midx)
     unsigned int    i;
 
     for (i = 0; i < n; i++) {
-        if (tlb_entry_is_asid_tagged(&fast->table[i], &desc->fulltlb[i])) {
+        if (tlb_entry_matches(&fast->table[i], &desc->fulltlb[i], match, data)) {
             memset(&fast->table[i], -1, sizeof(CPUTLBEntry));
             tlb_n_used_entries_dec(cpu, midx);
         }
     }
 
     for (i = 0; i < CPU_VTLB_SIZE; i++) {
-        if (tlb_entry_is_asid_tagged(&desc->vtable[i], &desc->vfulltlb[i])) {
+        if (tlb_entry_matches(&desc->vtable[i], &desc->vfulltlb[i], match, data)) {
             memset(&desc->vtable[i], -1, sizeof(CPUTLBEntry));
             tlb_n_used_entries_dec(cpu, midx);
         }
     }
 }
 
-void tlb_flush_asid_tagged_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap)
+void tlb_flush_matching_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap, TLBEntryMatchFn match, uint64_t data)
 {
     MMUIdxMap todo, work;
 
     assert_cpu_is_self(cpu);
 
-    tlb_debug("mmu_idx: 0x%" PRIx32 "\n", idxmap);
+    tlb_debug("mmu_idx: 0x%" PRIx32 " data: 0x%" PRIx64 "\n", idxmap, data);
 
     qemu_spin_lock(&cpu->neg.tlb.c.lock);
 
     todo = idxmap & cpu->neg.tlb.c.dirty;
-    for (work = todo; work != 0; work &= work - 1) { tlb_flush_asid_tagged_locked(cpu, ctz32(work)); }
+    for (work = todo; work != 0; work &= work - 1) { tlb_flush_matching_locked(cpu, ctz32(work), match, data); }
 
     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
 
     if (todo != 0) { tcg_flush_jmp_cache(cpu); }
 }
+
+static bool tlb_full_is_asid_tagged(const CPUTLBEntryFull* full, uint64_t data) { return full->asid_tagged; }
+
+void tlb_flush_asid_tagged_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap)
+{ tlb_flush_matching_by_mmuidx(cpu, idxmap, tlb_full_is_asid_tagged, 0); }
 
 static void tlb_flush_page_locked(CPUState* cpu, int midx, vaddr page)
 {

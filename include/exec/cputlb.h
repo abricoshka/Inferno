@@ -87,6 +87,8 @@ void tlb_set_page_with_attrs(CPUState* cpu, vaddr addr, hwaddr paddr, MemTxAttrs
  */
 void tlb_set_page(CPUState* cpu, vaddr addr, hwaddr paddr, int prot, int mmu_idx, vaddr size);
 
+typedef bool (*TLBEntryMatchFn)(const CPUTLBEntryFull* full, uint64_t data);
+
 #ifdef CONFIG_TCG
 /**
  * tlb_flush_page:
@@ -223,6 +225,18 @@ void tlb_flush_pages_by_mmuidx_all_cpus_synced(CPUState* src_cpu, const TLBFlush
 void tlb_flush_asid_tagged_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap);
 
 /**
+ * tlb_flush_matching_by_mmuidx:
+ * @cpu: CPU whose TLB should be flushed
+ * @idxmap: bitmap of MMU indexes to flush
+ * @match: predicate selecting the entries to flush
+ * @data: opaque value passed to @match
+ *
+ * For each mmuidx in @idxmap, flush only those entries for which @match
+ * returns true.
+ */
+void tlb_flush_matching_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap, TLBEntryMatchFn match, uint64_t data);
+
+/**
  * tlb_flush_page_bits_by_mmuidx
  * @cpu: CPU whose TLB should be flushed
  * @addr: virtual address of page to be flushed
@@ -262,6 +276,8 @@ static inline void tlb_flush_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap) { }
 static inline void tlb_flush_page_by_mmuidx_all_cpus_synced(CPUState* cpu, vaddr addr, MMUIdxMap idxmap) { }
 static inline void tlb_flush_by_mmuidx_all_cpus_synced(CPUState* cpu, MMUIdxMap idxmap) { }
 static inline void tlb_flush_asid_tagged_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap) { }
+static inline void tlb_flush_matching_by_mmuidx(CPUState* cpu, MMUIdxMap idxmap, TLBEntryMatchFn match, uint64_t data)
+{ }
 static inline void tlb_flush_pages_by_mmuidx_all_cpus_synced(CPUState* cpu, const TLBFlushPage* pages, unsigned n,
                                                              MMUIdxMap idxmap)
 { }
