@@ -649,10 +649,12 @@ typedef struct CPUArchState
 
     struct
     {
-        uint64_t sprr_el_br_el1[4][2];
+        uint64_t sprr_uperm_br[2];
+        uint64_t sprr_pperm_br[2];
+        uint64_t sprr_umprr_br[2];
+        uint64_t sprr_pmprr_br[2];
         uint64_t sprr_config_el1;
         uint64_t sprr_gtr_el1;
-        uint64_t mprr_el_br_el1[4][2];
     } sprr;
 
     /* Information associated with an exception about to be taken:

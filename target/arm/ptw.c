@@ -863,7 +863,7 @@ static inline int pte_to_sprr_prot_is_guarded(CPUARMState* env, ARMMMUIdx mmu_id
     assert(regime_el(mmu_idx) == 1);
 
     sprr_idx  = ((ap << 2) | (xn << 1) | pxn) & 0xf;
-    sprr_perm = env->sprr.sprr_el_br_el1[!regime_is_user(mmu_idx)][select];
+    sprr_perm = regime_is_user(mmu_idx) ? env->sprr.sprr_uperm_br[select] : env->sprr.sprr_pperm_br[select];
 
     attr = SPRR_EXTRACT_IDX_ATTR(sprr_perm, sprr_idx);
     prot = 0;

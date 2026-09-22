@@ -115,11 +115,11 @@ static void far_el1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t val
     }
 }
 
-static void sprr_perm_el0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
+static void sprr_uperm_br0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
 {
     // maybe use uint64_t for mask/umask?
     uint64_t perm = raw_read(env, ri);
-    uint32_t mask = env->sprr.mprr_el_br_el1[0][0];
+    uint32_t mask = env->sprr.sprr_umprr_br[0];
     if (arm_current_el(env)) {
         raw_write(env, ri, value);
         return;
@@ -472,7 +472,7 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .fieldoffset = offsetof(CPUARMState, sprr.sprr_gtr_el1),
     },
     {
-        .name       = "SPRR_EL0BR0_EL1",
+        .name       = "SPRR_UPERM_BR0_EL0",
         .cp         = CP_REG_ARM64_SYSREG_CP,
         .state      = ARM_CP_STATE_AA64,
         .opc0       = 3,
@@ -483,14 +483,14 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .access     = PL0_RW,
         .resetvalue = 0,
         .readfn     = raw_read,
-        .writefn    = sprr_perm_el0_write,
+        .writefn    = sprr_uperm_br0_write,
         // is that actually not needed?
         // .raw_readfn = raw_read,
         .raw_writefn = raw_write,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_el_br_el1[0][0]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_uperm_br[0]),
     },
     {
-        .name        = "SPRR_EL0BR1_EL1",
+        .name        = "SPRR_UPERM_BR1_EL0",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -500,10 +500,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 6,
         .access      = PL1_RW | PL0_R,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_el_br_el1[0][1]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_uperm_br[1]),
     },
     {
-        .name        = "SPRR_EL1BR0_EL1",
+        .name        = "SPRR_PPERM_BR0_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -513,10 +513,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 7,
         .access      = PL1_RW,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_el_br_el1[1][0]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_pperm_br[0]),
     },
     {
-        .name        = "SPRR_EL1BR1_EL1",
+        .name        = "SPRR_PPERM_BR1_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -528,10 +528,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .resetvalue  = 0,
         .readfn      = raw_read,
         .writefn     = raw_write,
-        .fieldoffset = offsetof(CPUARMState, sprr.sprr_el_br_el1[1][1]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_pperm_br[1]),
     },
     {
-        .name        = "MPRR_EL0BR0_EL1",
+        .name        = "SPRR_UMPRR_BR0_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -541,10 +541,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 1,
         .access      = PL1_RW,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.mprr_el_br_el1[0][0]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_umprr_br[0]),
     },
     {
-        .name        = "MPRR_EL0BR1_EL1",
+        .name        = "SPRR_UMPRR_BR1_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -554,10 +554,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 2,
         .access      = PL1_RW,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.mprr_el_br_el1[0][1]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_umprr_br[1]),
     },
     {
-        .name        = "MPRR_EL1BR0_EL1",
+        .name        = "SPRR_PMPRR_BR0_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -567,10 +567,10 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 3,
         .access      = PL1_RW,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.mprr_el_br_el1[1][0]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_pmprr_br[0]),
     },
     {
-        .name        = "MPRR_EL1BR1_EL1",
+        .name        = "SPRR_PMPRR_BR1_EL1",
         .cp          = CP_REG_ARM64_SYSREG_CP,
         .state       = ARM_CP_STATE_AA64,
         .opc0        = 3,
@@ -580,7 +580,7 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 4,
         .access      = PL1_RW,
         .resetvalue  = 0,
-        .fieldoffset = offsetof(CPUARMState, sprr.mprr_el_br_el1[1][1]),
+        .fieldoffset = offsetof(CPUARMState, sprr.sprr_pmprr_br[1]),
     },
 };
 
