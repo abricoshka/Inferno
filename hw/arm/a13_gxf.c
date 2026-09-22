@@ -115,21 +115,64 @@ static void far_el1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t val
     }
 }
 
+#define SPRR_EL0_IDXMASK (ARMMMUIdxBit_E10_0)
+#define SPRR_EL1_IDXMASK (ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_GE10_1 | ARMMMUIdxBit_GE10_1_PAN)
+
+static void sprr_config_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
+{
+    if (raw_read(env, ri) == value) { return; }
+    raw_write(env, ri, value);
+    tlb_flush_by_mmuidx(env_cpu(env), SPRR_EL0_IDXMASK | SPRR_EL1_IDXMASK);
+}
+
+static uint32_t sprr_changed_indices(uint64_t old_perm, uint64_t new_perm)
+{
+    uint64_t diff    = old_perm ^ new_perm;
+    uint32_t changed = 0;
+
+    for (int i = 0; i < 16; i++) {
+        if (extract64(diff, i * 4, 4)) { changed |= 1U << i; }
+    }
+    return changed;
+}
+
+static bool sprr_tlb_entry_is_stale(const CPUTLBEntryFull* full, uint64_t changed)
+{
+    uint8_t key = full->extra.arm.sprr;
+    return (key & ARM_SPRR_TLB_VALID) && extract64(changed, key & ~ARM_SPRR_TLB_VALID, 1);
+}
+
+static void sprr_perm_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value, MMUIdxMap idxmap, int select)
+{
+    uint32_t changed = sprr_changed_indices(raw_read(env, ri), value);
+
+    if (changed == 0) { return; }
+    raw_write(env, ri, value);
+    tlb_flush_matching_by_mmuidx(env_cpu(env), idxmap, sprr_tlb_entry_is_stale, (uint64_t)changed << (select * 16));
+}
+
 static void sprr_uperm_br0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
 {
     uint64_t mask = 0;
 
     if (arm_current_el(env)) {
-        raw_write(env, ri, value);
+        sprr_perm_write(env, ri, value, SPRR_EL0_IDXMASK, 0);
         return;
     }
 
     for (int i = 0; i < 16; i++) { mask |= extract64(env->sprr.sprr_umprr_br[0], i * 2, 2) << (i * 4); }
 
-    raw_write(env, ri, (raw_read(env, ri) & ~mask) | (value & mask));
-
-    tlb_flush_by_mmuidx(env_cpu(env), ARMMMUIdxBit_E10_0);
+    sprr_perm_write(env, ri, (raw_read(env, ri) & ~mask) | (value & mask), SPRR_EL0_IDXMASK, 0);
 }
+
+static void sprr_uperm_br1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
+{ sprr_perm_write(env, ri, value, SPRR_EL0_IDXMASK, 1); }
+
+static void sprr_pperm_br0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
+{ sprr_perm_write(env, ri, value, SPRR_EL1_IDXMASK, 0); }
+
+static void sprr_pperm_br1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
+{ sprr_perm_write(env, ri, value, SPRR_EL1_IDXMASK, 1); }
 
 static uint64_t gxf_cpreg_raw_read(CPUARMState* env, const ARMCPRegInfo* ri)
 { return *(uint64_t*)((char*)(env) + (ri)->bank_fieldoffsets[0]); }
@@ -436,6 +479,8 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 0,
         .access      = PL1_RW,
         .resetvalue  = 0,
+        .writefn     = sprr_config_write,
+        .raw_writefn = raw_write,
         .fieldoffset = offsetof(CPUARMState, sprr.sprr_config_el1),
     },
     {
@@ -477,6 +522,8 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 6,
         .access      = PL1_RW | PL0_R,
         .resetvalue  = 0,
+        .writefn     = sprr_uperm_br1_write,
+        .raw_writefn = raw_write,
         .fieldoffset = offsetof(CPUARMState, sprr.sprr_uperm_br[1]),
     },
     {
@@ -490,6 +537,8 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 7,
         .access      = PL1_RW,
         .resetvalue  = 0,
+        .writefn     = sprr_pperm_br0_write,
+        .raw_writefn = raw_write,
         .fieldoffset = offsetof(CPUARMState, sprr.sprr_pperm_br[0]),
     },
     {
@@ -503,6 +552,8 @@ static const ARMCPRegInfo apple_a13_gxf_cp_reginfo[] = {
         .opc2        = 0,
         .access      = PL1_RW,
         .resetvalue  = 0,
+        .writefn     = sprr_pperm_br1_write,
+        .raw_writefn = raw_write,
         .fieldoffset = offsetof(CPUARMState, sprr.sprr_pperm_br[1]),
     },
     {

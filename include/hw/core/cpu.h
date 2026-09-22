@@ -262,12 +262,15 @@ struct CPUTLBEntryFull
          * Otherwise, pte_attrs is the same as the MAIR_EL1 8-bit format.
          * For shareability and guarded, as in the SH and GP fields respectively
          * of the VMSAv8-64 PTEs.
+         * For sprr, the SPRR permission index and TTBR select the translation
+         * was resolved through, or 0 if SPRR did not apply.
          */
         struct
         {
             uint8_t pte_attrs;
             uint8_t shareability;
             bool    guarded;
+            uint8_t sprr;
         } arm;
     } extra;
 };

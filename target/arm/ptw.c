@@ -850,6 +850,8 @@ static int simple_ap_to_rw_prot(ARMMMUIdx mmu_idx, int ap)
  * @pxn:     PXN (privileged-execute-never) bits
  * @guarded: TRUE if accessing from GXF
  */
+static inline int sprr_index(int ap, int xn, int pxn) { return ((ap << 2) | (xn << 1) | pxn) & 0xf; }
+
 static inline int pte_to_sprr_prot_is_guarded(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int ap, int xn, int pxn,
                                               bool guarded)
 {
@@ -862,7 +864,7 @@ static inline int pte_to_sprr_prot_is_guarded(CPUARMState* env, ARMMMUIdx mmu_id
 
     assert(regime_el(mmu_idx) == 1);
 
-    sprr_idx  = ((ap << 2) | (xn << 1) | pxn) & 0xf;
+    sprr_idx  = sprr_index(ap, xn, pxn);
     sprr_perm = regime_is_user(mmu_idx) ? env->sprr.sprr_uperm_br[select] : env->sprr.sprr_pperm_br[select];
 
     attr = extract64(sprr_perm, sprr_idx * 4, 4);
@@ -1929,7 +1931,8 @@ restart_atomic_update:
         if (arm_is_sprr_enabled(env)) {
             int sprr_prot = pte_to_sprr_prot(env, mmu_idx, param.select, ap, xn, pxn);
             prot_rw       = sprr_prot & (PAGE_READ | PAGE_WRITE);
-            xn = pxn = !(sprr_prot & PAGE_EXEC);
+            xn = pxn                 = !(sprr_prot & PAGE_EXEC);
+            result->f.extra.arm.sprr = ARM_SPRR_TLB_KEY(param.select, sprr_index(ap, sprr_xn, sprr_pxn));
         }
         else {
             prot_rw = simple_ap_to_rw_prot_is_user(ap, false);
@@ -2362,6 +2365,7 @@ static bool get_phys_addr_twostage(CPUARMState* env, S1Translate* ptw, vaddr add
     int              s1_prot, s1_lgpgsz;
     ARMSecuritySpace in_space = ptw->in_space;
     bool             ret, ipa_secure, s1_guarded, s1_asid_tagged;
+    uint8_t          s1_sprr;
     ARMCacheAttrs    cacheattrs1;
     ARMSecuritySpace ipa_space;
     uint64_t         hcr;
@@ -2387,6 +2391,7 @@ static bool get_phys_addr_twostage(CPUARMState* env, S1Translate* ptw, vaddr add
     s1_prot        = result->f.prot;
     s1_lgpgsz      = result->f.lg_page_size;
     s1_guarded     = result->f.extra.arm.guarded;
+    s1_sprr        = result->f.extra.arm.sprr;
     s1_asid_tagged = result->f.asid_tagged;
     cacheattrs1    = result->cacheattrs;
     memset(result, 0, sizeof(*result));
@@ -2433,6 +2438,7 @@ static bool get_phys_addr_twostage(CPUARMState* env, S1Translate* ptw, vaddr add
 
     /* No BTI GP information in stage 2, we just use the S1 value */
     result->f.extra.arm.guarded = s1_guarded;
+    result->f.extra.arm.sprr    = s1_sprr;
     result->f.asid_tagged       = s1_asid_tagged;
 
     /*

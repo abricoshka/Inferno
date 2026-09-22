@@ -428,6 +428,9 @@ static inline bool arm_is_guarded(CPUARMState* env)
 /* Return true if the processor has SPRR enabled */
 static inline bool arm_is_sprr_enabled(CPUARMState* env) { return env->sprr.sprr_config_el1 & 1; }
 
+#define ARM_SPRR_TLB_VALID            0x80
+#define ARM_SPRR_TLB_KEY(select, idx) (ARM_SPRR_TLB_VALID | ((select) << 4) | (idx))
+
 static inline bool arm_cpu_data_is_big_endian_a32(CPUARMState* env, bool sctlr_b)
 {
     /* In 32bit endianness is determined by looking at CPSR's E bit */
