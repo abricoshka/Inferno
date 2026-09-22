@@ -85,7 +85,6 @@ void qemu_event_reset(QemuEvent* ev)
 {
     assert(ev->initialized);
 
-#ifdef HAVE_FUTEX
     /*
      * If there was a concurrent reset (or even reset+wait),
      * do nothing.  Otherwise change EV_SET->EV_FREE.
@@ -97,28 +96,6 @@ void qemu_event_reset(QemuEvent* ev)
      * Pairs with the first memory barrier in qemu_event_set().
      */
     smp_mb__after_rmw();
-#else
-    /*
-     * If futexes are not available, there are no EV_FREE->EV_BUSY
-     * transitions because wakeups are done entirely through the
-     * condition variable.  Since qatomic_set() only writes EV_FREE,
-     * the load seems useless but in reality, the acquire synchronizes
-     * with qemu_event_set()'s store release: if qemu_event_reset()
-     * sees EV_SET here, then the caller will certainly see a
-     * successful condition and skip qemu_event_wait():
-     *
-     * done = 1;                 if (done == 0)
-     * qemu_event_set() {          qemu_event_reset() {
-     *   lock();
-     *   ev->value = EV_SET ----->     load ev->value
-     *                                 ev->value = old value | EV_FREE
-     *   cond_broadcast()
-     *   unlock();                 }
-     * }                           if (done == 0)
-     *                               // qemu_event_wait() not called
-     */
-    qatomic_set(&ev->value, qatomic_load_acquire(&ev->value) | EV_FREE);
-#endif
 }
 
 void qemu_event_wait(QemuEvent* ev)
