@@ -243,7 +243,7 @@ void hvf_arm_init_debug(void)
 #define TMR_CTL_ISTATUS (1 << 2)
 
 static int  hvf_wfi(CPUState* cpu);
-static void hvf_wfi_timer_cb(void* opaque);
+static void hvf_timer_cb(void* opaque);
 
 static uint32_t chosen_ipa_bit_size;
 
@@ -831,7 +831,8 @@ int hvf_arch_init_vcpu(CPUState* cpu)
     int          i;
     bool         success;
 
-    cpu->accel->wfi_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, hvf_wfi_timer_cb, cpu);
+    cpu->accel->wfi_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, hvf_timer_cb, cpu);
+    timer_init_ns(arm_cpu->gt_timer[GTIMER_PHYS], QEMU_CLOCK_VIRTUAL, hvf_timer_cb, cpu);
 
     env->aarch64 = true;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(arm_cpu->gt_cntfrq_hz));
@@ -1419,37 +1420,15 @@ static int64_t hvf_vtimer_deadline_ns(CPUState* cpu)
     return seconds * NANOSECONDS_PER_SECOND + muldiv64(ticks_to_sleep % freq, NANOSECONDS_PER_SECOND, freq);
 }
 
-static int64_t hvf_ptimer_deadline_ns(CPUState* cpu)
-{
-    ARMCPU* arm_cpu = ARM_CPU(cpu);
-    int64_t expire;
-    int64_t now;
-
-    expire = timer_expire_time_ns(arm_cpu->gt_timer[GTIMER_PHYS]);
-    if (expire < 0) { return INT64_MAX; }
-
-    now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    return expire <= now ? 0 : expire - now;
-}
-
-static void hvf_wfi_timer_cb(void* opaque)
-{
-    CPUState* cpu = opaque;
-
-    cpu->halted = 0;
-    qemu_cpu_kick(cpu);
-}
+static void hvf_timer_cb(void* opaque) { cpu_interrupt(opaque, CPU_INTERRUPT_GTIMER); }
 
 static int hvf_wfi(CPUState* cpu)
 {
     int64_t nanos;
-    int64_t deadline;
 
     if (cpu_has_work(cpu)) { return 0; }
 
-    nanos    = hvf_vtimer_deadline_ns(cpu);
-    deadline = hvf_ptimer_deadline_ns(cpu);
-    if (deadline < nanos) { nanos = deadline; }
+    nanos = hvf_vtimer_deadline_ns(cpu);
 
     /* Already due: stay in the guest. */
     if (nanos == 0) { return 0; }
@@ -1485,6 +1464,15 @@ static void hvf_sync_vtimer(CPUState* cpu)
         assert_hvf_ok(r);
         cpu->accel->vtimer_masked = false;
     }
+}
+
+/* Must be called by the owning thread */
+static void hvf_sync_ptimer(CPUState* cpu)
+{
+    if (!cpu_test_interrupt(cpu, CPU_INTERRUPT_GTIMER)) { return; }
+
+    cpu_reset_interrupt(cpu, CPU_INTERRUPT_GTIMER);
+    arm_gt_ptimer_cb(ARM_CPU(cpu));
 }
 
 static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
@@ -1698,6 +1686,7 @@ int hvf_arch_vcpu_exec(CPUState* cpu)
     /* Inner vCPU loop: executes guest code, runs without the BQL. */
     do {
         flush_cpu_state(cpu);
+        hvf_sync_ptimer(cpu);
 
         if (!(cpu->singlestep_enabled & SSTEP_NOIRQ) && hvf_inject_interrupts(cpu)) {
             ret = EXCP_INTERRUPT;
