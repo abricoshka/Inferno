@@ -527,11 +527,15 @@ static bool coroutine_fn vh_handle_ctrl_submit(USBVirtualHereConn* conn, const u
         return true;
     }
 
-    if (usb_uplink_active(&conn->s->usb) == NULL) { return true; }
-
     pkt = vh_submit_packet_new(conn, msg, len, offsetof(VHCtrlSubmit, data), lduw_le_p(sub->setup + 6),
                                !(sub->setup[0] & USB_DIR_IN));
     memcpy(pkt->setup, sub->setup, sizeof(pkt->setup));
+
+    if (usb_uplink_active(&conn->s->usb) == NULL) {
+        pkt->out_status = -ENODEV;
+        vh_send_ctrl_ack_co(pkt);
+        return true;
+    }
 
     qemu_coroutine_enter(qemu_coroutine_create(vh_ctrl_submit_co, pkt));
 
@@ -568,8 +572,6 @@ static bool coroutine_fn vh_handle_bulk_submit(USBVirtualHereConn* conn, const u
         return true;
     }
 
-    if (usb_uplink_active(&conn->s->usb) == NULL) { return true; }
-
     endpoint = le32_to_cpu(sub->endpoint);
     length   = le32_to_cpu(sub->length);
 
@@ -577,6 +579,12 @@ static bool coroutine_fn vh_handle_bulk_submit(USBVirtualHereConn* conn, const u
 
     pkt          = vh_submit_packet_new(conn, msg, len, offsetof(VHBulkSubmit, data), length, !(endpoint & USB_DIR_IN));
     pkt->ep_addr = endpoint;
+
+    if (usb_uplink_active(&conn->s->usb) == NULL) {
+        pkt->out_status = -ENODEV;
+        vh_send_bulk_ack_co(pkt);
+        return true;
+    }
 
     qemu_coroutine_enter(qemu_coroutine_create(vh_bulk_submit_co, pkt));
 
