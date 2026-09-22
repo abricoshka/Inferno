@@ -1533,6 +1533,7 @@ static bool get_phys_addr_lpae(CPUARMState* env, S1Translate* ptw, uint64_t addr
     int              addrsize, inputsize, outputsize;
     uint64_t         tcr = regime_tcr(env, mmu_idx);
     int              ap, xn, pxn;
+    int              sprr_xn, sprr_pxn;
     uint32_t         el = regime_el(mmu_idx);
     uint64_t         descaddrmask;
     bool             aarch64 = arm_el_is_aa64(env, el);
@@ -1922,10 +1923,13 @@ restart_atomic_update:
             ap  &= ~1;
         }
 
-        user_rw = simple_ap_to_rw_prot_is_user(ap, true);
+        user_rw  = simple_ap_to_rw_prot_is_user(ap, true);
+        sprr_xn  = xn;
+        sprr_pxn = pxn;
         if (arm_is_sprr_enabled(env)) {
-            prot_rw = pte_to_sprr_prot(env, mmu_idx, param.select, ap, xn, pxn) & (PAGE_READ | PAGE_WRITE);
-            xn = pxn = !(pte_to_sprr_prot(env, mmu_idx, param.select, ap, xn, pxn) & PAGE_EXEC);
+            int sprr_prot = pte_to_sprr_prot(env, mmu_idx, param.select, ap, xn, pxn);
+            prot_rw       = sprr_prot & (PAGE_READ | PAGE_WRITE);
+            xn = pxn = !(sprr_prot & PAGE_EXEC);
         }
         else {
             prot_rw = simple_ap_to_rw_prot_is_user(ap, false);
@@ -1940,7 +1944,7 @@ restart_atomic_update:
         if (access_type == MMU_INST_FETCH) {
             if (arm_is_sprr_enabled(env) && !arm_is_guarded(env)) {
                 if (!(result->f.prot & (1 << access_type))) {
-                    int gl_prot = pte_to_sprr_prot_is_guarded(env, mmu_idx, param.select, ap, xn, pxn, true);
+                    int gl_prot = pte_to_sprr_prot_is_guarded(env, mmu_idx, param.select, ap, sprr_xn, sprr_pxn, true);
                     if (gl_prot & (1 << access_type)) {
                         fi->type = ARMFault_GXF_Abort;
                         goto do_fault;
