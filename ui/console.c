@@ -356,8 +356,8 @@ DisplaySurface* qemu_create_displaysurface_pixman(pixman_image_t* image)
 DisplaySurface* qemu_create_placeholder_surface(int w, int h, const char* msg)
 {
     DisplaySurface* surface = qemu_create_displaysurface(w, h);
-    pixman_color_t  bg = QEMU_PIXMAN_COLOR_BLACK;
-    pixman_color_t  fg = QEMU_PIXMAN_COLOR_GRAY;
+    pixman_color_t  bg      = QEMU_PIXMAN_COLOR_BLACK;
+    pixman_color_t  fg      = QEMU_PIXMAN_COLOR_GRAY;
     pixman_image_t* glyph;
     int             len, x, y, i;
 
@@ -947,10 +947,10 @@ bool qemu_display_find_default(DisplayOptions* opts)
 {
     static DisplayType prio[] = {
 #if defined(CONFIG_COCOA)
-        DISPLAY_TYPE_COCOA
+        DISPLAY_TYPE_COCOA,
 #endif
 #if defined(CONFIG_GTK)
-            DISPLAY_TYPE_GTK,
+        DISPLAY_TYPE_GTK,
 #endif
 #if defined(CONFIG_SDL)
         DISPLAY_TYPE_SDL,
