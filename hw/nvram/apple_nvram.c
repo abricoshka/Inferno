@@ -329,14 +329,7 @@ ssize_t apple_nvram_serialize(AppleNvram* s, void* buffer, size_t size)
     g_autofree void* buf = NULL;
     size_t           len = 0;
 
-    if (!p) {
-        p      = g_malloc0(sizeof(NvramPartition));
-        p->sig = 0x70;
-        g_strlcpy(p->name, "common", sizeof(p->name));
-        p->len  = 0x7f0;
-        p->data = g_malloc0(p->len);
-        QTAILQ_INSERT_HEAD(&s->bank->parts, p, entry);
-    }
+    assert_nonnull(p);
 
     if (env_serialize(s, p->data, p->len) < 0) { error_report("%s: failed to serialize env", __func__); }
 
