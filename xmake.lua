@@ -32,8 +32,9 @@ inferno_linux_arch = ({
 
 inferno_target = "aarch64-softmmu"
 inferno_gendir = "$(builddir)/.gens/inferno"
-inferno_subdirs = {"accel", "audio", "authz", "backends", "block", "chardev", "crypto", "fpu", "gdbstub", "hw", "io",
-	"monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target", "tcg", "trace", "ui", "util"}
+inferno_subdirs = {"accel", "audio", "authz", "backends", "block", "chardev", "crypto", "fpu", "fspatcher", "gdbstub",
+	"hw", "io", "monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target", "tcg", "trace", "ui",
+	"util"}
 
 includes("@builtin/check")
 includes("xmake/packages.lua")
@@ -155,7 +156,6 @@ if has_config("__tsa_cleanup") then
 	add_cflags("-Wthread-safety")
 end
 
-add_includedirs(".")
 local quote_dirs = {"include"}
 if os.isdir(path.join(os.projectdir(), "host", "include", inferno_host_arch)) then
 	table.insert(quote_dirs, "host/include/" .. inferno_host_arch)
