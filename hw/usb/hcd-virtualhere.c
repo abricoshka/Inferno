@@ -1031,6 +1031,16 @@ static void usb_virtualhere_unrealize(DeviceState* dev)
     usb_uplink_invalidate(&s->usb);
 }
 
+static void usb_virtualhere_reset_exit(Object* obj, ResetType type)
+{
+    USBVirtualHereState* s = USB_VIRTUALHERE(obj);
+
+    if (timer_pending(s->unplug_timer)) {
+        timer_del(s->unplug_timer);
+        vh_unplug_timeout(s);
+    }
+}
+
 static const Property usb_virtualhere_props[] = {
     DEFINE_PROP_STRING("addr", USBVirtualHereState, addr),
     DEFINE_PROP_STRING("server-name", USBVirtualHereState, server_name),
@@ -1040,13 +1050,16 @@ static const Property usb_virtualhere_props[] = {
 
 static void usb_virtualhere_class_init(ObjectClass* klass, const void* data)
 {
-    DeviceClass* dc = DEVICE_CLASS(klass);
+    DeviceClass*     dc = DEVICE_CLASS(klass);
+    ResettableClass* rc = RESETTABLE_CLASS(klass);
 
     dc->realize   = usb_virtualhere_realize;
     dc->unrealize = usb_virtualhere_unrealize;
     dc->desc      = "VirtualHere-protocol USB server";
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
     device_class_set_props(dc, usb_virtualhere_props);
+
+    rc->phases.exit = usb_virtualhere_reset_exit;
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(USBVirtualHereState, usb_virtualhere, USB_VIRTUALHERE, SYS_BUS_DEVICE)
