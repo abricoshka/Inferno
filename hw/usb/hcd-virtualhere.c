@@ -918,30 +918,6 @@ static void virtualhere_accept(QIONetListener* listener, QIOChannelSocket* cioc,
     qemu_coroutine_enter(co);
 }
 
-/*
- * A dwc3 run/stop toggle detaches and re-attaches the same device, so a device
- * that comes straight back has re-enumerated rather than been unplugged.
- */
-#define VIRTUALHERE_UNPLUG_SETTLE_MS 1000
-
-static void vh_unplug_timeout(void* opaque)
-{
-    USBVirtualHereState* s    = opaque;
-    USBVirtualHereConn*  conn = s->active_conn;
-
-    VIRTUALHERE_DPRINTF("%s: device stayed away, reporting it gone\n", __func__);
-
-    if (conn != NULL && !conn->closed) {
-        bool bound = conn->using_device;
-
-        conn->using_device = false;
-        conn->use_pending  = false;
-        vh_notify_device_removed(conn, bound);
-    }
-
-    usb_uplink_invalidate(&s->usb);
-}
-
 static void usb_virtualhere_attach(USBPort* port)
 {
     USBVirtualHereState* s = port->opaque;
@@ -951,7 +927,6 @@ static void usb_virtualhere_attach(USBPort* port)
 
     if (port->dev == NULL || !port->dev->attached) { return; }
 
-    timer_del(s->unplug_timer);
     usb_uplink_invalidate(&s->usb);
 
     if (s->active_conn != NULL && !s->active_conn->closed) {
@@ -968,15 +943,19 @@ static void usb_virtualhere_detach(USBPort* port)
     VIRTUALHERE_DPRINTF("%s: port[%d] detached, remaining=%p\n", __func__, port->index,
                         usb_uplink_active_except(&s->usb, port));
 
-    if (conn != NULL && !conn->closed) { vh_conn_abort_packets(conn); }
+    if (conn != NULL && !conn->closed) {
+        vh_conn_abort_packets(conn);
 
-    if (usb_uplink_active_except(&s->usb, port) != NULL) {
-        usb_uplink_invalidate(&s->usb);
-        return;
+        if (usb_uplink_active_except(&s->usb, port) == NULL) {
+            bool bound = conn->using_device;
+
+            conn->using_device = false;
+            conn->use_pending  = false;
+            vh_notify_device_removed(conn, bound);
+        }
     }
 
-    /* The descriptors are kept until it settles, so a real unplug can name it. */
-    timer_mod(s->unplug_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + VIRTUALHERE_UNPLUG_SETTLE_MS);
+    usb_uplink_invalidate(&s->usb);
 }
 
 static USBBusOps  usb_virtualhere_bus_ops  = {};
@@ -1027,7 +1006,6 @@ static void usb_virtualhere_realize(DeviceState* dev, Error** errp)
     vh_init_server_guid(s);
 
     usb_uplink_init(&s->usb, dev, &usb_virtualhere_bus_ops, &usb_virtualhere_port_ops, s);
-    s->unplug_timer = timer_new_ms(QEMU_CLOCK_REALTIME, vh_unplug_timeout, s);
 
     if (!virtualhere_listen(s, errp)) { return; }
 
@@ -1037,11 +1015,6 @@ static void usb_virtualhere_realize(DeviceState* dev, Error** errp)
 
 static void usb_virtualhere_teardown(USBVirtualHereState* s)
 {
-    if (s->unplug_timer != NULL) {
-        timer_free(s->unplug_timer);
-        s->unplug_timer = NULL;
-    }
-
     if (s->active_conn != NULL) {
         USBVirtualHereConn* conn = s->active_conn;
 
@@ -1076,16 +1049,6 @@ static void usb_virtualhere_unrealize(DeviceState* dev)
     usb_uplink_invalidate(&s->usb);
 }
 
-static void usb_virtualhere_reset_exit(Object* obj, ResetType type)
-{
-    USBVirtualHereState* s = USB_VIRTUALHERE(obj);
-
-    if (timer_pending(s->unplug_timer)) {
-        timer_del(s->unplug_timer);
-        vh_unplug_timeout(s);
-    }
-}
-
 static const Property usb_virtualhere_props[] = {
     DEFINE_PROP_STRING("addr", USBVirtualHereState, addr),
     DEFINE_PROP_STRING("server-name", USBVirtualHereState, server_name),
@@ -1095,16 +1058,13 @@ static const Property usb_virtualhere_props[] = {
 
 static void usb_virtualhere_class_init(ObjectClass* klass, const void* data)
 {
-    DeviceClass*     dc = DEVICE_CLASS(klass);
-    ResettableClass* rc = RESETTABLE_CLASS(klass);
+    DeviceClass* dc = DEVICE_CLASS(klass);
 
     dc->realize   = usb_virtualhere_realize;
     dc->unrealize = usb_virtualhere_unrealize;
     dc->desc      = "VirtualHere-protocol USB server";
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
     device_class_set_props(dc, usb_virtualhere_props);
-
-    rc->phases.exit = usb_virtualhere_reset_exit;
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(USBVirtualHereState, usb_virtualhere, USB_VIRTUALHERE, SYS_BUS_DEVICE)
