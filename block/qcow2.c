@@ -328,7 +328,7 @@ static int coroutine_fn GRAPH_RDLOCK qcow2_read_extensions(BlockDriverState* bs,
                                     "considered inconsistent");
                     }
                     error_printf("Some clusters may be leaked, "
-                                 "run 'qemu-img check -r' on the image "
+                                 "run 'inferno-img check -r' on the image "
                                  "file to fix.");
                     if (need_update_header != NULL) {
                         /* Updating is needed to drop invalid bitmap extension. */
@@ -1385,7 +1385,7 @@ static int coroutine_fn GRAPH_RDLOCK qcow2_do_open(BlockDriverState* bs, QDict* 
         if (bdrv_uses_whitelist() && s->crypt_method_header == QCOW_CRYPT_AES) {
             error_setg(errp, "Use of AES-CBC encrypted qcow2 images is no longer "
                              "supported in system emulators");
-            error_append_hint(errp, "You can use 'qemu-img convert' to convert your "
+            error_append_hint(errp, "You can use 'inferno-img convert' to convert your "
                                     "image to an alternative supported format, such "
                                     "as unencrypted qcow2, or raw with the LUKS "
                                     "format instead.\n");
@@ -4453,7 +4453,8 @@ static int GRAPH_RDLOCK make_completely_empty(BlockDriverState* bs)
     ret = qcow2_mark_clean(bs);
     if (ret < 0) { goto fail; }
 
-    ret = bdrv_truncate(bs->file, ((int64_t)3 + l1_clusters) * s->cluster_size, false, PREALLOC_MODE_OFF, 0, &local_err);
+    ret =
+        bdrv_truncate(bs->file, ((int64_t)3 + l1_clusters) * s->cluster_size, false, PREALLOC_MODE_OFF, 0, &local_err);
     if (ret < 0) {
         error_report_err(local_err);
         goto fail;
@@ -5195,7 +5196,7 @@ static int GRAPH_RDLOCK qcow2_amend_options(BlockDriverState* bs, QemuOpts* opts
     if (backing_file || backing_format) {
         if (g_strcmp0(backing_file, s->image_backing_file) || g_strcmp0(backing_format, s->image_backing_format)) {
             error_setg(errp, "Cannot amend the backing file");
-            error_append_hint(errp, "You can use 'qemu-img rebase' instead.\n");
+            error_append_hint(errp, "You can use 'inferno-img rebase' instead.\n");
             return -EINVAL;
         }
     }

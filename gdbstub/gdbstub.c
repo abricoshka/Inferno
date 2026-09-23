@@ -1315,7 +1315,7 @@ static void handle_query_threads(GArray* params, void* user_ctx)
 
 static void handle_query_gdb_server_version(GArray* params, void* user_ctx)
 {
-    g_string_printf(gdbserver_state.str_buf, "name:qemu-system-%s;version:%s;", target_name(), QEMU_VERSION);
+    g_string_printf(gdbserver_state.str_buf, "name:inferno-%s;version:%s;", target_name(), QEMU_VERSION);
     gdb_put_strbuf();
 }
 

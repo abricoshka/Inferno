@@ -2345,7 +2345,7 @@ static void sd_realize(DeviceState* dev, Error** errp)
             error_append_hint(errp,
                               "SD card size has to be a power of 2, e.g. %s.\n"
                               "You can resize disk images with"
-                              " 'qemu-img resize <imagefile> <new-size>'\n"
+                              " 'inferno-img resize <imagefile> <new-size>'\n"
                               "(note that this will lose data if you make the"
                               " image smaller than it currently is).\n",
                               blk_size_str);

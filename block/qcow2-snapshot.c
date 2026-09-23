@@ -132,7 +132,7 @@ static coroutine_fn GRAPH_RDLOCK int qcow2_do_read_snapshots(BlockDriverState* b
                            "entry %i",
                            i);
                 error_append_hint(errp, "You can force-remove this extra "
-                                        "metadata with qemu-img check -r all\n");
+                                        "metadata with inferno-img check -r all\n");
                 goto fail;
             }
 
@@ -218,7 +218,7 @@ static coroutine_fn GRAPH_RDLOCK int qcow2_do_read_snapshots(BlockDriverState* b
                 error_setg(errp, "Snapshot table is too big");
                 error_append_hint(errp,
                                   "You can force-remove all %u "
-                                  "overhanging snapshots with qemu-img check "
+                                  "overhanging snapshots with inferno-img check "
                                   "-r all\n",
                                   s->nb_snapshots - i);
                 goto fail;
@@ -432,7 +432,7 @@ int coroutine_fn qcow2_check_read_snapshot_table(BlockDriverState* bs, BdrvCheck
         if (s->nb_snapshots > QCOW_MAX_SNAPSHOTS) {
             fprintf(stderr,
                     "You can force-remove all %u overhanging snapshots "
-                    "with qemu-img check -r all\n",
+                    "with inferno-img check -r all\n",
                     s->nb_snapshots - QCOW_MAX_SNAPSHOTS);
         }
 

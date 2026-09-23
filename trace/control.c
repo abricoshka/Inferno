@@ -135,7 +135,7 @@ void trace_list_events(FILE* f)
     fprintf(f,
             "This list of names of trace points may be incomplete "
             "when using the DTrace/SystemTap backends.\n"
-            "Run 'qemu-trace-stap list %s' to print the full list.\n",
+            "Run 'inferno-trace-stap list %s' to print the full list.\n",
             g_get_prgname());
 #endif
 }

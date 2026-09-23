@@ -1,3 +1,0 @@
-config ARM_TIMER
-    bool
-    select PTIMER

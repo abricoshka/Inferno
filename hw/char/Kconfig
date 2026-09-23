@@ -1,5 +1,0 @@
-config EXYNOS4210_UART
-    bool
-
-config APPLE_UART
-    bool

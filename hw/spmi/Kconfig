@@ -1,6 +1,0 @@
-config SPMI
-    bool
-
-config APPLE_SPMI
-    bool
-    select SPMI

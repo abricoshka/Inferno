@@ -1069,7 +1069,8 @@ int qcow2_update_snapshot_refcount(BlockDriverState* bs, int64_t l1_table_offset
             }
 
             for (slice = 0; slice < n_slices; slice++) {
-                ret = qcow2_cache_get(bs, s->l2_table_cache, l2_offset + (uint64_t)slice * slice_size2, (void**)&l2_slice);
+                ret = qcow2_cache_get(bs, s->l2_table_cache, l2_offset + (uint64_t)slice * slice_size2,
+                                      (void**)&l2_slice);
                 if (ret < 0) { goto fail; }
 
                 for (j = 0; j < s->l2_slice_size; j++) {
@@ -1280,8 +1281,8 @@ int coroutine_fn GRAPH_RDLOCK qcow2_inc_refcounts_imrt(BlockDriverState* bs, Bdr
         refcount = s->get_refcount(*refcount_table, k);
         if (refcount == s->refcount_max) {
             fprintf(stderr, "ERROR: overflow cluster offset=0x%" PRIx64 "\n", cluster_offset);
-            fprintf(stderr, "Use qemu-img amend to increase the refcount entry "
-                            "width or qemu-img convert to create a clean copy if the "
+            fprintf(stderr, "Use inferno-img amend to increase the refcount entry "
+                            "width or inferno-img convert to create a clean copy if the "
                             "image cannot be opened for writing\n");
             res->corruptions++;
             continue;

@@ -53,7 +53,7 @@
 #include "crypto/init.h"
 #include "trace/control.h"
 
-#define QEMU_IMG_VERSION "qemu-img version " QEMU_FULL_VERSION "\n" QEMU_COPYRIGHT "\n"
+#define QEMU_IMG_VERSION "inferno-img version " QEMU_FULL_VERSION "\n" QEMU_COPYRIGHT "\n"
 
 typedef struct img_cmd_t
 {
@@ -131,7 +131,7 @@ static G_NORETURN void cmd_help(const img_cmd_t* ccmd, const char* syntax, const
            "  -h, --help\n"
            "     print this help and exit\n"
            "%s\n",
-           "qemu-img", ccmd->name, syntax, ccmd->description, arguments);
+           "inferno-img", ccmd->name, syntax, ccmd->description, arguments);
     exit(EXIT_SUCCESS);
 }
 
@@ -1870,7 +1870,7 @@ static int convert_check_bitmaps(BlockDriverState* src, bool skip_broken)
         if (!skip_broken && bdrv_dirty_bitmap_inconsistent(bm)) {
             error_report("Cannot copy inconsistent bitmap '%s'", bdrv_dirty_bitmap_name(bm));
             error_printf("Try --skip-broken-bitmaps, or "
-                         "use 'qemu-img bitmap --remove' to delete it\n");
+                         "use 'inferno-img bitmap --remove' to delete it\n");
             return -1;
         }
     }
@@ -5032,7 +5032,7 @@ int main(int argc, char** argv)
                 printf(QEMU_IMG_VERSION
                        "QEMU disk image utility.  Usage:\n"
                        "\n"
-                       "  qemu-img [standard options] COMMAND [--help | command options]\n"
+                       "  inferno-img [standard options] COMMAND [--help | command options]\n"
                        "\n"
                        "Standard options:\n"
                        "  -h, --help\n"
@@ -5043,7 +5043,7 @@ int main(int argc, char** argv)
                        "     specify tracing options:\n"
                        "        [[enable=]<pattern>][,events=<file>][,file=<file>]\n"
                        "\n"
-                       "Recognized commands (run qemu-img COMMAND --help for command-specific help):\n\n");
+                       "Recognized commands (run inferno-img COMMAND --help for command-specific help):\n\n");
                 for (cmd = img_cmds; cmd->name != NULL; cmd++) { printf("  %s - %s\n", cmd->name, cmd->description); }
                 printf("\nSupported image formats:\n");
                 c = 99; /* force a newline */

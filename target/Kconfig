@@ -1,4 +1,0 @@
-source arm/Kconfig
-
-config TARGET_BIG_ENDIAN
-    bool

@@ -1,5 +1,0 @@
-i2c_ss = ss.source_set()
-i2c_ss.add(when: 'CONFIG_I2C', if_true: files('core.c'))
-i2c_ss.add(when: 'CONFIG_EXYNOS4210_UART', if_true: files('exynos4210_i2c.c'))
-i2c_ss.add(when: ['CONFIG_APPLE_SOC', 'CONFIG_APPLE_I2C'], if_true: files('apple_i2c.c'))
-system_ss.add_all(when: 'CONFIG_I2C', if_true: i2c_ss)

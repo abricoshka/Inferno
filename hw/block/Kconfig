@@ -1,9 +1,0 @@
-config APPLE_ANS
-    bool
-    select NVME_PCI
-    depends on APPLE_SOC
-
-config APPLE_NVME_MMU
-    bool
-    select NVME_PCI
-    depends on APPLE_SOC

@@ -335,7 +335,7 @@ class QAPISchemaGenCommandVisitor(QAPISchemaModularCVisitor):
 ''',
                                  nm=c_name(commands, protect=False)))
             # We use c_name(commands, protect=False) to turn '-' into '_', to
-            # match .underscorify() in trace/meson.build
+            # match the trace group names in xmake/modules/inferno/trace.lua
 
         self._genh.add(mcgen('''
 #include "%(types)s.h"

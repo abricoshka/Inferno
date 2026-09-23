@@ -2,32 +2,20 @@
 #
 # Helper script for the build process to apply entitlements
 
-in_place=:
-if [ "$1" = --install ]; then
-  shift
-  in_place=false
-fi
+FILE="$1"
+ICON="$2"
+ENTITLEMENT="$3"
 
-DST="$1"
-SRC="$2"
-ICON="$3"
-ENTITLEMENT="$4"
-
-if $in_place; then
-  trap 'rm "$DST.tmp"' exit
-  cp -pPf "$SRC" "$DST.tmp"
-  SRC="$DST.tmp"
-else
-  cd "$MESON_INSTALL_DESTDIR_PREFIX"
-fi
+trap 'rm -f "$FILE.tmp"' exit
+cp -pPf "$FILE" "$FILE.tmp"
 
 if test -n "$ENTITLEMENT"; then
-  codesign --entitlements "$ENTITLEMENT" --force -s - "$SRC"
+  codesign --entitlements "$ENTITLEMENT" --force -s - "$FILE.tmp"
 fi
 
 # Add the QEMU icon to the binary on Mac OS
-Rez -append "$ICON" -o "$SRC"
-SetFile -a C "$SRC"
+Rez -append "$ICON" -o "$FILE.tmp"
+SetFile -a C "$FILE.tmp"
 
-mv -f "$SRC" "$DST"
+mv -f "$FILE.tmp" "$FILE"
 trap '' exit

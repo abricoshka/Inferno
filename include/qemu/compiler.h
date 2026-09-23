@@ -314,8 +314,8 @@
 /*
  * Ugly CPP trick that is like "defined FOO", but also works in C
  * code.  Useful to replace #ifdef with "if" statements; assumes
- * the symbol was defined with Meson's "config.set()", so it is empty
- * if defined.
+ * the symbol was defined as an empty macro in config-host.h, which
+ * the build does for every boolean configuration symbol.
  */
 #define IS_ENABLED(x) IS_EMPTY(x)
 

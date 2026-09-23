@@ -22,11 +22,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y build-essential libtool ninja-build pkg-config libglib2.0-dev gnutls-bin libjpeg-turbo8-dev libpng-dev libslirp-dev libssh-dev libusb-1.0-0-dev liblzo2-dev libncurses5-dev libpixman-1-dev libsnappy-dev vde2 zstd libgnutls28-dev libgmp10 libgmp3-dev lzfse liblzfse-dev python3-pip nettle-bin nettle-dev meson libavahi-glib-dev
+          sudo apt-get install -y build-essential cmake pkg-config libglib2.0-dev gnutls-bin libjpeg-turbo8-dev libpng-dev libslirp-dev libssh-dev libusb-1.0-0-dev liblzo2-dev libncurses5-dev libpixman-1-dev libsnappy-dev vde2 zstd libgnutls28-dev libgmp10 libgmp3-dev lzfse liblzfse-dev python3-pip nettle-bin nettle-dev liblz4-dev libtasn1-6-dev libavahi-glib-dev libxkbcommon-dev
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
       - name: Build
         run: |
-          meson setup build .
-          meson compile -C build
+          xmake f -y
+          xmake -y
 
   build_macos:
     name: macOS Build
@@ -44,8 +47,11 @@ jobs:
           submodules: true
       - name: Install dependencies
         run: |
-          brew install libtool meson ninja pkgconf glib gnutls jpeg-turbo libpng libslirp libssh libusb lzo ncurses nettle pixman snappy vde zstd lzfse
+          brew install cmake pkgconf glib gnutls jpeg-turbo libpng libslirp libssh libusb lzo ncurses nettle pixman snappy vde zstd lzfse lz4 libtasn1 libxkbcommon
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
       - name: Build
         run: |
-          LIBTOOL="glibtool" meson setup build . -Dsdl=disabled -Dgtk=disabled -Dcocoa=enabled -Dc_args="-DNCURSES_WIDECHAR=1"
-          meson compile -C build
+          xmake f -y --sdl=n --gtk=n --cocoa=y
+          xmake -y

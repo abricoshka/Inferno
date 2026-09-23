@@ -24,8 +24,7 @@
 #
 #
 # .. note:: The resulting QMP strings can be appended to the
-#    "qemu-system-" prefix to produce the corresponding QEMU
-#    executable name.  This is true even for "qemu-system-x86_64".
+#    "inferno-" prefix to produce the corresponding executable name.
 #
 # Since: 3.0
 ##
