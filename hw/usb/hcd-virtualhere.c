@@ -123,20 +123,19 @@ static bool coroutine_fn vh_conn_send_raw(USBVirtualHereConn* conn, const void* 
     return ok;
 }
 
-static bool coroutine_fn vh_conn_send_frame(USBVirtualHereConn* conn, uint32_t compressed_len,
-                                            uint32_t uncompressed_len, const void* body, uint32_t body_len)
+static void vh_frame_append(GByteArray* out, uint32_t compressed_len, uint32_t uncompressed_len, const void* body,
+                            uint32_t body_len)
 {
-    g_autofree uint8_t* frame = g_malloc(VIRTUALHERE_FRAME_HDR_LEN + body_len);
+    uint8_t hdr[VIRTUALHERE_FRAME_HDR_LEN];
 
-    stl_le_p(frame, compressed_len);
-    stl_le_p(frame + 4, uncompressed_len);
-    memcpy(frame + VIRTUALHERE_FRAME_HDR_LEN, body, body_len);
-
-    return vh_conn_send_raw(conn, frame, VIRTUALHERE_FRAME_HDR_LEN + body_len);
+    stl_le_p(hdr, compressed_len);
+    stl_le_p(hdr + 4, uncompressed_len);
+    g_byte_array_append(out, hdr, sizeof(hdr));
+    g_byte_array_append(out, body, body_len);
 }
 
-static bool coroutine_fn vh_conn_send_msg(USBVirtualHereConn* conn, uint8_t type, const uint8_t* req_hdr,
-                                          const void* payload, uint32_t payload_len)
+static void vh_msg_append(GByteArray* out, uint8_t type, const uint8_t* req_hdr, const void* payload,
+                          uint32_t payload_len)
 {
     uint32_t            msg_len = VIRTUALHERE_PAYLOAD_OFF + payload_len;
     g_autofree uint8_t* msg     = g_malloc0(msg_len);
@@ -146,11 +145,10 @@ static bool coroutine_fn vh_conn_send_msg(USBVirtualHereConn* conn, uint8_t type
     stl_le_p(msg + VIRTUALHERE_LENGTH_OFF, payload_len);
     if (payload_len) { memcpy(msg + VIRTUALHERE_PAYLOAD_OFF, payload, payload_len); }
 
-    return vh_conn_send_frame(conn, 0, msg_len, msg, msg_len);
+    vh_frame_append(out, 0, msg_len, msg, msg_len);
 }
 
-static bool coroutine_fn vh_conn_send_lz4(USBVirtualHereConn* conn, const uint8_t* uncompressed,
-                                          uint32_t uncompressed_len)
+static bool vh_lz4_append(GByteArray* out, const uint8_t* uncompressed, uint32_t uncompressed_len)
 {
     g_autofree uint8_t* compressed = g_malloc(LZ4_compressBound(uncompressed_len));
     int                 compressed_len;
@@ -162,7 +160,35 @@ static bool coroutine_fn vh_conn_send_lz4(USBVirtualHereConn* conn, const uint8_
         return false;
     }
 
-    return vh_conn_send_frame(conn, compressed_len, uncompressed_len, compressed, compressed_len);
+    vh_frame_append(out, compressed_len, uncompressed_len, compressed, compressed_len);
+    return true;
+}
+
+static bool coroutine_fn vh_conn_send_frame(USBVirtualHereConn* conn, uint32_t compressed_len,
+                                            uint32_t uncompressed_len, const void* body, uint32_t body_len)
+{
+    g_autoptr(GByteArray) frame = g_byte_array_sized_new(VIRTUALHERE_FRAME_HDR_LEN + body_len);
+
+    vh_frame_append(frame, compressed_len, uncompressed_len, body, body_len);
+    return vh_conn_send_raw(conn, frame->data, frame->len);
+}
+
+static bool coroutine_fn vh_conn_send_msg(USBVirtualHereConn* conn, uint8_t type, const uint8_t* req_hdr,
+                                          const void* payload, uint32_t payload_len)
+{
+    g_autoptr(GByteArray) frame = g_byte_array_new();
+
+    vh_msg_append(frame, type, req_hdr, payload, payload_len);
+    return vh_conn_send_raw(conn, frame->data, frame->len);
+}
+
+static bool coroutine_fn vh_conn_send_lz4(USBVirtualHereConn* conn, const uint8_t* uncompressed,
+                                          uint32_t uncompressed_len)
+{
+    g_autoptr(GByteArray) frame = g_byte_array_new();
+
+    if (!vh_lz4_append(frame, uncompressed, uncompressed_len)) { return false; }
+    return vh_conn_send_raw(conn, frame->data, frame->len);
 }
 
 static bool coroutine_fn vh_read_body(QIOChannel* ioc, uint32_t compressed_len, uint8_t* msg, uint32_t length)
@@ -595,27 +621,39 @@ typedef struct VHRemovalNotice
 {
     USBVirtualHereConn* conn;
     VHDeviceInfo*       msg;
+    bool                unbind;
 } VHRemovalNotice;
 
 static void coroutine_fn vh_notify_device_removed_co(void* opaque)
 {
     g_autofree VHRemovalNotice* notice = opaque;
     g_autofree VHDeviceInfo*    gone   = notice->msg;
+    g_autoptr(GByteArray) frames       = g_byte_array_new();
 
-    vh_conn_send_lz4(notice->conn, (const uint8_t*)gone, sizeof(*gone));
+    if (notice->unbind) {
+        VHHeader hdr         = {.device_id = cpu_to_le16(VIRTUALHERE_SERVER_DEVICE_ID)};
+        uint8_t  released[4] = {1, 0, 0, 0};
+
+        vh_msg_append(frames, VIRTUALHERE_MSG_UNBIND_ACK, (const uint8_t*)&hdr, released, sizeof(released));
+    }
+
+    if (vh_lz4_append(frames, (const uint8_t*)gone, sizeof(*gone))) {
+        vh_conn_send_raw(notice->conn, frames->data, frames->len);
+    }
     object_unref(OBJECT(notice->conn));
 }
 
 /* The reference server removes a device by re-sending its announce with state 0. */
-static void vh_notify_device_removed(USBVirtualHereConn* conn)
+static void vh_notify_device_removed(USBVirtualHereConn* conn, bool unbind)
 {
     USBVirtualHereState*        s      = conn->s;
     const USBUplinkDescriptors* desc   = usb_uplink_descriptors_cached(&s->usb);
     VHRemovalNotice*            notice = g_new0(VHRemovalNotice, 1);
 
-    notice->conn = conn;
-    notice->msg  = desc != NULL ? vh_build_short_info(s, conn, desc, VIRTUALHERE_SERVER_DEVICE_ID) :
-                                  vh_msg_new(sizeof(VHDeviceInfo), VIRTUALHERE_MSG_DEVICE_INFO);
+    notice->conn   = conn;
+    notice->unbind = unbind;
+    notice->msg    = desc != NULL ? vh_build_short_info(s, conn, desc, VIRTUALHERE_SERVER_DEVICE_ID) :
+                                    vh_msg_new(sizeof(VHDeviceInfo), VIRTUALHERE_MSG_DEVICE_INFO);
 
     notice->msg->device_id = cpu_to_le16(VIRTUALHERE_SERVER_DEVICE_ID);
     notice->msg->state     = VIRTUALHERE_DEVICE_STATE_GONE;
@@ -894,9 +932,11 @@ static void vh_unplug_timeout(void* opaque)
     VIRTUALHERE_DPRINTF("%s: device stayed away, reporting it gone\n", __func__);
 
     if (conn != NULL && !conn->closed) {
+        bool bound = conn->using_device;
+
         conn->using_device = false;
         conn->use_pending  = false;
-        vh_notify_device_removed(conn);
+        vh_notify_device_removed(conn, bound);
     }
 
     usb_uplink_invalidate(&s->usb);
@@ -1002,7 +1042,12 @@ static void usb_virtualhere_teardown(USBVirtualHereState* s)
         s->unplug_timer = NULL;
     }
 
-    if (s->active_conn != NULL) { vh_conn_close(s->active_conn); }
+    if (s->active_conn != NULL) {
+        USBVirtualHereConn* conn = s->active_conn;
+
+        if (conn->using_device) { vh_notify_device_removed(conn, true); }
+        vh_conn_close(conn);
+    }
 
     mdns_service_unregister(s->mdns);
     s->mdns = NULL;
