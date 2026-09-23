@@ -364,6 +364,7 @@ typedef struct
     uint32_t      nvram_size;
     gchar*        ticket_data;
     gsize         ticket_length;
+    uint64_t      boot_nonce_generator;
     bool          non_cold_boot;
     bool          had_autoboot;
     AppleBootMode boot_mode;
@@ -415,6 +416,10 @@ vaddr apple_boot_load_macho(MachoHeader64* header, AddressSpace* as, AppleDTNode
 void apple_boot_load_raw_file(const char* filename, AddressSpace* as, hwaddr file_pa, uint64_t* size);
 
 AppleDTNode* apple_boot_load_dt_file(const char* filename);
+
+struct AppleNvram;
+
+void apple_boot_setup_boot_nonce(struct AppleNvram* nvram, AppleBootInfo* info);
 
 void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot);
 

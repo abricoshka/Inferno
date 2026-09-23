@@ -375,6 +375,8 @@ static void s8000_memory_setup(MachineState* machine)
         cmdline = g_strconcat("-restore rd=md0 nand-enable-reformat=1 ", machine->kernel_cmdline, NULL);
     }
 
+    apple_boot_setup_boot_nonce(nvram, info);
+
     apple_nvram_save(nvram);
 
     info->nvram_size = nvram->len;

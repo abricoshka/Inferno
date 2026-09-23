@@ -531,6 +531,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         apple_dt_set_prop_u32(chosen, "security-mode-change-enable", val);
     }
 
+    apple_boot_setup_boot_nonce(nvram, info);
+
     apple_nvram_save(nvram);
 
     info->nvram_size = nvram->len;

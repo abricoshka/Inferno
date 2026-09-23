@@ -23,6 +23,7 @@
 #include "hw/arm/boot.h"
 #include "hw/arm/dt.h"
 #include "hw/arm/mem.h"
+#include "hw/nvram/apple_nvram.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
@@ -489,14 +490,39 @@ static void apple_boot_init_mem_ranges(AppleDTNode* root)
     apple_dt_set_prop(child, "DeviceTree", 16, NULL);
 }
 
+static QCryptoHashAlgo apple_boot_get_crypto_hash_alg(AppleDTNode* chosen)
+{
+    const char* crypto_hash_method = apple_dt_get_prop_str(chosen, "crypto-hash-method", &error_fatal);
+
+    if (crypto_hash_method == NULL || strcmp(crypto_hash_method, "sha1") == 0) { return QCRYPTO_HASH_ALGO_SHA1; }
+    if (strcmp(crypto_hash_method, "sha2-384") == 0) { return QCRYPTO_HASH_ALGO_SHA384; }
+
+    assert_not_reached();
+}
+
+void apple_boot_setup_boot_nonce(AppleNvram* nvram, AppleBootInfo* info)
+{
+    const char* str = env_get(nvram, "com.apple.System.boot-nonce");
+
+    if (str == NULL || qemu_strtou64(str, NULL, 16, &info->boot_nonce_generator) != 0) {
+        g_autofree char* new_str = NULL;
+
+        qemu_guest_getrandom_nofail(&info->boot_nonce_generator, sizeof(info->boot_nonce_generator));
+        new_str = g_strdup_printf("0x%016" PRIx64, info->boot_nonce_generator);
+        env_set(nvram, "com.apple.System.boot-nonce", new_str, 0);
+    }
+}
+
 void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot)
 {
-    AppleDTNode* child;
-    AppleDTProp* prop;
-    char*        boot_nonce_data;
-    size_t       boot_nonce_len;
-    uint8_t*     hash     = NULL;
-    size_t       hash_len = 0;
+    AppleDTNode*    child;
+    AppleDTProp*    prop;
+    char*           boot_nonce_data;
+    size_t          boot_nonce_len;
+    QCryptoHashAlgo nonce_alg;
+    size_t          nonce_len;
+    uint8_t*        hash     = NULL;
+    size_t          hash_len = 0;
 
     assert_cmphex(info->nvram_size, <=, XNU_MAX_NVRAM_SIZE);
 
@@ -513,7 +539,11 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
     assert_nonnull(prop);
     boot_nonce_data = prop->data;
     boot_nonce_len  = prop->len;
-    qemu_guest_getrandom_nofail(boot_nonce_data, boot_nonce_len);
+    assert_cmpuint(boot_nonce_len, ==, sizeof(info->boot_nonce_generator));
+    stq_le_p(boot_nonce_data, info->boot_nonce_generator);
+
+    nonce_alg = apple_boot_get_crypto_hash_alg(child);
+    nonce_len = nonce_alg == QCRYPTO_HASH_ALGO_SHA1 ? 20 : 32;
 
     apple_dt_set_prop_u64(child, "dram-base", info->dram_base);
     apple_dt_set_prop_u64(child, "dram-size", info->dram_size);
@@ -549,15 +579,15 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
     child = apple_dt_get_node(root, "defaults");
     assert_nonnull(child);
 
+    apple_dt_del_prop_named(child, "entangle-nonce");
+
     // Enable FastSim for iOS 26
     apple_dt_set_prop_u32(child, "insecure_hpr", 1);
 
     child = apple_dt_get_node(root, "chosen/manifest-properties");
     assert_nonnull(child);
-    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_SHA256, boot_nonce_data, boot_nonce_len, &hash, &hash_len, &error_fatal)
-        >= 0)
-    {
-        apple_dt_set_prop(child, "BNCH", hash_len, hash);
+    if (qcrypto_hash_bytes(nonce_alg, boot_nonce_data, boot_nonce_len, &hash, &hash_len, &error_fatal) >= 0) {
+        apple_dt_set_prop(child, "BNCH", nonce_len, hash);
         g_free(hash);
         hash     = NULL;
         hash_len = 0;
@@ -606,7 +636,6 @@ void apple_boot_finalise_dt(AppleDTNode* root, AddressSpace* as, AppleBootInfo* 
     uint8_t*        hash     = NULL;
     size_t          hash_len = 0;
     AppleDTNode*    child;
-    const char*     crypto_hash_method;
     AppleDTProp*    prop;
 
     set_memory_range(root, "DeviceTree", info->device_tree_addr, info->device_tree_size);
@@ -619,14 +648,7 @@ void apple_boot_finalise_dt(AppleDTNode* root, AddressSpace* as, AppleBootInfo* 
         child = apple_dt_get_node(root, "chosen");
         assert_nonnull(child);
 
-        crypto_hash_method = apple_dt_get_prop_str_or(child, "crypto-hash-method", "sha1", &error_fatal);
-        if (strcmp(crypto_hash_method, "sha2-384") == 0) { alg = QCRYPTO_HASH_ALGO_SHA384; }
-        else if (strcmp(crypto_hash_method, "sha1") == 0) {
-            alg = QCRYPTO_HASH_ALGO_SHA1;
-        }
-        else {
-            assert_not_reached();
-        }
+        alg = apple_boot_get_crypto_hash_alg(child);
 
         prop = apple_dt_get_prop(child, "boot-manifest-hash");
         assert_nonnull(prop);
