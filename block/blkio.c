@@ -19,7 +19,6 @@
 #include "qobject/qdict.h"
 #include "qemu/module.h"
 #include "system/block-backend.h"
-#include "system/memory.h" /* for ram_block_discard_disable() */
 
 #include "block/block-io.h"
 
@@ -766,24 +765,10 @@ static int blkio_open(BlockDriverState* bs, QDict* options, int flags, Error** e
         s->may_pin_mem_regions = s->needs_mem_regions;
     }
 
-    /*
-     * Notify if libblkio drivers pin memory and prevent features like
-     * virtio-mem from working.
-     */
-    if (s->may_pin_mem_regions) {
-        ret = ram_block_discard_disable(true);
-        if (ret < 0) {
-            error_setg_errno(errp, -ret, "ram_block_discard_disable() failed");
-            blkio_destroy(&s->blkio);
-            return ret;
-        }
-    }
-
     ret = blkio_start(s->blkio);
     if (ret < 0) {
         error_setg_errno(errp, -ret, "blkio_start failed: %s", blkio_get_error_msg());
         blkio_destroy(&s->blkio);
-        if (s->may_pin_mem_regions) { ram_block_discard_disable(false); }
         return ret;
     }
 
@@ -814,8 +799,6 @@ static void blkio_close(BlockDriverState* bs)
     qemu_mutex_destroy(&s->blkio_lock);
     blkio_detach_aio_context(bs);
     blkio_destroy(&s->blkio);
-
-    if (s->may_pin_mem_regions) { ram_block_discard_disable(false); }
 }
 
 static int64_t coroutine_fn blkio_co_getlength(BlockDriverState* bs)
@@ -959,10 +942,6 @@ static void blkio_refresh_limits(BlockDriverState* bs, Error** errp)
  * - truncate
  */
 
-/*
- * Do not include .format_name and .protocol_name because module_block.py
- * does not parse macros in the source code.
- */
 #define BLKIO_DRIVER_COMMON                                                                                          \
     .instance_size = sizeof(BDRVBlkioState), .bdrv_open = blkio_open, .bdrv_close = blkio_close,                     \
     .bdrv_co_getlength = blkio_co_getlength, .bdrv_co_truncate = blkio_truncate,                                     \

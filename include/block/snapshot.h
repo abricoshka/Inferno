@@ -72,11 +72,6 @@ int bdrv_snapshot_load_tmp_by_id_or_name(BlockDriverState* bs, const char* id_or
  * Group operations. All block drivers are involved.
  */
 
-bool               bdrv_all_can_snapshot(bool has_devices, strList* devices, Error** errp);
-int GRAPH_UNLOCKED bdrv_all_delete_snapshot(const char* name, bool has_devices, strList* devices, Error** errp);
-int                bdrv_all_goto_snapshot(const char* name, bool has_devices, strList* devices, Error** errp);
-int                bdrv_all_has_snapshot(const char* name, bool has_devices, strList* devices, Error** errp);
-int                bdrv_all_create_snapshot(QEMUSnapshotInfo* sn, BlockDriverState* vm_state_bs, uint64_t vm_state_size,
-                                            bool has_devices, strList* devices, Error** errp);
+int bdrv_all_has_snapshot(const char* name, bool has_devices, strList* devices, Error** errp);
 
 BlockDriverState* bdrv_all_find_vmstate_bs(const char* vmstate_bs, bool has_devices, strList* devices, Error** errp);

@@ -100,7 +100,7 @@ static DeviceClass* qdev_get_device_class(const char** driver, Error** errp)
     DeviceClass* dc;
     const char*  original_name = *driver;
 
-    oc = module_object_class_by_name(*driver);
+    oc = object_class_by_name(*driver);
     if (!object_class_dynamic_cast(oc, TYPE_DEVICE)) {
         if (*driver != original_name) {
             error_setg(errp,

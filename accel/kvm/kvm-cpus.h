@@ -14,7 +14,6 @@ int  kvm_cpu_exec(CPUState* cpu);
 void kvm_destroy_vcpu(CPUState* cpu);
 void kvm_cpu_synchronize_post_reset(CPUState* cpu);
 void kvm_cpu_synchronize_post_init(CPUState* cpu);
-void kvm_cpu_synchronize_pre_loadvm(CPUState* cpu);
 bool kvm_supports_guest_debug(void);
 int  kvm_insert_breakpoint(CPUState* cpu, int type, vaddr addr, vaddr len);
 int  kvm_remove_breakpoint(CPUState* cpu, int type, vaddr addr, vaddr len);

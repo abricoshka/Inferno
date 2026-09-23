@@ -1033,27 +1033,6 @@
       'discard-bytes-ok': 'uint64' } }
 
 ##
-# @BlockStatsSpecificNvme:
-#
-# NVMe driver statistics
-#
-# @completion-errors: The number of completion errors.
-#
-# @aligned-accesses: The number of aligned accesses performed by the
-#     driver.
-#
-# @unaligned-accesses: The number of unaligned accesses performed by
-#     the driver.
-#
-# Since: 5.2
-##
-{ 'struct': 'BlockStatsSpecificNvme',
-  'data': {
-      'completion-errors': 'uint64',
-      'aligned-accesses': 'uint64',
-      'unaligned-accesses': 'uint64' } }
-
-##
 # @BlockStatsSpecific:
 #
 # Block driver specific statistics
@@ -1068,8 +1047,7 @@
   'data': {
       'file': 'BlockStatsSpecificFile',
       'host_device': { 'type': 'BlockStatsSpecificFile',
-                       'if': 'HAVE_HOST_BLOCK_DEVICE' },
-      'nvme': 'BlockStatsSpecificNvme' } }
+                       'if': 'HAVE_HOST_BLOCK_DEVICE' } } }
 
 ##
 # @BlockStats:
@@ -2919,8 +2897,6 @@
 #
 # Drivers that are supported in block device operations.
 #
-# @nvme: Since 2.12
-#
 # @copy-on-read: Since 3.0
 #
 # @blklogwrites: Since 3.0
@@ -2947,7 +2923,7 @@
             {'name': 'host_device', 'if': 'HAVE_HOST_BLOCK_DEVICE' },
             'http', 'https',
             { 'name': 'io_uring', 'if': 'CONFIG_BLKIO' },
-            'luks', 'nfs', 'null-aio', 'null-co', 'nvme',
+            'luks', 'nfs', 'null-aio', 'null-co',
             { 'name': 'nvme-io_uring', 'if': 'CONFIG_BLKIO' },
             'preallocate', 'qcow2', 'quorum',
             'raw', 'rbd',
@@ -3032,24 +3008,6 @@
 ##
 { 'struct': 'BlockdevOptionsNull',
   'data': { '*size': 'int', '*latency-ns': 'uint64', '*read-zeroes': 'bool' } }
-
-##
-# @BlockdevOptionsNVMe:
-#
-# Driver specific block device options for the NVMe backend.
-#
-# @device: PCI controller address of the NVMe device in format
-#     hhhh:bb:ss.f (host:bus:slot.function)
-#
-# @namespace: namespace number of the device, starting from 1.
-#
-# Note that the PCI @device must have been unbound from any host
-# kernel driver before instructing QEMU to add the blockdev.
-#
-# Since: 2.12
-##
-{ 'struct': 'BlockdevOptionsNVMe',
-  'data': { 'device': 'str', 'namespace': 'int' } }
 
 ##
 # @BlockdevOptionsGenericFormat:
@@ -4224,7 +4182,6 @@
       'nfs':        'BlockdevOptionsNfs',
       'null-aio':   'BlockdevOptionsNull',
       'null-co':    'BlockdevOptionsNull',
-      'nvme':       'BlockdevOptionsNVMe',
       'nvme-io_uring': { 'type': 'BlockdevOptionsNvmeIoUring',
                          'if': 'CONFIG_BLKIO' },
       'preallocate':'BlockdevOptionsPreallocate',

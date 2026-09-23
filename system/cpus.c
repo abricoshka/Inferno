@@ -134,13 +134,6 @@ void cpu_synchronize_all_post_init(void)
     CPU_FOREACH (cpu) { cpu_synchronize_post_init(cpu); }
 }
 
-void cpu_synchronize_all_pre_loadvm(void)
-{
-    CPUState* cpu;
-
-    CPU_FOREACH (cpu) { cpu_synchronize_pre_loadvm(cpu); }
-}
-
 void cpu_synchronize_state(CPUState* cpu)
 {
     if (cpus_accel->synchronize_state) { cpus_accel->synchronize_state(cpu); }
@@ -154,11 +147,6 @@ void cpu_synchronize_post_reset(CPUState* cpu)
 void cpu_synchronize_post_init(CPUState* cpu)
 {
     if (cpus_accel->synchronize_post_init) { cpus_accel->synchronize_post_init(cpu); }
-}
-
-void cpu_synchronize_pre_loadvm(CPUState* cpu)
-{
-    if (cpus_accel->synchronize_pre_loadvm) { cpus_accel->synchronize_pre_loadvm(cpu); }
 }
 
 bool cpus_are_resettable(void)

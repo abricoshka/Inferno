@@ -2132,10 +2132,6 @@ static int kvm_init(AccelState* as, MachineState* ms)
     memory_listener_register(&kvm_io_listener, &address_space_io);
 
     s->sync_mmu = !!kvm_vm_check_extension(kvm_state, KVM_CAP_SYNC_MMU);
-    if (!s->sync_mmu) {
-        ret = ram_block_discard_disable(true);
-        assert(!ret);
-    }
 
     if (s->kvm_dirty_ring_size) { kvm_dirty_ring_reaper_init(s); }
 
@@ -2293,11 +2289,6 @@ void kvm_cpu_synchronize_post_init(CPUState* cpu)
         run_on_cpu(cpu, do_kvm_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
     }
 }
-
-static void do_kvm_cpu_synchronize_pre_loadvm(CPUState* cpu, run_on_cpu_data arg) { cpu->vcpu_dirty = true; }
-
-void kvm_cpu_synchronize_pre_loadvm(CPUState* cpu)
-{ run_on_cpu(cpu, do_kvm_cpu_synchronize_pre_loadvm, RUN_ON_CPU_NULL); }
 
 #ifdef KVM_HAVE_MCE_INJECTION
 static __thread void* pending_sigbus_addr;

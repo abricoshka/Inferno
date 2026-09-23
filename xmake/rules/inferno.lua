@@ -33,7 +33,6 @@ rule("inferno.genh")
 		target:set("configvar", "CONFIG_QEMU_CONFDIR", path.join(sysconfdir, "qemu"))
 		target:set("configvar", "CONFIG_QEMU_DATADIR", path.join(prefix, "share", "qemu"))
 		target:set("configvar", "CONFIG_QEMU_ICONDIR", path.join(prefix, "share", "icons"))
-		target:set("configvar", "CONFIG_QEMU_LOCALEDIR", path.join(prefix, "share", "locale"))
 		target:set("configvar", "CONFIG_QEMU_HELPERDIR", path.join(prefix, "libexec"))
 		target:set("configvar", "CONFIG_QEMU_LOCALSTATEDIR", localstatedir)
 

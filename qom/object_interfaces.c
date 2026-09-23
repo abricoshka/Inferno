@@ -82,7 +82,7 @@ Object* user_creatable_add_type(const char* type, const char* id, const QDict* q
         return NULL;
     }
 
-    klass = module_object_class_by_name(type);
+    klass = object_class_by_name(type);
     if (!klass) {
         error_setg(errp, "invalid object type: %s", type);
         return NULL;

@@ -231,7 +231,6 @@ static const TypeInfo tcg_accel_type = {
     .class_init    = tcg_accel_class_init,
     OBJECT_TYPE_INSTANCE(TCGState),
 };
-module_obj(TYPE_TCG_ACCEL);
 
 static void register_accel_types(void) { type_register_static(&tcg_accel_type); }
 

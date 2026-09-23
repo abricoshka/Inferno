@@ -209,6 +209,5 @@ static const TypeInfo tcg_accel_ops_type = {
     .class_init = tcg_accel_ops_class_init,
     .abstract   = true,
 };
-module_obj(ACCEL_OPS_NAME("tcg"));
 
 DEFINE_TYPE(tcg_accel_ops_type)

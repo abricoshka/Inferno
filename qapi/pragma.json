@@ -13,7 +13,6 @@
         'device_add',
         'device_del',
         'expire_password',
-        'migrate_cancel',
         'netdev_add',
         'netdev_del',
         'qmp_capabilities',
@@ -26,8 +25,6 @@
     'command-returns-exceptions': [
         'human-monitor-command',
         'qom-get',
-        'query-tpm-models',
-        'query-tpm-types',
         'ringbuf-read' ],
     # Types, commands, and events with undocumented members / arguments:
     'documentation-exceptions': [
@@ -46,21 +43,17 @@
         'DisplayProtocol',
         'DriveBackupWrapper',
         'DummyBlockCoreForceArrays',
-        'DummyForceArrays',
-        'DummyVirtioForceArrays',
         'HotKeyMod',
         'ImageInfoSpecificKind',
         'InputAxis',
         'InputButton',
         'KeyValueKind',
-        'MemoryDeviceInfoKind',
         'NetClientDriver',
         'ObjectType',
         'QKeyCode',
         'RbdAuthMode',
         'RbdImageEncryptionFormat',
         'String',
-        'StringWrapper',
         'SysEmuTarget',
         'VncPrimaryAuth',
         'VncVencryptSubAuth',
@@ -77,11 +70,6 @@
         'BlockInfo',                # query-block
         'BlockdevAioOptions',       # blockdev-add, -blockdev
         'BlockdevDriver',           # blockdev-add, query-blockstats, ...
-        'ColoCompareProperties',    # object_add, -object
-        'FilterMirrorProperties',   # object_add, -object
-        'FilterRedirectorProperties', # object_add, -object
-        'FilterRewriterProperties', # object_add, -object
-        'InputLinuxProperties',     # object_add, -object
         'NetdevTapOptions',         # netdev_add, query-netdev, -netdev
         'ObjectType',               # object-add, -object
         'PCIELinkSpeed',            # internal only

@@ -104,58 +104,6 @@ qcow2_cache_entry_flush(void *co, int c, int i) "co %p is_l2_cache %d index %d"
 # qcow2-refcount.c
 qcow2_process_discards_failed_region(uint64_t offset, uint64_t bytes, int ret) "offset 0x%" PRIx64 " bytes 0x%" PRIx64 " ret %d"
 
-# qed-l2-cache.c
-qed_alloc_l2_cache_entry(void *l2_cache, void *entry) "l2_cache %p entry %p"
-qed_unref_l2_cache_entry(void *entry, int ref) "entry %p ref %d"
-qed_find_l2_cache_entry(void *l2_cache, void *entry, uint64_t offset, int ref) "l2_cache %p entry %p offset %"PRIu64" ref %d"
-
-# qed-table.c
-qed_read_table(void *s, uint64_t offset, void *table) "s %p offset %"PRIu64" table %p"
-qed_read_table_cb(void *s, void *table, int ret) "s %p table %p ret %d"
-qed_write_table(void *s, uint64_t offset, void *table, unsigned int index, unsigned int n) "s %p offset %"PRIu64" table %p index %u n %u"
-qed_write_table_cb(void *s, void *table, int flush, int ret) "s %p table %p flush %d ret %d"
-
-# qed.c
-qed_need_check_timer_cb(void *s) "s %p"
-qed_start_need_check_timer(void *s) "s %p"
-qed_cancel_need_check_timer(void *s) "s %p"
-qed_aio_complete(void *s, void *acb, int ret) "s %p acb %p ret %d"
-qed_aio_setup(void *s, void *acb, int64_t sector_num, int nb_sectors, void *opaque, int flags) "s %p acb %p sector_num %"PRId64" nb_sectors %d opaque %p flags 0x%x"
-qed_aio_next_io(void *s, void *acb, int ret, uint64_t cur_pos) "s %p acb %p ret %d cur_pos %"PRIu64
-qed_aio_read_data(void *s, void *acb, int ret, uint64_t offset, size_t len) "s %p acb %p ret %d offset %"PRIu64" len %zu"
-qed_aio_write_data(void *s, void *acb, int ret, uint64_t offset, size_t len) "s %p acb %p ret %d offset %"PRIu64" len %zu"
-qed_aio_write_prefill(void *s, void *acb, uint64_t start, size_t len, uint64_t offset) "s %p acb %p start %"PRIu64" len %zu offset %"PRIu64
-qed_aio_write_postfill(void *s, void *acb, uint64_t start, size_t len, uint64_t offset) "s %p acb %p start %"PRIu64" len %zu offset %"PRIu64
-qed_aio_write_main(void *s, void *acb, int ret, uint64_t offset, size_t len) "s %p acb %p ret %d offset %"PRIu64" len %zu"
-
-# nvme.c
-nvme_controller_capability_raw(uint64_t value) "0x%08"PRIx64
-nvme_controller_capability(const char *desc, uint64_t value) "%s: %"PRIu64
-nvme_controller_spec_version(uint32_t mjr, uint32_t mnr, uint32_t ter) "Specification supported: %u.%u.%u"
-nvme_kick(void *s, unsigned q_index) "s %p q #%u"
-nvme_dma_flush_queue_wait(void *s) "s %p"
-nvme_error(int cmd_specific, int sq_head, int sqid, int cid, int status) "cmd_specific %d sq_head %d sqid %d cid %d status 0x%x"
-nvme_process_completion(void *s, unsigned q_index, int inflight) "s %p q #%u inflight %d"
-nvme_complete_command(void *s, unsigned q_index, int cid) "s %p q #%u cid %d"
-nvme_submit_command(void *s, unsigned q_index, int cid) "s %p q #%u cid %d"
-nvme_submit_command_raw(int c0, int c1, int c2, int c3, int c4, int c5, int c6, int c7) "%02x %02x %02x %02x %02x %02x %02x %02x"
-nvme_handle_event(void *s) "s %p"
-nvme_poll_queue(void *s, unsigned q_index) "s %p q #%u"
-nvme_prw_aligned(void *s, int is_write, uint64_t offset, uint64_t bytes, int flags, int niov) "s %p is_write %d offset 0x%"PRIx64" bytes %"PRId64" flags %d niov %d"
-nvme_write_zeroes(void *s, uint64_t offset, uint64_t bytes, int flags) "s %p offset 0x%"PRIx64" bytes %"PRId64" flags %d"
-nvme_qiov_unaligned(const void *qiov, int n, void *base, size_t size, int align) "qiov %p n %d base %p size 0x%zx align 0x%x"
-nvme_prw_buffered(void *s, uint64_t offset, uint64_t bytes, int niov, int is_write) "s %p offset 0x%"PRIx64" bytes %"PRId64" niov %d is_write %d"
-nvme_rw_done(void *s, int is_write, uint64_t offset, uint64_t bytes, int ret) "s %p is_write %d offset 0x%"PRIx64" bytes %"PRId64" ret %d"
-nvme_dsm(void *s, int64_t offset, int64_t bytes) "s %p offset 0x%"PRIx64" bytes %"PRId64""
-nvme_dsm_done(void *s, int64_t offset, int64_t bytes, int ret) "s %p offset 0x%"PRIx64" bytes %"PRId64" ret %d"
-nvme_dma_map_flush(void *s) "s %p"
-nvme_free_req_queue_wait(void *s, unsigned q_index) "s %p q #%u"
-nvme_create_queue_pair(unsigned q_index, void *q, size_t size, void *aio_context, int fd) "index %u q %p size %zu aioctx %p fd %d"
-nvme_free_queue_pair(unsigned q_index, void *q, void *cq, void *sq) "index %u q %p cq %p sq %p"
-nvme_cmd_map_qiov(void *s, void *cmd, void *req, void *qiov, int entries) "s %p cmd %p req %p qiov %p entries %d"
-nvme_cmd_map_qiov_pages(void *s, int i, uint64_t page) "s %p page[%d] 0x%"PRIx64
-nvme_cmd_map_qiov_iov(void *s, int i, void *page, int pages) "s %p iov[%d] %p pages %d"
-
 # ssh.c
 ssh_restart_coroutine(void *co) "co=%p"
 ssh_flush(void) "fsync"

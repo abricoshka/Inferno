@@ -81,7 +81,7 @@ void accel_init_ops_interfaces(AccelClass* ac)
     assert(ac_name != NULL);
 
     ops_name = g_strdup_printf("%s" ACCEL_OPS_SUFFIX, ac_name);
-    oc       = module_object_class_by_name(ops_name);
+    oc       = object_class_by_name(ops_name);
     if (!oc) {
         error_report("fatal: could not load module for type '%s'", ops_name);
         exit(1);

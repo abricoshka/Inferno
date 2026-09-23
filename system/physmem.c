@@ -1376,11 +1376,6 @@ bool qemu_ram_is_shared(const RAMBlock* rb) { return rb->flags & RAM_SHARED; }
 
 bool qemu_ram_is_noreserve(const RAMBlock* rb) { return rb->flags & RAM_NORESERVE; }
 
-/* Note: Only set at the start of postcopy */
-bool qemu_ram_is_uf_zeroable(const RAMBlock* rb) { return rb->flags & RAM_UF_ZEROPAGE; }
-
-void qemu_ram_set_uf_zeroable(RAMBlock* rb) { rb->flags |= RAM_UF_ZEROPAGE; }
-
 bool qemu_ram_is_named_file(const RAMBlock* rb) { return rb->flags & RAM_NAMED_FILE; }
 
 int qemu_ram_get_fd(const RAMBlock* rb) { return rb->fd; }
@@ -1433,17 +1428,6 @@ static char* cpr_name(const MemoryRegion* mr)
 }
 
 size_t qemu_ram_pagesize(const RAMBlock* rb) { return rb->page_size; }
-
-/* Returns the largest size of page in use */
-size_t qemu_ram_pagesize_largest(void)
-{
-    RAMBlock* block;
-    size_t    largest = 0;
-
-    RAMBLOCK_FOREACH (block) { largest = MAX(largest, qemu_ram_pagesize(block)); }
-
-    return largest;
-}
 
 static int memory_try_enable_merging(void* addr, size_t len)
 {
@@ -1809,7 +1793,6 @@ static void reclaim_ramblock(RAMBlock* block)
     if (block->guest_memfd >= 0) {
         ram_block_attributes_destroy(block->attributes);
         close(block->guest_memfd);
-        ram_block_coordinated_discard_require(false);
     }
 
     g_free(block);
@@ -1979,24 +1962,6 @@ found:
     *offset = (host - block->host);
     if (round_offset) { *offset &= TARGET_PAGE_MASK; }
     return block;
-}
-
-/*
- * Finds the named RAMBlock
- *
- * name: The name of RAMBlock to find
- *
- * Returns: RAMBlock (or NULL if not found)
- */
-RAMBlock* qemu_ram_block_by_name(const char* name)
-{
-    RAMBlock* block;
-
-    RAMBLOCK_FOREACH (block) {
-        if (!strcmp(name, block->idstr)) { return block; }
-    }
-
-    return NULL;
 }
 
 /*
@@ -2985,19 +2950,6 @@ bool cpu_physical_memory_is_io(hwaddr phys_addr)
     return !(memory_region_is_ram(mr) || memory_region_is_romd(mr));
 }
 
-int qemu_ram_foreach_block(RAMBlockIterFunc func, void* opaque)
-{
-    RAMBlock* block;
-    int       ret = 0;
-
-    RCU_READ_LOCK_GUARD();
-    RAMBLOCK_FOREACH (block) {
-        ret = func(block, opaque);
-        if (ret) { break; }
-    }
-    return ret;
-}
-
 /*
  * Unmap pages of memory from start to start+length such that
  * they a) read as 0, b) Trigger whatever fault mechanism
@@ -3202,96 +3154,3 @@ void mtree_print_dispatch(AddressSpaceDispatch* d, MemoryRegion* root)
         if (jprev != ARRAY_SIZE(*n)) { mtree_print_phys_entries(jprev, j, prev.skip, prev.ptr); }
     }
 }
-
-/* Require any discards to work. */
-static unsigned int ram_block_discard_required_cnt;
-/* Require only coordinated discards to work. */
-static unsigned int ram_block_coordinated_discard_required_cnt;
-/* Disable any discards. */
-static unsigned int ram_block_discard_disabled_cnt;
-/* Disable only uncoordinated discards. */
-static unsigned int ram_block_uncoordinated_discard_disabled_cnt;
-static QemuMutex    ram_block_discard_disable_mutex;
-
-static void ram_block_discard_disable_mutex_lock(void)
-{
-    static gsize initialized;
-
-    if (g_once_init_enter(&initialized)) {
-        qemu_mutex_init(&ram_block_discard_disable_mutex);
-        g_once_init_leave(&initialized, 1);
-    }
-    qemu_mutex_lock(&ram_block_discard_disable_mutex);
-}
-
-static void ram_block_discard_disable_mutex_unlock(void) { qemu_mutex_unlock(&ram_block_discard_disable_mutex); }
-
-int ram_block_discard_disable(bool state)
-{
-    int ret = 0;
-
-    ram_block_discard_disable_mutex_lock();
-    if (!state) { ram_block_discard_disabled_cnt--; }
-    else if (ram_block_discard_required_cnt || ram_block_coordinated_discard_required_cnt) {
-        ret = -EBUSY;
-    }
-    else {
-        ram_block_discard_disabled_cnt++;
-    }
-    ram_block_discard_disable_mutex_unlock();
-    return ret;
-}
-
-int ram_block_uncoordinated_discard_disable(bool state)
-{
-    int ret = 0;
-
-    ram_block_discard_disable_mutex_lock();
-    if (!state) { ram_block_uncoordinated_discard_disabled_cnt--; }
-    else if (ram_block_discard_required_cnt) {
-        ret = -EBUSY;
-    }
-    else {
-        ram_block_uncoordinated_discard_disabled_cnt++;
-    }
-    ram_block_discard_disable_mutex_unlock();
-    return ret;
-}
-
-int ram_block_discard_require(bool state)
-{
-    int ret = 0;
-
-    ram_block_discard_disable_mutex_lock();
-    if (!state) { ram_block_discard_required_cnt--; }
-    else if (ram_block_discard_disabled_cnt || ram_block_uncoordinated_discard_disabled_cnt) {
-        ret = -EBUSY;
-    }
-    else {
-        ram_block_discard_required_cnt++;
-    }
-    ram_block_discard_disable_mutex_unlock();
-    return ret;
-}
-
-int ram_block_coordinated_discard_require(bool state)
-{
-    int ret = 0;
-
-    ram_block_discard_disable_mutex_lock();
-    if (!state) { ram_block_coordinated_discard_required_cnt--; }
-    else if (ram_block_discard_disabled_cnt) {
-        ret = -EBUSY;
-    }
-    else {
-        ram_block_coordinated_discard_required_cnt++;
-    }
-    ram_block_discard_disable_mutex_unlock();
-    return ret;
-}
-
-bool ram_block_discard_is_disabled(void)
-{ return qatomic_read(&ram_block_discard_disabled_cnt) || qatomic_read(&ram_block_uncoordinated_discard_disabled_cnt); }
-
-bool ram_block_discard_is_required(void)
-{ return qatomic_read(&ram_block_discard_required_cnt) || qatomic_read(&ram_block_coordinated_discard_required_cnt); }

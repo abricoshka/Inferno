@@ -54,14 +54,12 @@ struct AccelOpsClass
     void (*synchronize_post_init)(CPUState* cpu);
     /**
      * synchronize_state:
-     * synchronize_pre_loadvm:
      * @cpu: The vCPU to synchronize.
      *
      * Request to synchronize QEMU vCPU registers from the hardware accelerator
      * (the hardware accelerator is the reference).
      */
     void (*synchronize_state)(CPUState* cpu);
-    void (*synchronize_pre_loadvm)(CPUState* cpu);
 
     /* handle_interrupt is mandatory. */
     void (*handle_interrupt)(CPUState* cpu, int mask);

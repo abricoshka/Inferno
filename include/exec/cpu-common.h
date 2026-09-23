@@ -61,7 +61,6 @@ void qemu_ram_remap(ram_addr_t addr);
 /* This should not be used by devices.  */
 ram_addr_t qemu_ram_addr_from_host(void* ptr);
 ram_addr_t qemu_ram_addr_from_host_nofail(void* ptr);
-RAMBlock*  qemu_ram_block_by_name(const char* name);
 
 /*
  * Translates a host ptr back to a RAMBlock and an offset in that RAMBlock.
@@ -89,13 +88,10 @@ ram_addr_t  qemu_ram_get_used_length(const RAMBlock* rb);
 ram_addr_t  qemu_ram_get_max_length(const RAMBlock* rb);
 bool        qemu_ram_is_shared(const RAMBlock* rb);
 bool        qemu_ram_is_noreserve(const RAMBlock* rb);
-bool        qemu_ram_is_uf_zeroable(const RAMBlock* rb);
-void        qemu_ram_set_uf_zeroable(RAMBlock* rb);
 bool        qemu_ram_is_named_file(const RAMBlock* rb);
 int         qemu_ram_get_fd(const RAMBlock* rb);
 
 size_t qemu_ram_pagesize(const RAMBlock* block);
-size_t qemu_ram_pagesize_largest(void);
 
 /**
  * cpu_address_space_init:
@@ -145,9 +141,6 @@ void qemu_flush_coalesced_mmio_buffer(void);
 
 void cpu_flush_icache_range(hwaddr start, hwaddr len);
 
-typedef int(RAMBlockIterFunc)(RAMBlock* rb, void* opaque);
-
-int qemu_ram_foreach_block(RAMBlockIterFunc func, void* opaque);
 int ram_block_discard_range(RAMBlock* rb, uint64_t start, size_t length);
 int ram_block_discard_guest_memfd_range(RAMBlock* rb, uint64_t start, size_t length);
 

@@ -27,9 +27,6 @@
  * Copyright (C) 2009-2010 Daniel P. Berrange <dan@berrange.com>
  */
 
-#define GETTEXT_PACKAGE "qemu"
-#define LOCALEDIR       "po"
-
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-control.h"
@@ -47,7 +44,6 @@
 #endif
 #include "ui/win32-kbd-hook.h"
 
-#include <glib/gi18n.h>
 #include <locale.h>
 #if defined(CONFIG_VTE)
     #include <vte/vte.h>
@@ -207,9 +203,9 @@ static void gd_update_caption(GtkDisplayState* s)
         prefix = g_strdup_printf("ChefKiss Inferno");
     }
 
-    if (s->ptr_owner != NULL && s->ptr_owner->window == NULL) { grab = _(" - Press Ctrl+Alt+G to release grab"); }
+    if (s->ptr_owner != NULL && s->ptr_owner->window == NULL) { grab = " - Press Ctrl+Alt+G to release grab"; }
 
-    if (is_paused) { status = _(" [Paused]"); }
+    if (is_paused) { status = " [Paused]"; }
     s->external_pause_update = true;
     gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(s->pause_item), is_paused);
     s->external_pause_update = false;
@@ -1761,22 +1757,22 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         machine_menu = gtk_menu_new();
         gtk_menu_set_accel_group(GTK_MENU(machine_menu), s->accel_group);
 
-        s->pause_item = gtk_check_menu_item_new_with_mnemonic(_("_Pause"));
+        s->pause_item = gtk_check_menu_item_new_with_mnemonic("_Pause");
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), s->pause_item);
 
         separator = gtk_separator_menu_item_new();
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), separator);
 
-        s->reset_item = gtk_menu_item_new_with_mnemonic(_("_Reset"));
+        s->reset_item = gtk_menu_item_new_with_mnemonic("_Reset");
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), s->reset_item);
 
-        s->powerdown_item = gtk_menu_item_new_with_mnemonic(_("Power _Down"));
+        s->powerdown_item = gtk_menu_item_new_with_mnemonic("Power _Down");
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), s->powerdown_item);
 
         separator = gtk_separator_menu_item_new();
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), separator);
 
-        s->quit_item = gtk_menu_item_new_with_mnemonic(_("_Quit"));
+        s->quit_item = gtk_menu_item_new_with_mnemonic("_Quit");
         gtk_menu_item_set_accel_path(GTK_MENU_ITEM(s->quit_item), "<QEMU>/Machine/Quit");
         gtk_accel_map_add_entry("<QEMU>/Machine/Quit", GDK_KEY_q, HOTKEY_MODIFIERS);
         gtk_menu_shell_append(GTK_MENU_SHELL(machine_menu), s->quit_item);
@@ -1857,10 +1853,10 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         view_menu = gtk_menu_new();
         gtk_menu_set_accel_group(GTK_MENU(view_menu), s->accel_group);
 
-        s->full_screen_item = gtk_menu_item_new_with_mnemonic(_("_Fullscreen"));
+        s->full_screen_item = gtk_menu_item_new_with_mnemonic("_Fullscreen");
 
 #if defined(CONFIG_VTE)
-        s->copy_item = gtk_menu_item_new_with_mnemonic(_("_Copy"));
+        s->copy_item = gtk_menu_item_new_with_mnemonic("_Copy");
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->copy_item);
 #endif
 
@@ -1873,33 +1869,33 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         separator = gtk_separator_menu_item_new();
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), separator);
 
-        s->zoom_in_item = gtk_menu_item_new_with_mnemonic(_("Zoom _In"));
+        s->zoom_in_item = gtk_menu_item_new_with_mnemonic("Zoom _In");
         gtk_menu_item_set_accel_path(GTK_MENU_ITEM(s->zoom_in_item), "<QEMU>/View/Zoom In");
         gtk_accel_map_add_entry("<QEMU>/View/Zoom In", GDK_KEY_plus, HOTKEY_MODIFIERS);
         gtk_accel_group_connect(s->accel_group, GDK_KEY_equal, HOTKEY_MODIFIERS, 0,
                                 g_cclosure_new_swap(G_CALLBACK(gd_accel_zoom_in), s, NULL));
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->zoom_in_item);
 
-        s->zoom_out_item = gtk_menu_item_new_with_mnemonic(_("Zoom _Out"));
+        s->zoom_out_item = gtk_menu_item_new_with_mnemonic("Zoom _Out");
         gtk_menu_item_set_accel_path(GTK_MENU_ITEM(s->zoom_out_item), "<QEMU>/View/Zoom Out");
         gtk_accel_map_add_entry("<QEMU>/View/Zoom Out", GDK_KEY_minus, HOTKEY_MODIFIERS);
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->zoom_out_item);
 
-        s->zoom_fixed_item = gtk_menu_item_new_with_mnemonic(_("Best _Fit"));
+        s->zoom_fixed_item = gtk_menu_item_new_with_mnemonic("Best _Fit");
         gtk_menu_item_set_accel_path(GTK_MENU_ITEM(s->zoom_fixed_item), "<QEMU>/View/Zoom Fixed");
         gtk_accel_map_add_entry("<QEMU>/View/Zoom Fixed", GDK_KEY_0, HOTKEY_MODIFIERS);
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->zoom_fixed_item);
 
-        s->zoom_fit_item = gtk_check_menu_item_new_with_mnemonic(_("Zoom To _Fit"));
+        s->zoom_fit_item = gtk_check_menu_item_new_with_mnemonic("Zoom To _Fit");
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->zoom_fit_item);
 
         separator = gtk_separator_menu_item_new();
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), separator);
 
-        s->grab_on_hover_item = gtk_check_menu_item_new_with_mnemonic(_("Grab On _Hover"));
+        s->grab_on_hover_item = gtk_check_menu_item_new_with_mnemonic("Grab On _Hover");
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->grab_on_hover_item);
 
-        s->grab_item = gtk_check_menu_item_new_with_mnemonic(_("_Grab Input"));
+        s->grab_item = gtk_check_menu_item_new_with_mnemonic("_Grab Input");
         gtk_menu_item_set_accel_path(GTK_MENU_ITEM(s->grab_item), "<QEMU>/View/Grab Input");
         gtk_accel_map_add_entry("<QEMU>/View/Grab Input", GDK_KEY_g, HOTKEY_MODIFIERS);
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->grab_item);
@@ -1923,13 +1919,13 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         separator = gtk_separator_menu_item_new();
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), separator);
 
-        s->show_tabs_item = gtk_check_menu_item_new_with_mnemonic(_("Show _Tabs"));
+        s->show_tabs_item = gtk_check_menu_item_new_with_mnemonic("Show _Tabs");
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->show_tabs_item);
 
-        s->untabify_item = gtk_menu_item_new_with_mnemonic(_("Detach Tab"));
+        s->untabify_item = gtk_menu_item_new_with_mnemonic("Detach Tab");
         gtk_menu_shell_append(GTK_MENU_SHELL(view_menu), s->untabify_item);
 
-        s->show_menubar_item = gtk_check_menu_item_new_with_mnemonic(_("Show Menubar"));
+        s->show_menubar_item = gtk_check_menu_item_new_with_mnemonic("Show Menubar");
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(s->show_menubar_item),
                                        !opts->u.gtk.has_show_menubar || opts->u.gtk.show_menubar);
         gtk_accel_group_connect(s->accel_group, GDK_KEY_m, HOTKEY_MODIFIERS, 0,
@@ -1949,11 +1945,11 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         s->machine_menu = gd_create_menu_machine(s);
         s->view_menu    = gd_create_menu_view(s, opts);
 
-        s->machine_menu_item = gtk_menu_item_new_with_mnemonic(_("_Machine"));
+        s->machine_menu_item = gtk_menu_item_new_with_mnemonic("_Machine");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(s->machine_menu_item), s->machine_menu);
         gtk_menu_shell_append(GTK_MENU_SHELL(s->menu_bar), s->machine_menu_item);
 
-        s->view_menu_item = gtk_menu_item_new_with_mnemonic(_("_View"));
+        s->view_menu_item = gtk_menu_item_new_with_mnemonic("_View");
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(s->view_menu_item), s->view_menu);
         gtk_menu_shell_append(GTK_MENU_SHELL(s->menu_bar), s->view_menu_item);
 
@@ -1998,17 +1994,11 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
 
         s->free_scale = FALSE;
 
-        /* Mostly LC_MESSAGES only. See early_gtk_display_init() for details. For
-         * LC_CTYPE, we need to make sure that non-ASCII characters are considered
-         * printable, but without changing any of the character classes to make
-         * sure that we don't accidentally break implicit assumptions.  */
-        setlocale(LC_MESSAGES, "");
+        /* See early_gtk_display_init() for details. For LC_CTYPE, we need to
+         * make sure that non-ASCII characters are considered printable, but
+         * without changing any of the character classes to make sure that we
+         * don't accidentally break implicit assumptions.  */
         setlocale(LC_CTYPE, "C.UTF-8");
-        dir = get_relocated_path(CONFIG_QEMU_LOCALEDIR);
-        bindtextdomain("qemu", dir);
-        g_free(dir);
-        bind_textdomain_codeset("qemu", "UTF-8");
-        textdomain("qemu");
 
         window_display = gtk_widget_get_display(s->window);
         if (s->opts->has_show_cursor && s->opts->show_cursor) { s->null_cursor = NULL; /* default pointer */ }
@@ -2078,13 +2068,6 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
          * Since GTK+ calls setlocale() by default -importing the locale
          * settings from the environment- we must prevent it from doing so
          * using gtk_disable_setlocale().
-         *
-         * QEMU's GTK+ UI, however, _does_ have translations for some of
-         * the menu items. As a trade-off between a functionally correct
-         * QEMU and a fully internationalized UI we support importing
-         * LC_MESSAGES from the environment (see the setlocale() call
-         * earlier in this file). This allows us to display translated
-         * messages leaving everything else untouched.
          */
         gtk_disable_setlocale();
         gtkinit = gtk_init_check(NULL, NULL);

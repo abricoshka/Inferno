@@ -100,9 +100,6 @@ static void hvf_cpu_synchronize_post_reset(CPUState* cpu)
 static void hvf_cpu_synchronize_post_init(CPUState* cpu)
 { run_on_cpu(cpu, do_hvf_cpu_synchronize_set_dirty, RUN_ON_CPU_NULL); }
 
-static void hvf_cpu_synchronize_pre_loadvm(CPUState* cpu)
-{ run_on_cpu(cpu, do_hvf_cpu_synchronize_set_dirty, RUN_ON_CPU_NULL); }
-
 static void dummy_signal(int sig) { }
 
 static void do_hvf_get_vcpu_exec_time(CPUState* cpu, run_on_cpu_data arg)
@@ -338,7 +335,6 @@ static void hvf_accel_ops_class_init(ObjectClass* oc, const void* data)
     ops->synchronize_post_reset = hvf_cpu_synchronize_post_reset;
     ops->synchronize_post_init  = hvf_cpu_synchronize_post_init;
     ops->synchronize_state      = hvf_cpu_synchronize_state;
-    ops->synchronize_pre_loadvm = hvf_cpu_synchronize_pre_loadvm;
 
     ops->insert_breakpoint      = hvf_insert_breakpoint;
     ops->remove_breakpoint      = hvf_remove_breakpoint;

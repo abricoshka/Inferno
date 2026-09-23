@@ -283,7 +283,6 @@ struct MachineClass
     const char* const* valid_cpu_types;
     strList*           allowed_dynamic_sysbus_devices;
     bool               ignore_boot_device_suffixes;
-    bool               smbus_no_migration_support;
     SMPCompatProps     smp_props;
     const char*        default_ram_id;
 

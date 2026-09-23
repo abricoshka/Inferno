@@ -31,7 +31,6 @@
 #include "block/fuse.h"
 #include "block/qdict.h"
 #include "qemu/error-report.h"
-#include "block/module_block.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
@@ -5526,24 +5525,6 @@ void bdrv_iterate_format(void (*it)(void* opaque, const char* name), void* opaqu
             if (!found) {
                 formats          = g_renew(const char*, formats, count + 1);
                 formats[count++] = drv->format_name;
-            }
-        }
-    }
-
-    for (i = 0; i < (int)ARRAY_SIZE(block_driver_modules); i++) {
-        const char* format_name = block_driver_modules[i].format_name;
-
-        if (format_name) {
-            bool found = false;
-            int  j     = count;
-
-            if (use_bdrv_whitelist && !bdrv_format_is_whitelisted(format_name, read_only)) { continue; }
-
-            while (formats && j && !found) { found = !strcmp(formats[--j], format_name); }
-
-            if (!found) {
-                formats          = g_renew(const char*, formats, count + 1);
-                formats[count++] = format_name;
             }
         }
     }

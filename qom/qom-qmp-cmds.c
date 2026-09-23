@@ -169,7 +169,7 @@ ObjectPropertyInfoList* qmp_device_list_properties(const char* typename, Error**
     ObjectPropertyIterator  iter;
     ObjectPropertyInfoList* prop_list = NULL;
 
-    klass = module_object_class_by_name(typename);
+    klass = object_class_by_name(typename);
     if (klass == NULL) {
         error_set(errp, ERROR_CLASS_DEVICE_NOT_FOUND, "Device '%s' not found", typename);
         return NULL;
@@ -221,7 +221,7 @@ ObjectPropertyInfoList* qmp_qom_list_properties(const char* typename, Error** er
     ObjectPropertyIterator  iter;
     ObjectPropertyInfoList* prop_list = NULL;
 
-    klass = module_object_class_by_name(typename);
+    klass = object_class_by_name(typename);
     if (klass == NULL) {
         error_set(errp, ERROR_CLASS_DEVICE_NOT_FOUND, "Class '%s' not found", typename);
         return NULL;

@@ -100,8 +100,7 @@
 ##
 # @CompatProperty:
 #
-# Property default values specific to a machine type, for use by
-# scripts/compare-machine-types.
+# Property default values specific to a machine type.
 #
 # @qom-type: name of the QOM type to which the default applies
 #

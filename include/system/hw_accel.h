@@ -17,14 +17,12 @@
 
 /**
  * cpu_synchronize_state:
- * cpu_synchronize_pre_loadvm:
  * @cpu: The vCPU to synchronize.
  *
  * Request to synchronize QEMU vCPU registers from the hardware accelerator
  * (the hardware accelerator is the reference).
  */
 void cpu_synchronize_state(CPUState* cpu);
-void cpu_synchronize_pre_loadvm(CPUState* cpu);
 
 /**
  * cpu_synchronize_post_reset:
@@ -42,9 +40,4 @@ void cpu_synchronize_post_init(CPUState* cpu);
  *
  * Returns: %true if a hardware accelerator is enabled, %false otherwise.
  */
-static inline bool hwaccel_enabled(void)
-{
-    return hvf_enabled()
-        || kvm_enabled()
-        || whpx_enabled();
-}
+static inline bool hwaccel_enabled(void) { return hvf_enabled() || kvm_enabled() || whpx_enabled(); }

@@ -290,35 +290,6 @@ static QemuOptsList qemu_mem_opts = {
                          {/* end of list */}},
 };
 
-static QemuOptsList qemu_fw_cfg_opts = {
-    .name             = "fw_cfg",
-    .implied_opt_name = "name",
-    .head             = QTAILQ_HEAD_INITIALIZER(qemu_fw_cfg_opts.head),
-    .desc             = {{
-                             .name = "name",
-                             .type = QEMU_OPT_STRING,
-                             .help = "Sets the fw_cfg name of the blob to be inserted",
-                         },
-                         {
-                             .name = "file",
-                             .type = QEMU_OPT_STRING,
-                             .help = "Sets the name of the file from which "
-                                     "the fw_cfg blob will be loaded",
-                         },
-                         {
-                             .name = "string",
-                             .type = QEMU_OPT_STRING,
-                             .help = "Sets content of the blob to be inserted from a string",
-                         },
-                         {
-                             .name = "gen_id",
-                             .type = QEMU_OPT_STRING,
-                             .help = "Sets id of the object generating the fw_cfg blob "
-                                     "to be inserted",
-                         },
-                         {/* end of list */}},
-};
-
 static QemuOptsList qemu_action_opts = {
     .name        = "action",
     .merge_lists = true,
@@ -791,10 +762,9 @@ struct device_config
 {
     enum
     {
-        DEV_USB,      /* -usbdevice     */
-        DEV_SERIAL,   /* -serial        */
-        DEV_DEBUGCON, /* -debugcon */
-        DEV_GDB,      /* -gdb, -s */
+        DEV_USB,    /* -usbdevice     */
+        DEV_SERIAL, /* -serial        */
+        DEV_GDB,    /* -gdb, -s */
     } type;
     const char* cmdline;
     Location    loc;
@@ -845,7 +815,7 @@ static void qemu_disable_default_devices(void)
         default_net     = 0;
     }
     else {
-        if (default_net && machine_class->default_nic && !module_object_class_by_name(machine_class->default_nic)) {
+        if (default_net && machine_class->default_nic && !object_class_by_name(machine_class->default_nic)) {
             warn_report("Default NIC '%s' is not available in this binary", machine_class->default_nic);
             default_net = 0;
         }
@@ -874,7 +844,7 @@ static void qemu_create_default_devices(void)
 
     if (is_daemonized()) {
         /* According to documentation and historically, -nographic redirects
-         * serial port, parallel port and monitor to stdio, which does not work
+         * serial port and monitor to stdio, which does not work
          * with -daemonize.  We can redirect these to null instead, but since
          * -nographic is legacy, let's just error out.
          * We disallow -nographic only if all other ports are not redirected
@@ -941,24 +911,6 @@ Chardev* serial_hd(int i)
     assert(i >= 0);
     if (i < num_serial_hds) { return serial_hds[i]; }
     return NULL;
-}
-
-static bool debugcon_parse(const char* devname, Error** errp)
-{
-    QemuOpts* opts;
-
-    if (!qemu_chr_new_mux_mon("debugcon", devname, NULL)) {
-        error_setg(errp, "invalid character backend '%s'", devname);
-        return false;
-    }
-    opts = qemu_opts_create(qemu_find_opts("device"), "debugcon", 1, NULL);
-    if (!opts) {
-        error_setg(errp, "already have a debugcon device");
-        return false;
-    }
-    qemu_opt_set(opts, "driver", "isa-debugcon", &error_abort);
-    qemu_opt_set(opts, "chardev", "debugcon", &error_abort);
-    return true;
 }
 
 static gint machine_class_cmp(gconstpointer a, gconstpointer b, gpointer d)
@@ -1383,7 +1335,6 @@ static void qemu_create_late_backends(void)
     qemu_opts_foreach(qemu_find_opts("mon"), mon_init_func, NULL, &error_fatal);
 
     foreach_device_config_or_exit(DEV_SERIAL, serial_parse);
-    foreach_device_config_or_exit(DEV_DEBUGCON, debugcon_parse);
 }
 
 static void qemu_resolve_machine_memdev(void)
@@ -1714,18 +1665,12 @@ static void configure_accelerators(const char* progname)
 static void qemu_validate_options(const QDict* machine_opts)
 {
     const char* kernel_filename = qdict_get_try_str(machine_opts, "kernel");
-    const char* shim_filename   = qdict_get_try_str(machine_opts, "shim");
     const char* initrd_filename = qdict_get_try_str(machine_opts, "initrd");
     const char* kernel_cmdline  = qdict_get_try_str(machine_opts, "append");
 
     if (kernel_filename == NULL) {
         if (kernel_cmdline != NULL) {
             error_report("-append only allowed with -kernel option");
-            exit(1);
-        }
-
-        if (shim_filename != NULL) {
-            error_report("-shim only allowed with -kernel option");
             exit(1);
         }
 
@@ -1987,7 +1932,6 @@ void qemu_init(int argc, char** argv)
     qemu_add_opts(&qemu_overcommit_opts);
     qemu_add_opts(&qemu_msg_opts);
     qemu_add_opts(&qemu_name_opts);
-    qemu_add_opts(&qemu_fw_cfg_opts);
     qemu_add_opts(&qemu_action_opts);
     qemu_add_run_with_opts();
     module_call_init(MODULE_INIT_OPTS);
@@ -2076,7 +2020,6 @@ void qemu_init(int argc, char** argv)
                     dpy.type  = DISPLAY_TYPE_NONE;
                     break;
                 case QEMU_OPTION_kernel: qdict_put_str(machine_opts_dict, "kernel", optarg); break;
-                case QEMU_OPTION_shim  : qdict_put_str(machine_opts_dict, "shim", optarg); break;
                 case QEMU_OPTION_initrd: qdict_put_str(machine_opts_dict, "initrd", optarg); break;
                 case QEMU_OPTION_append: qdict_put_str(machine_opts_dict, "append", optarg); break;
                 case QEMU_OPTION_dtb   : qdict_put_str(machine_opts_dict, "dtb", optarg); break;
@@ -2167,16 +2110,11 @@ void qemu_init(int argc, char** argv)
                     qemu_opt_set(opts, "watchdog", optarg, &error_abort);
                     break;
                 }
-                case QEMU_OPTION_debugcon: add_device_config(DEV_DEBUGCON, optarg); break;
                 case QEMU_OPTION_full_screen:
                     dpy.has_full_screen = true;
                     dpy.full_screen     = true;
                     break;
-                case QEMU_OPTION_pidfile: pid_file = optarg; break;
-                case QEMU_OPTION_fwcfg:
-                    opts = qemu_opts_parse_noisily(qemu_find_opts("fw_cfg"), optarg, true);
-                    if (opts == NULL) { exit(1); }
-                    break;
+                case QEMU_OPTION_pidfile   : pid_file = optarg; break;
                 case QEMU_OPTION_preconfig : preconfig_requested = true; break;
                 case QEMU_OPTION_enable_kvm: qdict_put_str(machine_opts_dict, "accel", "kvm"); break;
                 case QEMU_OPTION_M         :

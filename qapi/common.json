@@ -143,29 +143,6 @@
   'data': [ '1', '2', '4', '8', '12', '16', '32' ] }
 
 ##
-# @GrabToggleKeys:
-#
-# Key combinations to toggle input-linux between host and guest.
-#
-# @ctrl-ctrl: left and right control key
-#
-# @alt-alt: left and right alt key
-#
-# @shift-shift: left and right shift key
-#
-# @meta-meta: left and right meta key
-#
-# @scrolllock: scroll lock key
-#
-# @ctrl-scrolllock: either control key and scroll lock key
-#
-# Since: 4.0
-##
-{ 'enum': 'GrabToggleKeys',
-  'data': [ 'ctrl-ctrl', 'alt-alt', 'shift-shift','meta-meta', 'scrolllock',
-            'ctrl-scrolllock' ] }
-
-##
 # @HumanReadableText:
 #
 # @human-readable-text: Formatted output intended for humans.

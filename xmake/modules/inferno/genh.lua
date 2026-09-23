@@ -66,18 +66,9 @@ function _poison(genh)
 	codegen.write_if_changed(path.join(codegen.gendir(), "config-poison.h"), output)
 end
 
-function _module_block(genh, opt)
-	local script = codegen.srcfile("scripts", "modules", "module_block.py")
-	local output = path.join(codegen.gendir(), "block", "module_block.h")
-	codegen.generate(genh, "module_block", {progress = opt.progress, inputs = {script}, outputs = {output}}, function ()
-		os.vrunv(codegen.python(), {script, output})
-	end)
-end
-
 function generate(genh, opt)
 	_hx(genh, opt)
 	_keymaps(genh, opt)
 	_version()
 	_poison(genh)
-	_module_block(genh, opt)
 end

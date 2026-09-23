@@ -1524,8 +1524,6 @@ static const TypeInfo usb_host_dev_info = {
     OBJECT_TYPE_INSTANCE(USBHostDevice),
     .class_init = usb_host_class_initfn,
 };
-module_obj(TYPE_USB_HOST_DEVICE);
-module_kconfig(USB);
 
 static void usb_host_register_types(void)
 {

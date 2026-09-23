@@ -258,23 +258,6 @@
   'allow-preconfig': true }
 
 ##
-# @CanHostSocketcanProperties:
-#
-# Properties for can-host-socketcan objects.
-#
-# @if: interface name of the host system CAN bus to connect to
-#
-# @canbus: object ID of the can-bus object to connect to the host
-#     interface
-#
-# Since: 2.12
-##
-{ 'struct': 'CanHostSocketcanProperties',
-  'data': { 'if': 'str',
-            'canbus': 'str' },
-  'if': 'CONFIG_LINUX' }
-
-##
 # @InputBarrierProperties:
 #
 # Properties for input-barrier objects.
@@ -306,30 +289,6 @@
             '*y-origin': 'str',
             '*width': 'str',
             '*height': 'str' } }
-
-##
-# @InputLinuxProperties:
-#
-# Properties for input-linux objects.
-#
-# @evdev: the path of the host evdev device to use
-#
-# @grab_all: if true, grab is toggled for all devices (e.g. both
-#     keyboard and mouse) instead of just one device (default: false)
-#
-# @repeat: enables auto-repeat events (default: false)
-#
-# @grab-toggle: the key or key combination that toggles device grab
-#     (default: ctrl-ctrl)
-#
-# Since: 2.6
-##
-{ 'struct': 'InputLinuxProperties',
-  'data': { 'evdev': 'str',
-            '*grab_all': 'bool',
-            '*repeat': 'bool',
-            '*grab-toggle': 'GrabToggleKeys' },
-  'if': 'CONFIG_LINUX' }
 
 ##
 # @EventLoopBaseProperties:
@@ -412,8 +371,8 @@
 #
 # @share: if false, the memory is private to QEMU; if true, it is
 #     shared (default false for backends memory-backend-file and
-#     memory-backend-ram, true for backends memory-backend-epc,
-#     memory-backend-memfd, and memory-backend-shm)
+#     memory-backend-ram, true for backends memory-backend-memfd and
+#     memory-backend-shm)
 #
 # @reserve: if true, reserve swap space (or huge pages) if applicable
 #     (default: true) (since 6.1)
@@ -546,51 +505,6 @@
   'if': 'CONFIG_POSIX' }
 
 ##
-# @MemoryBackendEpcProperties:
-#
-# Properties for memory-backend-epc objects.
-#
-# The @merge boolean option is false by default with epc
-#
-# The @dump boolean option is false by default with epc
-#
-# Since: 6.2
-##
-{ 'struct': 'MemoryBackendEpcProperties',
-  'base': 'MemoryBackendProperties',
-  'data': {},
-  'if': 'CONFIG_LINUX' }
-
-##
-# @PrManagerHelperProperties:
-#
-# Properties for pr-manager-helper objects.
-#
-# @path: the path to a Unix domain socket for connecting to the
-#     external helper
-#
-# Since: 2.11
-##
-{ 'struct': 'PrManagerHelperProperties',
-  'data': { 'path': 'str' },
-  'if': 'CONFIG_LINUX' }
-
-##
-# @RemoteObjectProperties:
-#
-# Properties for x-remote-object objects.
-#
-# @fd: file descriptor name previously passed via `getfd` command
-#
-# @devid: the id of the device to be associated with the file
-#     descriptor
-#
-# Since: 6.0
-##
-{ 'struct': 'RemoteObjectProperties',
-  'data': { 'fd': 'str', 'devid': 'str' } }
-
-##
 # @RngProperties:
 #
 # Properties for objects of classes derived from rng.
@@ -640,160 +554,6 @@
   'if': 'CONFIG_POSIX' }
 
 ##
-# @SevCommonProperties:
-#
-# Properties common to objects that are derivatives of sev-common.
-#
-# @sev-device: SEV device to use (default: "/dev/sev")
-#
-# @cbitpos: C-bit location in page table entry (default: 0)
-#
-# @reduced-phys-bits: number of bits in physical addresses that become
-#     unavailable when SEV is enabled
-#
-# @kernel-hashes: if true, add hashes of kernel/initrd/cmdline to a
-#     designated guest firmware page for measured boot with -kernel
-#     (default: false) (since 6.2)
-#
-# Since: 9.1
-##
-{ 'struct': 'SevCommonProperties',
-  'data': { '*sev-device': 'str',
-            '*cbitpos': 'uint32',
-            'reduced-phys-bits': 'uint32',
-            '*kernel-hashes': 'bool' } }
-
-##
-# @SevGuestProperties:
-#
-# Properties for sev-guest objects.
-#
-# @dh-cert-file: guest owners DH certificate (encoded with base64)
-#
-# @session-file: guest owners session parameters (encoded with base64)
-#
-# @policy: SEV policy value (default: 0x1)
-#
-# @handle: SEV firmware handle (default: 0)
-#
-# @legacy-vm-type: Use legacy KVM_SEV_INIT KVM interface for creating
-#    the VM.  The newer KVM_SEV_INIT2 interface, from Linux >= 6.10,
-#    syncs additional vCPU state when initializing the VMSA
-#    structures, which will result in a different guest measurement.
-#    Set this to 'on' to force compatibility with older QEMU or kernel
-#    versions that rely on legacy KVM_SEV_INIT behavior.  'auto' will
-#    behave identically to 'on', but will automatically switch to
-#    using KVM_SEV_INIT2 if the user specifies any additional options
-#    that require it.  If set to 'off', QEMU will require
-#    KVM_SEV_INIT2 unconditionally.
-#    (default: off) (since 9.1)
-#
-# Since: 2.12
-##
-{ 'struct': 'SevGuestProperties',
-  'base': 'SevCommonProperties',
-  'data': { '*dh-cert-file': 'str',
-            '*session-file': 'str',
-            '*policy': 'uint32',
-            '*handle': 'uint32',
-            '*legacy-vm-type': 'OnOffAuto' } }
-
-##
-# @SevSnpGuestProperties:
-#
-# Properties for sev-snp-guest objects.  Most of these are direct
-# arguments for the KVM_SNP_* interfaces documented in the Linux
-# kernel source under
-# Documentation/arch/x86/amd-memory-encryption.rst, which are in turn
-# closely coupled with the SNP_INIT/SNP_LAUNCH_* firmware commands
-# documented in the SEV-SNP Firmware ABI Specification (Rev 0.9).
-#
-# More usage information is also available in the QEMU source tree
-# under docs/amd-memory-encryption.
-#
-# @policy: the 'POLICY' parameter to the SNP_LAUNCH_START command, as
-#     defined in the SEV-SNP firmware ABI (default: 0x30000)
-#
-# @guest-visible-workarounds: 16-byte, base64-encoded blob to report
-#     hypervisor-defined workarounds, corresponding to the 'GOSVW'
-#     parameter of the SNP_LAUNCH_START command defined in the SEV-SNP
-#     firmware ABI (default: all-zero)
-#
-# @id-block: 96-byte, base64-encoded blob to provide the 'ID Block'
-#     structure for the SNP_LAUNCH_FINISH command defined in the
-#     SEV-SNP firmware ABI (default: all-zero)
-#
-# @id-auth: 4096-byte, base64-encoded blob to provide the 'ID
-#     Authentication Information Structure' for the SNP_LAUNCH_FINISH
-#     command defined in the SEV-SNP firmware ABI (default: all-zero)
-#
-# @author-key-enabled: true if 'id-auth' blob contains the 'AUTHOR_KEY'
-#     field defined SEV-SNP firmware ABI (default: false)
-#
-# @host-data: 32-byte, base64-encoded, user-defined blob to provide to
-#     the guest, as documented for the 'HOST_DATA' parameter of the
-#     SNP_LAUNCH_FINISH command in the SEV-SNP firmware ABI (default:
-#     all-zero)
-#
-# @vcek-disabled: Guests are by default allowed to choose between VLEK
-#     (Versioned Loaded Endorsement Key) or VCEK (Versioned Chip
-#     Endorsement Key) when requesting attestation reports from
-#     firmware.  Set this to true to disable the use of VCEK.
-#     (default: false) (since: 9.1)
-#
-# Since: 9.1
-##
-{ 'struct': 'SevSnpGuestProperties',
-  'base': 'SevCommonProperties',
-  'data': {
-            '*policy': 'uint64',
-            '*guest-visible-workarounds': 'str',
-            '*id-block': 'str',
-            '*id-auth': 'str',
-            '*author-key-enabled': 'bool',
-            '*host-data': 'str',
-            '*vcek-disabled': 'bool' } }
-
-##
-# @TdxGuestProperties:
-#
-# Properties for tdx-guest objects.
-#
-# @attributes: The 'attributes' of a TD guest that is passed to
-#     KVM_TDX_INIT_VM
-#
-# @sept-ve-disable: toggle bit 28 of TD attributes to control disabling
-#     of EPT violation conversion to #VE on guest TD access of PENDING
-#     pages.  Some guest OS (e.g., Linux TD guest) may require this to
-#     be set, otherwise they refuse to boot.
-#
-# @mrconfigid: ID for non-owner-defined configuration of the guest TD,
-#     e.g., run-time or OS configuration (base64 encoded SHA384 digest).
-#     Defaults to all zeros.
-#
-# @mrowner: ID for the guest TD’s owner (base64 encoded SHA384 digest).
-#     Defaults to all zeros.
-#
-# @mrownerconfig: ID for owner-defined configuration of the guest TD,
-#     e.g., specific to the workload rather than the run-time or OS
-#     (base64 encoded SHA384 digest).  Defaults to all zeros.
-#
-# @quote-generation-socket: socket address for Quote Generation
-#     Service (QGS).  QGS is a daemon running on the host.  Without
-#     it, the guest will not be able to get a TD quote for
-#     attestation.
-#
-# Since: 10.1
-##
-{ 'struct': 'TdxGuestProperties',
-  'data': { '*attributes': 'uint64',
-            '*sept-ve-disable': 'bool',
-            '*mrconfigid': 'str',
-            '*mrowner': 'str',
-            '*mrownerconfig': 'str',
-            '*quote-generation-socket': 'SocketAddress' } }
-
-##
 # @ThreadContextProperties:
 #
 # Properties for thread context objects.
@@ -818,10 +578,6 @@
 ##
 # @ObjectType:
 #
-# Features:
-#
-# @unstable: Member @x-remote-object is experimental.
-#
 # Since: 6.0
 ##
 { 'enum': 'ObjectType',
@@ -830,25 +586,15 @@
     'authz-listfile',
     'authz-pam',
     'authz-simple',
-    'can-bus',
-    { 'name': 'can-host-socketcan',
-      'if': 'CONFIG_LINUX' },
     'input-barrier',
-    { 'name': 'input-linux',
-      'if': 'CONFIG_LINUX' },
     'iothread',
     'main-loop',
-    { 'name': 'memory-backend-epc',
-      'if': 'CONFIG_LINUX' },
     'memory-backend-file',
     { 'name': 'memory-backend-memfd',
       'if': 'CONFIG_LINUX' },
     'memory-backend-ram',
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
-    'pef-guest',
-    { 'name': 'pr-manager-helper',
-      'if': 'CONFIG_LINUX' },
     'rng-builtin',
     'rng-egd',
     { 'name': 'rng-random',
@@ -856,15 +602,11 @@
     'secret',
     { 'name': 'secret_keyring',
       'if': 'CONFIG_SECRET_KEYRING' },
-    'sev-guest',
-    'sev-snp-guest',
     'thread-context',
-    'tdx-guest',
     'tls-creds-anon',
     'tls-creds-psk',
     'tls-creds-x509',
-    'tls-cipher-suites',
-    { 'name': 'x-remote-object', 'features': [ 'unstable' ] }
+    'tls-cipher-suites'
   ] }
 
 ##
@@ -887,23 +629,15 @@
       'authz-listfile':             'AuthZListFileProperties',
       'authz-pam':                  'AuthZPAMProperties',
       'authz-simple':               'AuthZSimpleProperties',
-      'can-host-socketcan':         { 'type': 'CanHostSocketcanProperties',
-                                      'if': 'CONFIG_LINUX' },
       'input-barrier':              'InputBarrierProperties',
-      'input-linux':                { 'type': 'InputLinuxProperties',
-                                      'if': 'CONFIG_LINUX' },
       'iothread':                   'IothreadProperties',
       'main-loop':                  'MainLoopProperties',
-      'memory-backend-epc':         { 'type': 'MemoryBackendEpcProperties',
-                                      'if': 'CONFIG_LINUX' },
       'memory-backend-file':        'MemoryBackendFileProperties',
       'memory-backend-memfd':       { 'type': 'MemoryBackendMemfdProperties',
                                       'if': 'CONFIG_LINUX' },
       'memory-backend-ram':         'MemoryBackendProperties',
       'memory-backend-shm':         { 'type': 'MemoryBackendShmProperties',
                                       'if': 'CONFIG_POSIX' },
-      'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',
-                                      'if': 'CONFIG_LINUX' },
       'rng-builtin':                'RngProperties',
       'rng-egd':                    'RngEgdProperties',
       'rng-random':                 { 'type': 'RngRandomProperties',
@@ -911,15 +645,11 @@
       'secret':                     'SecretProperties',
       'secret_keyring':             { 'type': 'SecretKeyringProperties',
                                       'if': 'CONFIG_SECRET_KEYRING' },
-      'sev-guest':                  'SevGuestProperties',
-      'sev-snp-guest':              'SevSnpGuestProperties',
-      'tdx-guest':                  'TdxGuestProperties',
       'thread-context':             'ThreadContextProperties',
       'tls-creds-anon':             'TlsCredsAnonProperties',
       'tls-creds-psk':              'TlsCredsPskProperties',
       'tls-creds-x509':             'TlsCredsX509Properties',
-      'tls-cipher-suites':          'TlsCredsProperties',
-      'x-remote-object':            'RemoteObjectProperties'
+      'tls-cipher-suites':          'TlsCredsProperties'
   } }
 
 ##

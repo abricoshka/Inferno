@@ -1962,5 +1962,3 @@ static void usbredir_class_init(ObjectClass* klass, const void* data)
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(USBRedirDevice, usbredir, USB_REDIR, USB_DEVICE)
-module_obj(TYPE_USB_REDIR);
-module_kconfig(USB);

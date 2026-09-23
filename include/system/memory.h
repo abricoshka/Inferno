@@ -187,21 +187,8 @@ typedef struct IOMMUTLBEvent
 /* RAM is mmap-ed with MAP_SHARED */
 #define RAM_SHARED (1 << 1)
 
-/* UFFDIO_ZEROPAGE is available on this RAMBlock to atomically
- * zero the page and wake waiting processes.
- * (Set during postcopy)
- */
-#define RAM_UF_ZEROPAGE (1 << 3)
-
 /* RAM is a persistent kind memory */
 #define RAM_PMEM (1 << 5)
-
-/*
- * UFFDIO_WRITEPROTECT is used on this RAMBlock to
- * support 'write-tracking' migration type.
- * Implies ram_state->ram_wt_enabled.
- */
-#define RAM_UF_WRITEPROTECT (1 << 6)
 
 /*
  * RAM is mmap-ed with MAP_NORESERVE. When set, reserving swap space (or huge
@@ -2785,57 +2772,3 @@ static inline MemTxResult address_space_write_cached(MemoryRegionCache* cache, h
  * @attrs: memory transaction attributes
  */
 MemTxResult address_space_set(AddressSpace* as, hwaddr addr, uint8_t c, hwaddr len, MemTxAttrs attrs);
-
-/*
- * Inhibit technologies that require discarding of pages in RAM blocks, e.g.,
- * to manage the actual amount of memory consumed by the VM (then, the memory
- * provided by RAM blocks might be bigger than the desired memory consumption).
- * This *must* be set if:
- * - Discarding parts of a RAM blocks does not result in the change being
- *   reflected in the VM and the pages getting freed.
- * - All memory in RAM blocks is pinned or duplicated, invaldiating any previous
- *   discards blindly.
- * - Discarding parts of a RAM blocks will result in integrity issues (e.g.,
- *   encrypted VMs).
- * Technologies that only temporarily pin the current working set of a
- * driver are fine, because we don't expect such pages to be discarded.
- *
- * This is *not* to be used to protect from concurrent discards (esp.,
- * postcopy).
- *
- * Returns 0 if successful. Returns -EBUSY if a technology that relies on
- * discards to work reliably is active.
- */
-int ram_block_discard_disable(bool state);
-
-/*
- * See ram_block_discard_disable(): only disable uncoordinated discards,
- * keeping coordinated discards (via the RamDiscardManager) enabled.
- */
-int ram_block_uncoordinated_discard_disable(bool state);
-
-/*
- * Inhibit technologies that disable discarding of pages in RAM blocks.
- *
- * Returns 0 if successful. Returns -EBUSY if discards are already set to
- * broken.
- */
-int ram_block_discard_require(bool state);
-
-/*
- * See ram_block_discard_require(): only inhibit technologies that disable
- * uncoordinated discarding of pages in RAM blocks, allowing co-existence with
- * technologies that only inhibit uncoordinated discards (via the
- * RamDiscardManager).
- */
-int ram_block_coordinated_discard_require(bool state);
-
-/*
- * Test if any discarding of memory in ram blocks is disabled.
- */
-bool ram_block_discard_is_disabled(void);
-
-/*
- * Test if any discarding of memory in ram blocks is required to work reliably.
- */
-bool ram_block_discard_is_required(void);

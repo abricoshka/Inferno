@@ -548,9 +548,6 @@ DEF("pflash", HAS_ARG, QEMU_OPTION_pflash,
 DEF("kernel", HAS_ARG, QEMU_OPTION_kernel, \
     "-kernel bzImage use 'bzImage' as kernel image\n", QEMU_ARCH_ALL)
 
-DEF("shim", HAS_ARG, QEMU_OPTION_shim, \
-    "-shim shim.efi use 'shim.efi' to boot the kernel\n", QEMU_ARCH_ALL)
-
 DEF("append", HAS_ARG, QEMU_OPTION_append, \
     "-append cmdline use 'cmdline' as kernel command line\n", QEMU_ARCH_ALL)
 
@@ -571,19 +568,8 @@ DEF("compat", HAS_ARG, QEMU_OPTION_compat,
     "                Policy for handling unstable management interfaces\n",
     QEMU_ARCH_ALL)
 
-DEF("fw_cfg", HAS_ARG, QEMU_OPTION_fwcfg,
-    "-fw_cfg [name=]<name>,file=<file>\n"
-    "                add named fw_cfg entry with contents from file\n"
-    "-fw_cfg [name=]<name>,string=<str>\n"
-    "                add named fw_cfg entry with contents from string\n",
-    QEMU_ARCH_ALL)
-
 DEF("serial", HAS_ARG, QEMU_OPTION_serial, \
     "-serial dev     redirect the serial port to char device 'dev'\n",
-    QEMU_ARCH_ALL)
-
-DEF("parallel", HAS_ARG, QEMU_OPTION_parallel, \
-    "-parallel dev   redirect the parallel port to char device 'dev'\n",
     QEMU_ARCH_ALL)
 
 DEF("monitor", HAS_ARG, QEMU_OPTION_monitor, \
@@ -598,10 +584,6 @@ DEF("qmp-pretty", HAS_ARG, QEMU_OPTION_qmp_pretty, \
 
 DEF("mon", HAS_ARG, QEMU_OPTION_mon, \
     "-mon [chardev=]name[,mode=readline|control][,pretty[=on|off]]\n", QEMU_ARCH_ALL)
-
-DEF("debugcon", HAS_ARG, QEMU_OPTION_debugcon, \
-    "-debugcon dev   redirect the debug console to char device 'dev'\n",
-    QEMU_ARCH_ALL)
 
 DEF("pidfile", HAS_ARG, QEMU_OPTION_pidfile, \
     "-pidfile file   write PID to 'file'\n", QEMU_ARCH_ALL)
@@ -670,11 +652,6 @@ DEF("action", HAS_ARG, QEMU_OPTION_action,
     "                   action when guest panics [default=shutdown]\n"
     "-action watchdog=reset|shutdown|poweroff|inject-nmi|pause|debug|none\n"
     "                   action when watchdog fires [default=reset]\n",
-    QEMU_ARCH_ALL)
-
-DEF("loadvm", HAS_ARG, QEMU_OPTION_loadvm, \
-    "-loadvm [tag|id]\n" \
-    "                start right away with a saved state (loadvm in monitor)\n",
     QEMU_ARCH_ALL)
 
 #if !defined(_WIN32) && !defined(EMSCRIPTEN)
