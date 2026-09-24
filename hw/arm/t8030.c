@@ -336,7 +336,6 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
     AppleBootInfo* info = &t8030->boot_info;
     uint8_t*       data;
     gsize          len;
-    bool           ramdisk;
 
     apple_boot_get_kc_bounds(t8030->kernel, NULL, &kc_base, &kc_end, &ro_lower, &ro_upper);
 
@@ -364,17 +363,10 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
     phys_ptr = vtop_static(ROUND_UP_16K(kc_end + g_virt_slide));
 
     // RAM Disk
-    ramdisk = apple_dfu_copy_image(t8030->dfu, "rdsk", &data, &len);
-    if (ramdisk || machine->initrd_filename != NULL) {
+    if (apple_dfu_copy_image(t8030->dfu, "rdsk", &data, &len)) {
         info->ramdisk_addr = phys_ptr;
-        if (ramdisk) {
-            apple_boot_load_ramdisk_data("DFU ramdisk", data, len, &address_space_memory, info->ramdisk_addr,
-                                         &info->ramdisk_size);
-        }
-        else {
-            apple_boot_load_ramdisk(machine->initrd_filename, &address_space_memory, info->ramdisk_addr,
-                                    &info->ramdisk_size);
-        }
+        apple_boot_load_ramdisk_data("DFU ramdisk", data, len, &address_space_memory, info->ramdisk_addr,
+                                     &info->ramdisk_size);
         info->ramdisk_size  = ROUND_UP_16K(info->ramdisk_size);
         phys_ptr           += info->ramdisk_size;
     }
@@ -498,7 +490,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     AppleDTNode*       memory_map;
     bool               have_autoboot;
     bool               auto_boot;
-    bool               skip_dfu = false;
     char*              cmdline;
     char*              seprom;
     gsize              fsize;
@@ -551,7 +542,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     info_report("Boot Mode: %u", t8030->boot_info.boot_mode);
     switch (t8030->boot_info.boot_mode) {
-        case kAppleBootModeEnterRecovery: skip_dfu = true; QEMU_FALLTHROUGH;
         case kAppleBootModeDFU:
             auto_boot = false;
             env_unset(nvram, "auto-boot");
@@ -580,11 +570,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     t8030->boot_info.non_cold_boot = true;
 
     info_report("Auto Boot: %s", auto_boot ? "true" : "false");
-
-    if (machine->initrd_filename == NULL && !auto_boot && skip_dfu) {
-        error_setg(&error_fatal, "RAM Disk required for recovery, please specify it via `-initrd`.");
-        return;
-    }
 
     if (auto_boot) { cmdline = g_strdup(machine->kernel_cmdline); }
     else {
@@ -629,7 +614,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         return;
     }
 
-    if (!auto_boot && !skip_dfu && !apple_dfu_booted(t8030->dfu)) {
+    if (!auto_boot && !apple_dfu_booted(t8030->dfu)) {
         g_autofree uint8_t* nonce     = NULL;
         size_t              nonce_len = 0;
 
@@ -2782,9 +2767,6 @@ static void t8030_set_boot_mode(Object* obj, const char* value, Error** errp)
     AppleBootMode boot_mode;
 
     if (g_str_equal(value, "auto")) { boot_mode = kAppleBootModeAuto; }
-    else if (g_str_equal(value, "enter_recovery")) {
-        boot_mode = kAppleBootModeEnterRecovery;
-    }
     else if (g_str_equal(value, "exit_recovery")) {
         boot_mode = kAppleBootModeExitRecovery;
     }
@@ -2802,10 +2784,9 @@ static void t8030_set_boot_mode(Object* obj, const char* value, Error** errp)
 static char* t8030_get_boot_mode(Object* obj, Error** errp)
 {
     switch (APPLE_T8030(obj)->boot_info.boot_mode) {
-        case kAppleBootModeEnterRecovery: return g_strdup("enter_recovery");
-        case kAppleBootModeExitRecovery : return g_strdup("exit_recovery");
-        case kAppleBootModeDFU          : return g_strdup("dfu");
-        default                         : return g_strdup("auto");
+        case kAppleBootModeExitRecovery: return g_strdup("exit_recovery");
+        case kAppleBootModeDFU         : return g_strdup("dfu");
+        default                        : return g_strdup("auto");
     }
 }
 
