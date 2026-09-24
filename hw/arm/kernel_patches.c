@@ -826,10 +826,41 @@ static void ck_kp_disable_ppl(CKPatcherRange* range)
     }
 }
 
+static bool ck_kp_virt_has_ppl_callback(void* ctx, uint8_t* buffer)
+{
+    uint8_t* has_ppl = buffer + (int64_t)sextract32(ldl_le_p(buffer), 0, 26) * sizeof(uint32_t);
+
+    // mov w0, #1; ret
+    if ((uint32_t)ldl_le_p(has_ppl) != 0x52800020 || (uint32_t)ldl_le_p(has_ppl + sizeof(uint32_t)) != RET) {
+        return false;
+    }
+
+    stl_le_p(has_ppl, MOV_W0_0);
+    return true;
+}
+
+static void ck_kp_virt_has_ppl_patch(CKPatcherRange* range)
+{
+    // in the AppleImage4 nonce accessors
+    static const uint8_t pattern[] = {
+        0x00, 0x00, 0x00, 0x94,    // bl pmap_has_ppl
+        0x60, 0x00, 0x00, 0x34,    // cbz w0, #0xc
+        0x00, 0x00, 0x00, 0x94,    // bl pmap_in_ppl
+        0x00, 0x00, 0x00, 0x36,    // tbz w0, #0, ?
+    };
+    static const uint8_t mask[] = {
+        0x00, 0x00, 0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
+    ck_patcher_find_callback(range, "make pmap_has_ppl return false", pattern, mask, sizeof(pattern), sizeof(uint32_t),
+                             ck_kp_virt_has_ppl_callback);
+}
+
 void ck_patch_virt(MachoHeader64* hdr, const bool enable_pac)
 {
     g_autofree CKPatcherRange* kernel_text    = NULL;
     g_autofree CKPatcherRange* kernel_ppltext = NULL;
+    g_autofree CKPatcherRange* img4_text      = NULL;
 
     kernel_text = ck_kp_get_kernel_section(hdr, "__TEXT_EXEC", "__text");
     if (kernel_text == NULL) {
@@ -843,4 +874,7 @@ void ck_patch_virt(MachoHeader64* hdr, const bool enable_pac)
     ck_kp_virt_jop_toggle_patch(kernel_ppltext == NULL ? kernel_text : kernel_ppltext);
 
     ck_kp_disable_ppl(kernel_text);
+
+    img4_text = ck_kp_find_image_text(hdr, "com.apple.security.AppleImage4");
+    ck_kp_virt_has_ppl_patch(img4_text);
 }
