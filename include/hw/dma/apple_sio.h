@@ -18,3 +18,4 @@ AppleSIODMAEndpoint* apple_sio_get_endpoint(AppleSIO* s, int ep);
 AppleSIODMAEndpoint* apple_sio_get_endpoint_from_node(AppleSIO* s, AppleDTNode* node, int idx);
 SysBusDevice*        apple_sio_from_node(AppleDTNode* node, AppleA7IOPVersion version, uint32_t protocol_version,
                                          uint64_t gtimer_freq);
+void                 apple_sio_set_protocol_version(AppleSIO* s, uint32_t protocol_version);

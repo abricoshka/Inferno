@@ -650,6 +650,8 @@ static void apple_sio_class_init(ObjectClass* klass, const void* data)
 
 OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSIO, apple_sio, APPLE_SIO, APPLE_RTKIT)
 
+void apple_sio_set_protocol_version(AppleSIO* s, uint32_t protocol_version) { s->protocol_version = protocol_version; }
+
 SysBusDevice* apple_sio_from_node(AppleDTNode* node, AppleA7IOPVersion version, uint32_t protocol_version,
                                   uint64_t gtimer_freq)
 {
