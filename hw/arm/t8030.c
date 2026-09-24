@@ -237,6 +237,40 @@ static void t8030_patch_kernel(MachoHeader64* header, uint32_t build_version, co
     }
 }
 
+static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kernel)
+{
+    vaddr    kc_end;
+    uint32_t build_version = apple_boot_build_version(kernel);
+
+    if (t8030->kernel != NULL) { g_free(apple_boot_get_macho_buffer(t8030->kernel)); }
+    t8030->kernel = kernel;
+
+    info_report("%s %u.%u.%u", apple_boot_platform_string(kernel), BUILD_VERSION_MAJOR(build_version),
+                BUILD_VERSION_MINOR(build_version), BUILD_VERSION_PATCH(build_version));
+    t8030->build_version = build_version;
+
+    switch (BUILD_VERSION_MAJOR(build_version)) {
+        case 13:
+        case 14:
+        case 15:
+        case 16: t8030->sio_protocol = 9; break;
+        case 17:
+        case 18:
+        case 26: t8030->sio_protocol = 10; break;
+        default: assert_not_reached();
+    }
+
+    if (t8030->securerom_filename == NULL) {
+        apple_boot_get_kc_bounds(kernel, NULL, &g_virt_base, &kc_end, NULL, NULL);
+        info_report("Kernel virtual low: 0x%016" VADDR_PRIx, g_virt_base);
+        info_report("Kernel virtual high: 0x%016" VADDR_PRIx, kc_end);
+
+        g_phys_base = (hwaddr)apple_boot_get_macho_buffer(kernel);
+
+        t8030_patch_kernel(kernel, build_version, t8030->enable_pac);
+    }
+}
+
 static bool t8030_check_panic(AppleT8030MachineState* t8030)
 {
     AppleEmbeddedPanicHeader* panic_info;
@@ -2492,8 +2526,6 @@ static void t8030_init_done(Notifier* notifier, void* data)
 static void t8030_init(MachineState* machine)
 {
     AppleT8030MachineState* t8030;
-    vaddr                   kc_end;
-    uint32_t                build_version;
     AppleDTNode*            child;
     AppleDTProp*            prop;
     hwaddr*                 ranges;
@@ -2550,41 +2582,15 @@ static void t8030_init(MachineState* machine)
         return;
     }
 
-    if (machine->kernel_filename != NULL) { t8030->kernel = apple_boot_load_kernel(machine->kernel_filename, NULL); }
+    if (machine->kernel_filename != NULL) {
+        t8030_set_kernel(t8030, apple_boot_load_kernel(machine->kernel_filename, NULL));
+    }
     else {
         t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, &error_fatal);
-        t8030->kernel = apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL);
-    }
-    if (t8030->kernel == NULL) {
-        error_setg(&error_fatal, "Failed to load kernel");
-        return;
-    }
-
-    build_version = apple_boot_build_version(t8030->kernel);
-    info_report("%s %u.%u.%u", apple_boot_platform_string(t8030->kernel), BUILD_VERSION_MAJOR(build_version),
-                BUILD_VERSION_MINOR(build_version), BUILD_VERSION_PATCH(build_version));
-    t8030->build_version = build_version;
-
-    switch (BUILD_VERSION_MAJOR(build_version)) {
-        case 13:
-        case 14:
-        case 15:
-        case 16: t8030->sio_protocol = 9; break;
-        case 17:
-        case 18:
-        case 26: t8030->sio_protocol = 10; break;
-        default: assert_not_reached();
+        t8030_set_kernel(t8030, apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL));
     }
 
     if (t8030->securerom_filename == NULL) {
-        apple_boot_get_kc_bounds(t8030->kernel, NULL, &g_virt_base, &kc_end, NULL, NULL);
-        info_report("Kernel virtual low: 0x%016" VADDR_PRIx, g_virt_base);
-        info_report("Kernel virtual high: 0x%016" VADDR_PRIx, kc_end);
-
-        g_phys_base = (hwaddr)apple_boot_get_macho_buffer(t8030->kernel);
-
-        t8030_patch_kernel(t8030->kernel, build_version, t8030->enable_pac);
-
         if (t8030->trustcache_filename != NULL) {
             t8030->trustcache =
                 apple_boot_load_trustcache_file(t8030->trustcache_filename, &t8030->boot_info.trustcache_size);
