@@ -792,7 +792,7 @@ static void ck_kp_virt_jop_toggle_patch(CKPatcherRange* range)
 static bool ck_kp_disable_ppl_locked_down(void* ctx, uint8_t* buffer)
 {
     // mov w?, #1
-    uint8_t* mov = ck_patcher_find_next_insn(buffer + 8 + sizeof(uint32_t), 2, 0x52800020, 0xFFFFFFE0, 0);
+    uint8_t* mov = ck_patcher_find_next_insn(buffer + 2 * sizeof(uint32_t), 2, 0x52800020, 0xFFFFFFE0, 0);
     if (mov == NULL) { return false; }
 
     // str w?, pmap_ppl_locked_down
@@ -818,15 +818,10 @@ static void ck_kp_disable_ppl(CKPatcherRange* range)
     if (ck_patcher_find_replace(range, "neutralise gxf_enable", gxf_pattern, NULL, sizeof(gxf_pattern),
                                 sizeof(uint32_t), gxf_replace, NULL, 0, sizeof(gxf_replace)))
     {
-        static const uint8_t ppl_pattern[] = {
-            0x00, 0x00, 0x38, 0x37,    // tbnz w?, 0x7, ?
-            0xDF, 0x47, 0x03, 0xD5,    // msr daifset, #7
-        };
-        static const uint8_t ppl_pattern_mask[] = {0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        QEMU_BUILD_BUG_ON(sizeof(ppl_pattern) != sizeof(ppl_pattern_mask));
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down", ppl_pattern, ppl_pattern_mask,
-                                 sizeof(ppl_pattern), sizeof(uint32_t), ck_kp_disable_ppl_locked_down);
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (inlined)", ppl_pattern, ppl_pattern_mask,
+        static const uint8_t ppl_pattern[] = {0xDF, 0x47, 0x03, 0xD5};    // msr daifset, #7
+        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down", ppl_pattern, NULL, sizeof(ppl_pattern),
+                                 sizeof(uint32_t), ck_kp_disable_ppl_locked_down);
+        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (inlined)", ppl_pattern, NULL,
                                  sizeof(ppl_pattern), sizeof(uint32_t), ck_kp_disable_ppl_locked_down);
     }
 }
