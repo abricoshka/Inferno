@@ -23,6 +23,7 @@
 #include "hw/sysbus.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "chardev/char-fe.h"
@@ -151,6 +152,7 @@ struct Exynos4210UartState
     uint64_t   wordtime; /* word time in ns */
 
     CharBackend chr;
+    guint       watch_tag;
     qemu_irq    irq;
     qemu_irq    dmairq;
 
@@ -265,7 +267,7 @@ static void exynos4210_uart_update_irq(Exynos4210UartState* s)
      * transmit FIFO is smaller than the trigger level.
      */
     if (s->reg[I_(UFCON)] & UFCON_FIFO_ENABLE) {
-        uint32_t count = (s->reg[I_(UFSTAT)] & UFSTAT_Tx_FIFO_COUNT) >> UFSTAT_Tx_FIFO_COUNT_SHIFT;
+        uint32_t count = fifo_elements_number(&s->tx);
 
         if (count <= exynos4210_uart_Tx_FIFO_trigger_level(s)) { s->reg[I_(UINTSP)] |= UINTSP_TXD; }
 
@@ -364,6 +366,44 @@ static void exynos4210_uart_rx_timeout_set(Exynos4210UartState* s)
     }
 }
 
+static gboolean exynos4210_uart_xmit(void* do_not_use, GIOCondition cond, void* opaque)
+{
+    Exynos4210UartState* s = opaque;
+    uint32_t             len;
+    int                  ret;
+
+    s->watch_tag = 0;
+
+    while (fifo_elements_number(&s->tx)) {
+        len = s->tx.sp > s->tx.rp ? s->tx.sp - s->tx.rp : s->tx.size - s->tx.rp;
+        ret = qemu_chr_fe_write(&s->chr, s->tx.data + s->tx.rp, len);
+        if (ret <= 0) { break; }
+        s->tx.rp = (s->tx.rp + ret) % s->tx.size;
+    }
+
+    if (fifo_elements_number(&s->tx)) {
+        s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP, exynos4210_uart_xmit, s);
+    }
+
+    if (!s->watch_tag) {
+        s->tx.rp             = s->tx.sp;
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_TRANSMITTER_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
+        s->reg[I_(UINTSP)]  |= UINTSP_TXD;
+    }
+
+    exynos4210_uart_update_irq(s);
+    return G_SOURCE_REMOVE;
+}
+
+static void exynos4210_uart_tx_fifo_reset(Exynos4210UartState* s)
+{
+    if (s->watch_tag) {
+        g_source_remove(s->watch_tag);
+        s->watch_tag = 0;
+    }
+    fifo_reset(&s->tx);
+}
+
 static void exynos4210_uart_write(void* opaque, hwaddr offset, uint64_t val, unsigned size)
 {
     Exynos4210UartState* s = (Exynos4210UartState*)opaque;
@@ -386,23 +426,24 @@ static void exynos4210_uart_write(void* opaque, hwaddr offset, uint64_t val, uns
                 trace_exynos_uart_rx_fifo_reset(s->channel);
             }
             if (val & UFCON_Tx_FIFO_RESET) {
-                fifo_reset(&s->tx);
-                s->reg[I_(UFCON)] &= ~UFCON_Tx_FIFO_RESET;
+                exynos4210_uart_tx_fifo_reset(s);
+                s->reg[I_(UFCON)]   &= ~UFCON_Tx_FIFO_RESET;
+                s->reg[I_(UTRSTAT)] |= UTRSTAT_TRANSMITTER_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
                 trace_exynos_uart_tx_fifo_reset(s->channel);
             }
             break;
 
         case UTXH:
             if (qemu_chr_fe_backend_connected(&s->chr)) {
-                s->reg[I_(UTRSTAT)] &= ~(UTRSTAT_TRANSMITTER_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY);
-                ch                   = (uint8_t)val;
-                /* XXX this blocks entire thread. Rewrite to use
-                 * qemu_chr_fe_write and background I/O callbacks */
-                qemu_chr_fe_write_all(&s->chr, &ch, 1);
+                ch = (uint8_t)val;
+                if (fifo_elements_number(&s->tx) == s->tx.size - 1) {
+                    qemu_log_mask(LOG_GUEST_ERROR, "%s: tx overflow\n", __func__);
+                    break;
+                }
+                fifo_store(&s->tx, ch);
                 trace_exynos_uart_tx(s->channel, ch);
-                s->reg[I_(UTRSTAT)] |= UTRSTAT_TRANSMITTER_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
-                s->reg[I_(UINTSP)]  |= UINTSP_TXD;
-                exynos4210_uart_update_irq(s);
+                s->reg[I_(UTRSTAT)] &= ~(UTRSTAT_TRANSMITTER_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY);
+                if (!s->watch_tag) { exynos4210_uart_xmit(NULL, G_IO_OUT, s); }
             }
             break;
 
@@ -545,7 +586,7 @@ static void exynos4210_uart_reset_enter(Object* obj, ResetType type)
     }
 
     fifo_reset(&s->rx);
-    fifo_reset(&s->tx);
+    exynos4210_uart_tx_fifo_reset(s);
 
     trace_exynos_uart_rxsize(s->channel, s->rx.size);
 }
