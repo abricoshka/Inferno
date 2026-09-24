@@ -58,7 +58,7 @@ typedef struct USBUplinkDescriptors
 
 void usb_uplink_descriptors_free(USBUplinkDescriptors* desc);
 
-#define USB_UPLINK_PORTS 4
+#define USB_UPLINK_PORTS 3
 
 /* A bus that exports whichever device is plugged into it. */
 typedef struct USBUplinkDevice

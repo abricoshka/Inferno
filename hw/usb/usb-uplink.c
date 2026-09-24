@@ -397,7 +397,6 @@ USBDevice* usb_uplink_active_except(USBUplinkDevice* x, USBPort* except)
 
         if (&x->ports[i] == except) { continue; }
         if (dev == NULL || !dev->attached) { continue; }
-        if (strcmp(object_get_typename(OBJECT(dev)), "usb-hub") == 0) { continue; }
 
         best = dev;
     }
