@@ -442,5 +442,9 @@ uint8_t* apple_boot_load_trustcache_data(const char* filename, uint8_t* data, gs
 
 void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, uint64_t* size);
 
+/// Consumes `data`.
+void apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len, AddressSpace* as, hwaddr pa,
+                                  uint64_t* size);
+
 void apple_boot_extract_manifest(const uint8_t* img4_data, uint64_t img4_data_len_max, gchar** out_data,
                                  gsize* out_size);

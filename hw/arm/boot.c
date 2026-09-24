@@ -774,14 +774,21 @@ uint8_t* apple_boot_load_trustcache_data(const char* filename, uint8_t* data, gs
 
 void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, uint64_t* size)
 {
-    uint8_t*      data;
-    gsize         len;
+    uint8_t* data;
+    gsize    len;
+
+    apple_boot_read_file(filename, &data, &len);
+    apple_boot_load_ramdisk_data(filename, data, len, as, pa, size);
+}
+
+void apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len, AddressSpace* as, hwaddr pa,
+                                  uint64_t* size)
+{
     uint8_t*      file_data = NULL;
     unsigned long file_size = 0;
     uint32_t      length    = 0;
     char          payload_type[4];
 
-    apple_boot_read_file(filename, &data, &len);
     extract_im4p_payload(filename, data, len, payload_type, &file_data, &length, NULL);
     if (memcmp(payload_type, "rdsk", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
         error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `rdsk`)", filename, payload_type);
