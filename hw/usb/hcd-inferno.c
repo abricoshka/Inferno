@@ -105,7 +105,7 @@ static bool coroutine_fn inferno_write(QIOChannel* ioc, void* buf, ssize_t len)
 
 static USBDevice* usb_inferno_host_find_device(USBInfernoHostState* s, uint8_t addr)
 {
-    for (int i = 0; i < G_N_ELEMENTS(s->ports) - 1; i++) {
+    for (int i = 0; i < G_N_ELEMENTS(s->ports); i++) {
         USBDevice* dev = s->ports[i].dev;
 
         if (dev == NULL || !dev->attached) { continue; }
@@ -337,7 +337,7 @@ static void coroutine_fn usb_inferno_host_msg_loop_co(void* opaque)
 
 static bool usb_inferno_host_bus_populated(USBInfernoHostState* s)
 {
-    for (int i = 0; i < G_N_ELEMENTS(s->ports) - 1; i++) {
+    for (int i = 0; i < G_N_ELEMENTS(s->ports); i++) {
         USBDevice* dev = s->ports[i].dev;
         if (dev != NULL && dev->attached) { return true; }
     }
@@ -347,7 +347,7 @@ static bool usb_inferno_host_bus_populated(USBInfernoHostState* s)
 
 static void usb_inferno_host_reset_bus(USBInfernoHostState* s)
 {
-    for (int i = 0; i < G_N_ELEMENTS(s->ports) - 1; i++) {
+    for (int i = 0; i < G_N_ELEMENTS(s->ports); i++) {
         USBDevice* dev = s->ports[i].dev;
         if (dev != NULL && dev->attached) {
             DPRINTF("%s: resetting port %d\n", __func__, i);
@@ -417,11 +417,6 @@ static void usb_inferno_host_attach(USBPort* port)
 {
     USBInfernoHostState* s = port->opaque;
 
-    if (port->index >= G_N_ELEMENTS(s->ports) - 1) {
-        error_report("%s: attached to unused port\n", __func__);
-        return;
-    }
-
     if (port->dev == NULL || !port->dev->attached) { return; }
 
     if (!s->closed) {
@@ -439,7 +434,7 @@ static void usb_inferno_host_detach(USBPort* port)
 
     s = port->opaque;
 
-    for (int i = 0; i < G_N_ELEMENTS(s->ports) - 1; i++) {
+    for (int i = 0; i < G_N_ELEMENTS(s->ports); i++) {
         USBDevice* dev = s->ports[i].dev;
         if (dev != NULL && dev->attached && &s->ports[i] != port) {
             DPRINTF("%s: port %d detached, connection still in use\n", __func__, port->index);
