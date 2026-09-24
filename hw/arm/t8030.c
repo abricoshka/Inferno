@@ -334,6 +334,9 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
     hwaddr         mem_size;
     hwaddr         phys_ptr;
     AppleBootInfo* info = &t8030->boot_info;
+    uint8_t*       data;
+    gsize          len;
+    bool           ramdisk;
 
     apple_boot_get_kc_bounds(t8030->kernel, NULL, &kc_base, &kc_end, &ro_lower, &ro_upper);
 
@@ -361,10 +364,17 @@ static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cm
     phys_ptr = vtop_static(ROUND_UP_16K(kc_end + g_virt_slide));
 
     // RAM Disk
-    if (machine->initrd_filename != NULL) {
+    ramdisk = apple_dfu_copy_image(t8030->dfu, "rdsk", &data, &len);
+    if (ramdisk || machine->initrd_filename != NULL) {
         info->ramdisk_addr = phys_ptr;
-        apple_boot_load_ramdisk(machine->initrd_filename, &address_space_memory, info->ramdisk_addr,
-                                &info->ramdisk_size);
+        if (ramdisk) {
+            apple_boot_load_ramdisk_data("DFU ramdisk", data, len, &address_space_memory, info->ramdisk_addr,
+                                         &info->ramdisk_size);
+        }
+        else {
+            apple_boot_load_ramdisk(machine->initrd_filename, &address_space_memory, info->ramdisk_addr,
+                                    &info->ramdisk_size);
+        }
         info->ramdisk_size  = ROUND_UP_16K(info->ramdisk_size);
         phys_ptr           += info->ramdisk_size;
     }
@@ -492,6 +502,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     char*              cmdline;
     char*              seprom;
     gsize              fsize;
+    uint8_t*           data;
+    gsize              len;
     CarveoutAllocator* ca;
     CKPatcherRange*    seprom_range;
 
@@ -569,7 +581,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     info_report("Auto Boot: %s", auto_boot ? "true" : "false");
 
-    if (machine->initrd_filename == NULL && !auto_boot) {
+    if (machine->initrd_filename == NULL && !auto_boot && skip_dfu) {
         error_setg(&error_fatal, "RAM Disk required for recovery, please specify it via `-initrd`.");
         return;
     }
@@ -673,8 +685,22 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         t8030_load_preboot_file(PREBOOT_APTICKET, (uint8_t**)&info->ticket_data, &info->ticket_length, NULL);
     }
 
+    if (apple_dfu_copy_image(t8030->dfu, "rkrn", &data, &len)) {
+        t8030_set_kernel(t8030, apple_boot_load_kernel_data("DFU kernelcache", data, len, NULL));
+        apple_sio_set_protocol_version(APPLE_SIO(object_resolve_path_component(OBJECT(t8030), "sio")),
+                                       t8030->sio_protocol);
+    }
+
+    if (apple_dfu_copy_image(t8030->dfu, "rtsc", &data, &len)) {
+        g_free(t8030->trustcache);
+        t8030->trustcache = apple_boot_load_trustcache_data("DFU trust cache", data, len, &info->trustcache_size);
+    }
+
     hdr = t8030->kernel;
-    assert_nonnull(hdr);
+    if (hdr == NULL) {
+        error_setg(&error_fatal, "No kernel to boot; specify it via `-kernel` or restore through DFU");
+        return;
+    }
 
     apple_boot_allocate_segment_records(memory_map, hdr);
 
@@ -2585,8 +2611,7 @@ static void t8030_init(MachineState* machine)
     if (machine->kernel_filename != NULL) {
         t8030_set_kernel(t8030, apple_boot_load_kernel(machine->kernel_filename, NULL));
     }
-    else {
-        t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, &error_fatal);
+    else if (t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, NULL)) {
         t8030_set_kernel(t8030, apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL));
     }
 
@@ -2595,8 +2620,7 @@ static void t8030_init(MachineState* machine)
             t8030->trustcache =
                 apple_boot_load_trustcache_file(t8030->trustcache_filename, &t8030->boot_info.trustcache_size);
         }
-        else {
-            t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, &error_fatal);
+        else if (t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, NULL)) {
             t8030->trustcache =
                 apple_boot_load_trustcache_data(PREBOOT_TRUSTCACHE, data, len, &t8030->boot_info.trustcache_size);
         }
