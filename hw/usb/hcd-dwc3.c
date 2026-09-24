@@ -73,6 +73,7 @@ static void dwc3_ep_trb_event(DWC3State* s, int epid, DWC3TRB* trb, struct dwc3_
 static void dwc3_event(DWC3State* s, union dwc3_event event, uint32_t v);
 static void dwc3_ep_run(DWC3State* s, DWC3Endpoint* ep);
 static void dwc3_ep_run_schedule_update(DWC3State* s, DWC3Endpoint* ep);
+static void dwc3_ep_schedule_wakeup(DWC3State* s, DWC3Endpoint* ep);
 
 static inline dma_addr_t dwc3_addr64(uint32_t low, uint32_t high)
 {
@@ -1381,7 +1382,9 @@ static void usb_dwc3_dreg_write(void* opaque, hwaddr addr, int index, uint64_t v
             }
             break;
         case DALEPENA:
-            // already handled via *mmio
+            for (uint32_t enabled = val & ~old; enabled; enabled &= enabled - 1) {
+                dwc3_ep_schedule_wakeup(s, &s->eps[ctz32(enabled)]);
+            }
             break;
         default: break;
     }
@@ -1470,6 +1473,7 @@ static void usb_dwc3_depcmdreg_write(void* opaque, hwaddr addr, int index, uint6
                                 ep->xfer->tdaddr);
                         dwc3_td_fetch(s, ep->xfer, ep->xfer->tdaddr);
                         ep->not_ready = false;
+                        dwc3_ep_schedule_wakeup(s, ep);
                         dwc3_ep_run_schedule_update(s, ep);
                     }
                 }
@@ -1482,6 +1486,7 @@ static void usb_dwc3_depcmdreg_write(void* opaque, hwaddr addr, int index, uint6
                           dwc3_depcmd_name(DEPCMD_CMD_GET(val)), epid, par2, par1, par0);
 #endif
             ep->not_ready = false;
+            dwc3_ep_schedule_wakeup(s, ep);
 
             switch (DEPCMD_CMD_GET(val)) {
                 case DEPCMD_CFG: {
@@ -2114,6 +2119,21 @@ static void dwc3_ep_run_schedule_update(DWC3State* s, DWC3Endpoint* ep)
     // callers. return dwc3_ep_run(s, ep);
     aio_bh_schedule_oneshot(qemu_get_aio_context(), dwc3_ep_run_update_bh, dwc3_new_ep_run_update(s, ep));
 }
+
+static void dwc3_ep_wakeup_bh(void* opaque)
+{
+    DWC3EPRunUpdate* update = opaque;
+    USBEndpoint*     uep;
+
+    WITH_QEMU_LOCK_GUARD(&update->s->lock) { uep = update->ep->uep; }
+
+    if (uep != NULL) { usb_wakeup(uep, 0); }
+
+    g_free(update);
+}
+
+static void dwc3_ep_schedule_wakeup(DWC3State* s, DWC3Endpoint* ep)
+{ aio_bh_schedule_oneshot(qemu_get_aio_context(), dwc3_ep_wakeup_bh, dwc3_new_ep_run_update(s, ep)); }
 
 static void dwc3_usb_device_class_initfn(ObjectClass* klass, const void* data)
 {
