@@ -860,6 +860,7 @@ static void vh_conn_close(USBVirtualHereConn* conn)
     conn->closed = true;
 
     vh_conn_abort_packets(conn);
+    usb_uplink_wake_all(&s->usb);
 
     /* The claim dies with the connection, so the device must come back clean. */
     if (conn->using_device || conn->use_pending) {
@@ -964,9 +965,12 @@ static void usb_virtualhere_detach(USBPort* port)
     if (last && bound) { vh_advance_device_id(s); }
 
     usb_uplink_invalidate(&s->usb);
+    usb_uplink_wake_all(&s->usb);
 }
 
-static USBBusOps  usb_virtualhere_bus_ops  = {};
+static USBBusOps usb_virtualhere_bus_ops = {
+    .wakeup_endpoint = usb_uplink_wakeup_endpoint,
+};
 static USBPortOps usb_virtualhere_port_ops = {
     .attach   = usb_virtualhere_attach,
     .detach   = usb_virtualhere_detach,

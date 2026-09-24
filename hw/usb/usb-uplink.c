@@ -22,6 +22,7 @@
 #include "hw/usb/hcd-inferno.h"
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "qom/object.h"
 #include "desc.h"
 #include "hcd-virtualhere.h"
@@ -29,14 +30,9 @@
 
 #define USB_CONFIG_DESC_MAX 0x1000
 
-#define USB_UPLINK_POLL_NS       (1 * 1000 * 1000)
-#define USB_UPLINK_IDLE_NS       (10 * 1000 * 1000)
-#define USB_UPLINK_IDLE_AFTER_NS (1000ULL * 1000 * 1000)
-#define USB_UPLINK_SLOW_NS       (10ULL * 1000 * 1000 * 1000)
-#define USB_CONFIG_DESC_MIN      9
-
-#define USB_UPLINK_MAX_RETRIES 2000
-#define USB_UPLINK_RETRY_NS    (1 * 1000 * 1000)
+#define USB_UPLINK_SLOW_NS         (10ULL * 1000 * 1000 * 1000)
+#define USB_UPLINK_CTRL_TIMEOUT_NS (2LL * 1000 * 1000 * 1000)
+#define USB_CONFIG_DESC_MIN        9
 
 bool usb_uplink_device_usable(USBDevice* dev)
 {
@@ -94,16 +90,62 @@ void usb_uplink_packet_reset(USBUplinkPacket* pkt)
     usb_packet_init(&pkt->p);
 }
 
+typedef struct USBUplinkWaiter
+{
+    QemuCoSleep  sleep;
+    USBEndpoint* ep;
+    QTAILQ_ENTRY(USBUplinkWaiter) link;
+} USBUplinkWaiter;
+
+static void coroutine_fn usb_uplink_wait(USBUplinkDevice* x, USBEndpoint* ep, int64_t timeout_ns)
+{
+    USBUplinkWaiter w = {.ep = ep};
+
+    QTAILQ_INSERT_TAIL(&x->waiters, &w, link);
+    if (timeout_ns) { qemu_co_sleep_ns_wakeable(&w.sleep, QEMU_CLOCK_REALTIME, timeout_ns); }
+    else {
+        qemu_co_sleep(&w.sleep);
+    }
+    if (QTAILQ_IN_USE(&w, link)) { QTAILQ_REMOVE(&x->waiters, &w, link); }
+}
+
+static void usb_uplink_wake(USBUplinkDevice* x, USBEndpoint* ep)
+{
+    QTAILQ_HEAD(, USBUplinkWaiter) woken = QTAILQ_HEAD_INITIALIZER(woken);
+    USBUplinkWaiter *w, *next;
+
+    QTAILQ_FOREACH_SAFE (w, &x->waiters, link, next) {
+        if (ep == NULL || w->ep == ep) {
+            QTAILQ_REMOVE(&x->waiters, w, link);
+            QTAILQ_INSERT_TAIL(&woken, w, link);
+        }
+    }
+
+    while ((w = QTAILQ_FIRST(&woken)) != NULL) {
+        QTAILQ_REMOVE(&woken, w, link);
+        qemu_co_sleep_wake(&w->sleep);
+    }
+}
+
+void usb_uplink_wakeup_endpoint(USBBus* bus, USBEndpoint* ep, unsigned int stream)
+{ usb_uplink_wake(container_of(bus, USBUplinkDevice, bus), ep); }
+
+static void usb_uplink_wake_all_bh(void* opaque) { usb_uplink_wake(opaque, NULL); }
+
+void usb_uplink_wake_all(USBUplinkDevice* x)
+{ aio_bh_schedule_oneshot(qemu_get_aio_context(), usb_uplink_wake_all_bh, x); }
+
 static int32_t coroutine_fn usb_uplink_xfer_stage(USBDevice* dev, uint8_t pid, void* buf, int len, uint32_t* actual_len,
                                                   bool wait_for_device)
 {
-    int32_t status = USB_RET_NAK;
-    int     attempt;
+    int64_t deadline = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) + USB_UPLINK_CTRL_TIMEOUT_NS;
 
-    if (!usb_uplink_device_usable(dev)) { return USB_RET_NODEV; }
-
-    for (attempt = 0; attempt < USB_UPLINK_MAX_RETRIES; attempt++) {
+    for (;;) {
         USBUplinkPacket pkt = {0};
+        int32_t         status;
+        int64_t         remaining;
+
+        if (!usb_uplink_device_usable(dev)) { return USB_RET_NODEV; }
 
         usb_packet_init(&pkt.p);
         usb_packet_setup(&pkt.p, pid, usb_ep_get(dev, pid, 0), 0, 0, false, false);
@@ -120,10 +162,13 @@ static int32_t coroutine_fn usb_uplink_xfer_stage(USBDevice* dev, uint8_t pid, v
         usb_packet_cleanup(&pkt.p);
 
         if (status != USB_RET_NAK && !(wait_for_device && status == USB_RET_IOERROR)) { return status; }
-        qemu_co_sleep_ns(QEMU_CLOCK_REALTIME, USB_UPLINK_RETRY_NS);
-    }
 
-    return status;
+        remaining = deadline - qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+        if (remaining <= 0) { return status; }
+
+        usb_uplink_wait(container_of(usb_bus_from_device(dev), USBUplinkDevice, bus), usb_ep_get(dev, pid, 0),
+                        remaining);
+    }
 }
 
 int32_t coroutine_fn usb_uplink_control(USBDevice* dev, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
@@ -330,6 +375,7 @@ void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops,
     unsigned int i;
 
     qemu_co_mutex_init(&x->ctrl_lock);
+    QTAILQ_INIT(&x->waiters);
     usb_bus_new(&x->bus, sizeof(x->bus), bus_ops, owner);
 
     for (i = 0; i < ARRAY_SIZE(x->ports); i++) {
@@ -412,7 +458,8 @@ int32_t coroutine_fn usb_uplink_transfer(USBUplinkDevice* x, USBUplinkPacket* pk
     bool     warned  = false;
 
     for (;;) {
-        int32_t status;
+        USBEndpoint* ep;
+        int32_t      status;
 
         if (abort != NULL && *abort) { return USB_RET_NODEV; }
 
@@ -428,9 +475,9 @@ int32_t coroutine_fn usb_uplink_transfer(USBUplinkDevice* x, USBUplinkPacket* pk
             warned = true;
         }
 
+        ep = pkt->p.ep;
         usb_uplink_packet_reset(pkt);
-        qemu_co_sleep_ns(QEMU_CLOCK_REALTIME,
-                         waited > USB_UPLINK_IDLE_AFTER_NS ? USB_UPLINK_IDLE_NS : USB_UPLINK_POLL_NS);
+        usb_uplink_wait(x, ep, 0);
     }
 }
 

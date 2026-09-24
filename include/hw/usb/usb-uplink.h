@@ -68,9 +68,16 @@ typedef struct USBUplinkDevice
     CoMutex ctrl_lock;
 
     USBUplinkDescriptors* desc;
+
+    QTAILQ_HEAD(, USBUplinkWaiter) waiters;
 } USBUplinkDevice;
 
 void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops, USBPortOps* port_ops, void* opaque);
+
+void usb_uplink_wakeup_endpoint(USBBus* bus, USBEndpoint* ep, unsigned int stream);
+
+/* Retries every waiting transfer from a BH, so it is safe in a detach callback. */
+void usb_uplink_wake_all(USBUplinkDevice* x);
 
 /*
  * The device being exported, skipping hubs.
