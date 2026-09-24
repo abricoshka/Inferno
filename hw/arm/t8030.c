@@ -20,6 +20,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/a13.h"
+#include "hw/arm/apfs.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/dart.h"
 #include "hw/arm/dt.h"
@@ -118,6 +119,11 @@
 
 #define SEPROM_BASE (0x240000000)
 #define SEPROM_SIZE (8 * MiB)
+
+#define PREBOOT_APTICKET    "System/Library/Caches/apticket.der"
+#define PREBOOT_KERNELCACHE "System/Library/Caches/com.apple.kernelcaches/kernelcache"
+#define PREBOOT_DEVICETREE  "usr/standalone/firmware/devicetree.img4"
+#define PREBOOT_TRUSTCACHE  "usr/standalone/firmware/FUD/StaticTrustCache.img4"
 
 #define SPI0_IRQ     (444)
 #define GPIO_SPI0_CS (204)
@@ -420,6 +426,24 @@ static const uint8_t t8030_sep_nonce[] = {
     0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE,
 };
 
+static bool t8030_load_preboot_file(const char* path, uint8_t** data, gsize* len, Error** errp)
+{
+    BlockBackend*       blk       = blk_by_name("root");
+    g_autofree uint8_t* active    = NULL;
+    g_autofree char*    full_path = NULL;
+    gsize               active_len;
+
+    if (blk == NULL) {
+        error_setg(errp, "No `root` drive to read `%s` from", path);
+        return false;
+    }
+
+    if (!apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, "active", &active, &active_len, errp)) { return false; }
+
+    full_path = g_strdup_printf("%s/%s", (char*)active, path);
+    return apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, full_path, data, len, errp);
+}
+
 static void t8030_memory_setup(AppleT8030MachineState* t8030)
 {
     AppleDTNode*       carveout_memory_map;
@@ -605,23 +629,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     t8030->video_args.base_addr +=
         adp_v4_get_fb_off(APPLE_DISPLAY_PIPE_V4(object_property_get_link(OBJECT(t8030), "disp0", &error_abort)));
 
-    NvmeNamespace* firmware = NVME_NS(object_resolve_path_at(OBJECT(t8030), "peripheral/firmware"));
-    if (firmware == NULL) {
-        error_setg(&error_fatal, "Failed to find firmware device");
-        return;
-    }
-    size_t fwlen = blk_getlength(firmware->blkconf.blk);
-
-    uint8_t* buffer = g_malloc(fwlen);
-
-    blk_flush(firmware->blkconf.blk);
-    blk_drain(firmware->blkconf.blk);
-
-    if (blk_pread(firmware->blkconf.blk, 0, fwlen, buffer, 0) < 0) {
-        error_report("%s: Failed to read firmware", __func__);
-        return;
-    }
-
     if (t8030->boot_info.ticket_data != NULL) {
         g_free(t8030->boot_info.ticket_data);
         t8030->boot_info.ticket_data   = NULL;
@@ -629,9 +636,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     }
 
     if (!apple_dfu_copy_ticket(t8030->dfu, &info->ticket_data, &info->ticket_length)) {
-        apple_boot_extract_manifest(buffer, fwlen, &info->ticket_data, &info->ticket_length);
+        t8030_load_preboot_file(PREBOOT_APTICKET, (uint8_t**)&info->ticket_data, &info->ticket_length, NULL);
     }
-    g_free(buffer);
 
     hdr = t8030->kernel;
     assert_nonnull(hdr);
@@ -2491,6 +2497,8 @@ static void t8030_init(MachineState* machine)
     AppleDTNode*            child;
     AppleDTProp*            prop;
     hwaddr*                 ranges;
+    uint8_t*                data;
+    gsize                   len;
 
     t8030 = APPLE_T8030(machine);
 
@@ -2532,13 +2540,21 @@ static void t8030_init(MachineState* machine)
         // dram_pln0 address 0x200000000 size 0x8000, inside amcc
     }
 
-    t8030->device_tree = apple_boot_load_dt_file(machine->dtb);
+    if (machine->dtb != NULL) { t8030->device_tree = apple_boot_load_dt_file(machine->dtb); }
+    else {
+        t8030_load_preboot_file(PREBOOT_DEVICETREE, &data, &len, &error_fatal);
+        t8030->device_tree = apple_boot_load_dt_data(PREBOOT_DEVICETREE, data, len);
+    }
     if (t8030->device_tree == NULL) {
         error_setg(&error_fatal, "Failed to load device tree");
         return;
     }
 
-    t8030->kernel = apple_boot_load_kernel(machine->kernel_filename, NULL);
+    if (machine->kernel_filename != NULL) { t8030->kernel = apple_boot_load_kernel(machine->kernel_filename, NULL); }
+    else {
+        t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, &error_fatal);
+        t8030->kernel = apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL);
+    }
     if (t8030->kernel == NULL) {
         error_setg(&error_fatal, "Failed to load kernel");
         return;
@@ -2569,8 +2585,15 @@ static void t8030_init(MachineState* machine)
 
         t8030_patch_kernel(t8030->kernel, build_version, t8030->enable_pac);
 
-        t8030->trustcache =
-            apple_boot_load_trustcache_file(t8030->trustcache_filename, &t8030->boot_info.trustcache_size);
+        if (t8030->trustcache_filename != NULL) {
+            t8030->trustcache =
+                apple_boot_load_trustcache_file(t8030->trustcache_filename, &t8030->boot_info.trustcache_size);
+        }
+        else {
+            t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, &error_fatal);
+            t8030->trustcache =
+                apple_boot_load_trustcache_data(PREBOOT_TRUSTCACHE, data, len, &t8030->boot_info.trustcache_size);
+        }
     }
     else {
         if (!g_file_get_contents(t8030->securerom_filename, &t8030->securerom, &t8030->securerom_size, NULL)) {

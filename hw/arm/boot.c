@@ -319,32 +319,52 @@ static void apple_boot_process_dt_node(AppleDTNode* node, AppleDTNode* parent)
     }
 }
 
+static void apple_boot_read_file(const char* filename, uint8_t** data, gsize* len)
+{
+    if (!g_file_get_contents(filename, (gchar**)data, len, NULL)) {
+        error_setg(&error_fatal, "file read for `%s` failed", filename);
+    }
+}
+
 /*
+ * @param file_data is consumed
  * @param payload_type must be at least 4 bytes long
  */
-static void extract_im4p_payload(const char* filename, char* payload_type, uint8_t** data, uint32_t* length,
-                                 uint8_t** secure_monitor)
+static void extract_im4p_payload(const char* filename, uint8_t* file_data, gsize fsize, char* payload_type,
+                                 uint8_t** data, uint32_t* length, uint8_t** secure_monitor)
 {
-    uint8_t*  file_data;
-    gsize     fsize;
     char      error_desc[ASN1_MAX_ERROR_DESCRIPTION_SIZE];
     asn1_node img4_definitions = NULL;
+    asn1_node img4;
     asn1_node im4p;
     int       ret;
     char      magic[4];
     char      description[128];
     int       len;
     uint8_t*  payload_data;
-
-    if (!g_file_get_contents(filename, (gchar**)&file_data, &fsize, NULL)) {
-        error_setg(&error_fatal, "file read for `%s` failed", filename);
-        return;
-    }
+    int       start;
+    int       end;
+    uint8_t*  im4p_data = file_data;
+    gsize     im4p_size = fsize;
 
     if (asn1_array2tree(img4_definitions_array, &img4_definitions, error_desc) != ASN1_SUCCESS) {
         error_setg(&error_fatal, "ASN.1 parser initialisation failed: `%s`", error_desc);
         return;
     }
+
+    ret = asn1_create_element(img4_definitions, "Image4.IMG4", &img4);
+    if (ret != ASN1_SUCCESS) {
+        error_setg(&error_fatal, "IMG4 element creation failed: %d", ret);
+        return;
+    }
+
+    if (asn1_der_decoding(&img4, file_data, (uint32_t)fsize, error_desc) == ASN1_SUCCESS
+        && asn1_der_decoding_startEnd(img4, file_data, (uint32_t)fsize, "payload", &start, &end) == ASN1_SUCCESS)
+    {
+        im4p_data = file_data + start;
+        im4p_size = end - start + 1;
+    }
+    asn1_delete_structure(&img4);
 
     ret = asn1_create_element(img4_definitions, "Image4.IM4P", &im4p);
     if (ret != ASN1_SUCCESS) {
@@ -352,7 +372,7 @@ static void extract_im4p_payload(const char* filename, char* payload_type, uint8
         return;
     }
 
-    ret = asn1_der_decoding(&im4p, file_data, (uint32_t)fsize, error_desc);
+    ret = asn1_der_decoding(&im4p, im4p_data, (uint32_t)im4p_size, error_desc);
     if (ret != ASN1_SUCCESS) {
         *data   = file_data;
         *length = (uint32_t)fsize;
@@ -457,14 +477,23 @@ static void extract_im4p_payload(const char* filename, char* payload_type, uint8
 
 AppleDTNode* apple_boot_load_dt_file(const char* filename)
 {
+    uint8_t* data;
+    gsize    len;
+
+    if (filename == NULL) { return NULL; }
+
+    apple_boot_read_file(filename, &data, &len);
+    return apple_boot_load_dt_data(filename, data, len);
+}
+
+AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize len)
+{
     AppleDTNode* root      = NULL;
     uint8_t*     file_data = NULL;
     uint32_t     fsize;
     char         payload_type[4];
 
-    if (filename == NULL) { return NULL; }
-
-    extract_im4p_payload(filename, payload_type, &file_data, &fsize, NULL);
+    extract_im4p_payload(filename, data, len, payload_type, &file_data, &fsize, NULL);
 
     if (memcmp(payload_type, "dtre", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
         error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `dtre`)", filename, payload_type);
@@ -676,6 +705,15 @@ void apple_boot_finalise_dt(AppleDTNode* root, AddressSpace* as, AppleBootInfo* 
 
 uint8_t* apple_boot_load_trustcache_file(const char* filename, uint64_t* size)
 {
+    uint8_t* data;
+    gsize    len;
+
+    apple_boot_read_file(filename, &data, &len);
+    return apple_boot_load_trustcache_data(filename, data, len, size);
+}
+
+uint8_t* apple_boot_load_trustcache_data(const char* filename, uint8_t* data, gsize len, uint64_t* size)
+{
     uint32_t*           trustcache_data;
     uint64_t            trustcache_size;
     g_autofree uint8_t* file_data;
@@ -687,7 +725,7 @@ uint8_t* apple_boot_load_trustcache_file(const char* filename, uint64_t* size)
     uint32_t            expected_file_size;
     uint32_t            trustcache_entry_size;
 
-    extract_im4p_payload(filename, payload_type, &file_data, &length, NULL);
+    extract_im4p_payload(filename, data, len, payload_type, &file_data, &length, NULL);
 
     if (memcmp(payload_type, "trst", 4) != 0 && memcmp(payload_type, "rtsc", 4) != 0
         && memcmp(payload_type, "raw", 4) != 0)
@@ -736,12 +774,15 @@ uint8_t* apple_boot_load_trustcache_file(const char* filename, uint64_t* size)
 
 void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, uint64_t* size)
 {
+    uint8_t*      data;
+    gsize         len;
     uint8_t*      file_data = NULL;
     unsigned long file_size = 0;
     uint32_t      length    = 0;
     char          payload_type[4];
 
-    extract_im4p_payload(filename, payload_type, &file_data, &length, NULL);
+    apple_boot_read_file(filename, &data, &len);
+    extract_im4p_payload(filename, data, len, payload_type, &file_data, &length, NULL);
     if (memcmp(payload_type, "rdsk", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
         error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `rdsk`)", filename, payload_type);
         return;
@@ -918,12 +959,22 @@ void apple_boot_get_kc_bounds(MachoHeader64* header, vaddr* text_base, vaddr* kc
 
 MachoHeader64* apple_boot_load_kernel(const char* filename, MachoHeader64** secure_monitor)
 {
+    uint8_t* data;
+    gsize    len;
+
+    apple_boot_read_file(filename, &data, &len);
+    return apple_boot_load_kernel_data(filename, data, len, secure_monitor);
+}
+
+MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_data, gsize file_len,
+                                           MachoHeader64** secure_monitor)
+{
     uint32_t       len;
     uint8_t*       data = NULL;
     char           payload_type[4];
     MachoHeader64* header;
 
-    extract_im4p_payload(filename, payload_type, &data, &len, (uint8_t**)secure_monitor);
+    extract_im4p_payload(filename, file_data, file_len, payload_type, &data, &len, (uint8_t**)secure_monitor);
 
     if (memcmp(payload_type, "krnl", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
         error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `krnl`)", filename, payload_type);

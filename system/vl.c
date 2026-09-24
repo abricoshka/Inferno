@@ -1664,20 +1664,9 @@ static void configure_accelerators(const char* progname)
 
 static void qemu_validate_options(const QDict* machine_opts)
 {
-    const char* kernel_filename = qdict_get_try_str(machine_opts, "kernel");
-    const char* initrd_filename = qdict_get_try_str(machine_opts, "initrd");
-    const char* kernel_cmdline  = qdict_get_try_str(machine_opts, "append");
-
-    if (kernel_filename == NULL) {
-        if (kernel_cmdline != NULL) {
-            error_report("-append only allowed with -kernel option");
-            exit(1);
-        }
-
-        if (initrd_filename != NULL) {
-            error_report("-initrd only allowed with -kernel option");
-            exit(1);
-        }
+    if (qdict_get_try_str(machine_opts, "kernel") == NULL && qdict_get_try_str(machine_opts, "initrd") != NULL) {
+        error_report("-initrd only allowed with -kernel option");
+        exit(1);
     }
 
 #ifdef CONFIG_CURSES

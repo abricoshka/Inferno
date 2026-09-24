@@ -373,6 +373,10 @@ typedef struct
 
 MachoHeader64* apple_boot_load_kernel(const char* filename, MachoHeader64** secure_monitor);
 
+/// Consumes `data`.
+MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* data, gsize len,
+                                           MachoHeader64** secure_monitor);
+
 MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len);
 
 uint8_t* apple_boot_get_macho_buffer(MachoHeader64* header);
@@ -418,6 +422,9 @@ void apple_boot_load_raw_file(const char* filename, AddressSpace* as, hwaddr fil
 
 AppleDTNode* apple_boot_load_dt_file(const char* filename);
 
+/// Consumes `data`.
+AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize len);
+
 struct AppleNvram;
 
 void apple_boot_setup_boot_nonce(struct AppleNvram* nvram, AppleBootInfo* info);
@@ -429,6 +436,9 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 void apple_boot_finalise_dt(AppleDTNode* root, AddressSpace* as, AppleBootInfo* info);
 
 uint8_t* apple_boot_load_trustcache_file(const char* filename, uint64_t* size);
+
+/// Consumes `data`.
+uint8_t* apple_boot_load_trustcache_data(const char* filename, uint8_t* data, gsize len, uint64_t* size);
 
 void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, uint64_t* size);
 
