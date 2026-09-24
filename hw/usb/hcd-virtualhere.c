@@ -804,7 +804,6 @@ static void coroutine_fn vh_conn_dispatch(USBVirtualHereConn* conn, const uint8_
             vh_conn_abort_packets(conn);
             usb_uplink_release(&conn->s->usb);
             vh_conn_send_msg(conn, VIRTUALHERE_MSG_UNBIND_ACK, msg, released, sizeof(released));
-            vh_conn_announce_device(conn);
             break;
         }
         case VIRTUALHERE_MSG_CTRL_SUBMIT: vh_handle_ctrl_submit(conn, msg, len); break;
