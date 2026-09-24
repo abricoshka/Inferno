@@ -121,6 +121,11 @@
     #endif
 #endif
 
+#if !defined(O_DIRECT) && defined(F_NOCACHE)
+    #define O_DIRECT              0x10000000
+    #define O_DIRECT_IS_F_NOCACHE 1
+#endif
+
 /* Approximate O_DIRECT with O_DSYNC if O_DIRECT isn't available */
 #ifndef O_DIRECT
     #define O_DIRECT O_DSYNC
@@ -351,6 +356,11 @@ static bool dio_byte_aligned(int fd)
     ret = fstatfs(fd, &buf);
     if (ret == 0 && buf.f_type == NFS_SUPER_MAGIC) { return true; }
 #endif
+#ifdef O_DIRECT_IS_F_NOCACHE
+    struct stat st;
+
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) { return true; }
+#endif
     return false;
 }
 
@@ -515,6 +525,26 @@ static void raw_parse_flags(int bdrv_flags, int* open_flags, bool has_writers)
     if ((bdrv_flags & BDRV_O_NOCACHE)) { *open_flags |= O_DIRECT; }
 }
 
+static int raw_qemu_open(const char* filename, int open_flags, Error** errp)
+{
+#ifdef O_DIRECT_IS_F_NOCACHE
+    int fd = qemu_open(filename, open_flags & ~O_DIRECT, errp);
+
+    if (fd >= 0 && (open_flags & O_DIRECT) && fcntl(fd, F_NOCACHE, 1) == -1) {
+        int err = errno;
+
+        error_setg_errno(errp, err, "Could not disable caching for '%s'", filename);
+        qemu_close(fd);
+        errno = err;
+        return -1;
+    }
+
+    return fd;
+#else
+    return qemu_open(filename, open_flags, errp);
+#endif
+}
+
 static void raw_parse_filename(const char* filename, QDict* options, Error** errp)
 { bdrv_parse_filename_strip_prefix(filename, "file:", options); }
 
@@ -638,7 +668,7 @@ static int raw_open_common(BlockDriverState* bs, QDict* options, int bdrv_flags,
     raw_parse_flags(bdrv_flags, &s->open_flags, false);
 
     s->fd = -1;
-    fd    = qemu_open(filename, s->open_flags, errp);
+    fd    = raw_qemu_open(filename, s->open_flags, errp);
     ret   = fd < 0 ? -errno : 0;
 
     if (ret < 0) {
@@ -955,6 +985,10 @@ static int fcntl_setfl(int fd, int flag)
 {
     int flags;
 
+#ifdef O_DIRECT_IS_F_NOCACHE
+    flag &= ~O_DIRECT;
+#endif
+
     flags = fcntl(fd, F_GETFL);
     if (flags == -1) { return -errno; }
     if (fcntl(fd, F_SETFL, flags | flag) == -1) { return -errno; }
@@ -1008,7 +1042,7 @@ static int raw_reconfigure_getfd(BlockDriverState* bs, int flags, int* open_flag
         const char* normalized_filename = bs->filename;
         ret                             = raw_normalize_devicepath(&normalized_filename, errp);
         if (ret >= 0) {
-            fd = qemu_open(normalized_filename, *open_flags, errp);
+            fd = raw_qemu_open(normalized_filename, *open_flags, errp);
             if (fd == -1) { return -1; }
         }
     }
