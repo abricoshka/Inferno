@@ -154,6 +154,7 @@ struct AppleUartState
     uint64_t   wordtime; /* word time in ns */
 
     CharBackend chr;
+    guint       watch_tag;
     qemu_irq    irq;
     qemu_irq    dmairq;
 
@@ -318,6 +319,44 @@ static void apple_uart_rx_timeout_set(AppleUartState* s)
     }
 }
 
+static gboolean apple_uart_xmit(void* do_not_use, GIOCondition cond, void* opaque)
+{
+    AppleUartState* s = opaque;
+    const uint8_t*  buf;
+    uint32_t        len;
+    int             ret;
+
+    s->watch_tag = 0;
+
+    while (!fifo8_is_empty(&s->tx)) {
+        buf = fifo8_peek_bufptr(&s->tx, fifo8_num_used(&s->tx), &len);
+        ret = qemu_chr_fe_write(&s->chr, buf, len);
+        if (ret <= 0) { break; }
+        fifo8_drop(&s->tx, ret);
+    }
+
+    if (!fifo8_is_empty(&s->tx)) {
+        s->watch_tag = qemu_chr_fe_add_watch(&s->chr, G_IO_OUT | G_IO_HUP, apple_uart_xmit, s);
+    }
+
+    if (!s->watch_tag) {
+        fifo8_reset(&s->tx);
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_Tx_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
+    }
+
+    apple_uart_update_irq(s);
+    return G_SOURCE_REMOVE;
+}
+
+static void apple_uart_tx_fifo_reset(AppleUartState* s)
+{
+    if (s->watch_tag) {
+        g_source_remove(s->watch_tag);
+        s->watch_tag = 0;
+    }
+    fifo8_reset(&s->tx);
+}
+
 static void apple_uart_write(void* opaque, hwaddr offset, uint64_t val, unsigned size)
 {
     AppleUartState* s = opaque;
@@ -340,22 +379,24 @@ static void apple_uart_write(void* opaque, hwaddr offset, uint64_t val, unsigned
                 trace_apple_uart_rx_fifo_reset(s->channel);
             }
             if (val & UFCON_Tx_FIFO_RESET) {
-                fifo8_reset(&s->tx);
-                s->reg[I_(UFCON)] &= ~UFCON_Tx_FIFO_RESET;
+                apple_uart_tx_fifo_reset(s);
+                s->reg[I_(UFCON)]   &= ~UFCON_Tx_FIFO_RESET;
+                s->reg[I_(UTRSTAT)] |= UTRSTAT_Tx_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
                 trace_apple_uart_tx_fifo_reset(s->channel);
             }
             break;
 
         case UTXH:
             if (qemu_chr_fe_backend_connected(&s->chr)) {
-                s->reg[I_(UTRSTAT)] &= ~(UTRSTAT_Tx_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY);
-                ch                   = (uint8_t)val;
-                /* XXX this blocks entire thread. Rewrite to use
-                 * qemu_chr_fe_write and background I/O callbacks */
-                qemu_chr_fe_write_all(&s->chr, &ch, 1);
+                ch = (uint8_t)val;
+                if (fifo8_is_full(&s->tx)) {
+                    qemu_log_mask(LOG_GUEST_ERROR, "%s: tx overflow\n", __func__);
+                    break;
+                }
+                fifo8_push(&s->tx, ch);
                 trace_apple_uart_tx(s->channel, ch);
-                s->reg[I_(UTRSTAT)] |= UTRSTAT_Tx_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY;
-                apple_uart_update_irq(s);
+                s->reg[I_(UTRSTAT)] &= ~(UTRSTAT_Tx_EMPTY | UTRSTAT_Tx_BUFFER_EMPTY);
+                if (!s->watch_tag) { apple_uart_xmit(NULL, G_IO_OUT, s); }
             }
             break;
 
@@ -486,7 +527,7 @@ static void apple_uart_reset_enter(Object* obj, ResetType type)
     }
 
     fifo8_reset(&s->rx);
-    fifo8_reset(&s->tx);
+    apple_uart_tx_fifo_reset(s);
 
     trace_apple_uart_rxsize(s->channel, s->rx_fifo_size);
 }
