@@ -433,6 +433,10 @@ static uint64_t apple_uart_read(void* opaque, hwaddr offset, unsigned size)
         case UFSTAT: /* Read Only */
             s->reg[I_(UFSTAT)] = fifo8_num_used(&s->rx) & 0xf;
             if (fifo8_num_free(&s->rx) == 0) { s->reg[I_(UFSTAT)] |= UFSTAT_Rx_FIFO_FULL; }
+            if (fifo8_is_full(&s->tx)) { s->reg[I_(UFSTAT)] |= UFSTAT_Tx_FIFO_FULL; }
+            else {
+                s->reg[I_(UFSTAT)] |= fifo8_num_used(&s->tx) << UFSTAT_Tx_FIFO_COUNT_SHIFT;
+            }
             trace_apple_uart_read(s->channel, offset, apple_uart_regname(offset), s->reg[I_(UFSTAT)]);
             return s->reg[I_(UFSTAT)];
         case URXH:
