@@ -4,6 +4,9 @@ target("system")
 	else
 		add_files("bus-stub.c")
 	end
+	if has_config("apple_dfu") then
+		add_files("apple_dfu.c")
+	end
 	if has_config("apple_otg") then
 		add_files("apple_otg.c")
 	end
