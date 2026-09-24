@@ -488,6 +488,10 @@ static uint64_t exynos4210_uart_read(void* opaque, hwaddr offset, unsigned size)
                 s->reg[I_(UFSTAT)] |= UFSTAT_Rx_FIFO_FULL;
                 s->reg[I_(UFSTAT)] &= ~0xff;
             }
+            if (fifo_elements_number(&s->tx) == s->tx.size - 1) { s->reg[I_(UFSTAT)] |= UFSTAT_Tx_FIFO_FULL; }
+            else {
+                s->reg[I_(UFSTAT)] |= fifo_elements_number(&s->tx) << UFSTAT_Tx_FIFO_COUNT_SHIFT;
+            }
             trace_exynos_uart_read(s->channel, offset, exynos4210_uart_regname(offset), s->reg[I_(UFSTAT)]);
             return s->reg[I_(UFSTAT)];
         case URXH:
