@@ -446,5 +446,8 @@ void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, 
 void apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len, AddressSpace* as, hwaddr pa,
                                   uint64_t* size);
 
+/// Read the four-character payload type of an IM4P, or of the IM4P in an IMG4.
+bool apple_boot_get_im4p_type(const uint8_t* data, gsize len, char* type);
+
 void apple_boot_extract_manifest(const uint8_t* img4_data, uint64_t img4_data_len_max, gchar** out_data,
                                  gsize* out_size);

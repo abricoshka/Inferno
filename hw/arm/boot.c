@@ -1437,6 +1437,59 @@ vaddr apple_boot_fixup_slide_va(vaddr va) { return (0xFFFF000000000000 | va) + g
 
 void* apple_boot_va_to_ptr(vaddr va) { return (void*)(apple_boot_fixup_slide_va(va) - g_virt_base + g_phys_base); }
 
+static const uint8_t* apple_boot_der_next(const uint8_t** p, const uint8_t* end, uint8_t tag, gsize* len)
+{
+    const uint8_t* q = *p;
+    gsize          n;
+    uint8_t        len_bytes;
+
+    if (end - q < 2 || *q++ != tag) { return NULL; }
+
+    n = *q++;
+    if (n & 0x80) {
+        len_bytes = n & 0x7F;
+        if (len_bytes > sizeof(n) || end - q < len_bytes) { return NULL; }
+        for (n = 0; len_bytes > 0; len_bytes--) { n = (n << 8) | *q++; }
+    }
+
+    if (n > (gsize)(end - q)) { return NULL; }
+
+    *p   = q + n;
+    *len = n;
+    return q;
+}
+
+bool apple_boot_get_im4p_type(const uint8_t* data, gsize len, char* type)
+{
+    const uint8_t* p   = data;
+    const uint8_t* end = data + len;
+    const uint8_t* seq;
+    const uint8_t* str;
+    gsize          n;
+
+    seq = apple_boot_der_next(&p, end, 0x30, &n);
+    if (seq == NULL) { return false; }
+    p   = seq;
+    end = seq + n;
+
+    str = apple_boot_der_next(&p, end, 0x16, &n);
+    if (str != NULL && n == 4 && memcmp(str, "IMG4", 4) == 0) {
+        seq = apple_boot_der_next(&p, end, 0x30, &n);
+        if (seq == NULL) { return false; }
+        p   = seq;
+        end = seq + n;
+        str = apple_boot_der_next(&p, end, 0x16, &n);
+    }
+
+    if (str == NULL || n != 4 || memcmp(str, "IM4P", 4) != 0) { return false; }
+
+    str = apple_boot_der_next(&p, end, 0x16, &n);
+    if (str == NULL || n != 4) { return false; }
+
+    memcpy(type, str, 4);
+    return true;
+}
+
 void apple_boot_extract_manifest(const uint8_t* img4_data, uint64_t img4_data_len_max, gchar** out_data,
                                  gsize* out_size)
 {
