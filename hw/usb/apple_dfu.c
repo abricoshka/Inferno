@@ -97,6 +97,8 @@ struct AppleDFUState
 
     gchar* ticket_data;
     gsize  ticket_length;
+
+    GHashTable* images;
 };
 
 static const USBDescStrings apple_dfu_strings = {
@@ -240,6 +242,8 @@ static void apple_dfu_reenumerate(void* opaque)
 
 static void apple_dfu_consume_upload(AppleDFUState* s)
 {
+    char type[5] = {0};
+
     if (s->upload->len != 0 && !s->upload_truncated) {
         gchar* ticket_data   = NULL;
         gsize  ticket_length = 0;
@@ -249,6 +253,11 @@ static void apple_dfu_consume_upload(AppleDFUState* s)
             g_free(s->ticket_data);
             s->ticket_data   = ticket_data;
             s->ticket_length = ticket_length;
+        }
+
+        if (apple_boot_get_im4p_type(s->upload->data, s->upload->len, type)) {
+            g_hash_table_insert(s->images, g_strdup(type), g_byte_array_free_to_bytes(s->upload));
+            s->upload = g_byte_array_new();
         }
     }
 
@@ -384,6 +393,7 @@ void apple_dfu_start(AppleDFUState* s, const uint8_t* ap_nonce, size_t ap_nonce_
     g_free(s->nonce);
     s->nonce = g_string_free(nonce, false);
 
+    g_hash_table_remove_all(s->images);
     apple_dfu_enter(s, APPLE_DFU_STAGE_DFU);
 }
 
@@ -400,6 +410,21 @@ bool apple_dfu_copy_ticket(AppleDFUState* s, gchar** data, gsize* length)
     return true;
 }
 
+bool apple_dfu_copy_image(AppleDFUState* s, const char* type, uint8_t** data, gsize* length)
+{
+    GBytes*       image;
+    gconstpointer image_data;
+
+    if (!apple_dfu_booted(s)) { return false; }
+
+    image = g_hash_table_lookup(s->images, type);
+    if (image == NULL) { return false; }
+
+    image_data = g_bytes_get_data(image, length);
+    *data      = g_memdup2(image_data, *length);
+    return true;
+}
+
 static void apple_dfu_realize(USBDevice* dev, Error** errp)
 {
     AppleDFUState* s = APPLE_DFU(dev);
@@ -408,6 +433,7 @@ static void apple_dfu_realize(USBDevice* dev, Error** errp)
     usb_desc_init(dev);
 
     s->upload            = g_byte_array_new();
+    s->images            = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_bytes_unref);
     s->reenumerate_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, apple_dfu_reenumerate, s);
 }
 
@@ -419,6 +445,7 @@ static void apple_dfu_unrealize(USBDevice* dev)
     g_byte_array_unref(s->upload);
     g_free(s->nonce);
     g_free(s->ticket_data);
+    g_hash_table_destroy(s->images);
 }
 
 static const Property apple_dfu_properties[] = {

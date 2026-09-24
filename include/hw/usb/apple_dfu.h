@@ -37,3 +37,6 @@ bool apple_dfu_booted(AppleDFUState* s);
 
 /// Copy the manifest the booted images were personalised with.
 bool apple_dfu_copy_ticket(AppleDFUState* s, gchar** data, gsize* length);
+
+/// Copy the last uploaded image with IM4P payload `type`.
+bool apple_dfu_copy_image(AppleDFUState* s, const char* type, uint8_t** data, gsize* length);
