@@ -457,7 +457,7 @@ static bool coroutine_fn vh_conn_announce_device(USBVirtualHereConn* conn)
         return true;
     }
 
-    short_info = vh_build_short_info(s, conn, desc, VIRTUALHERE_SERVER_DEVICE_ID);
+    short_info = vh_build_short_info(s, conn, desc, s->device_id);
 
     VIRTUALHERE_DPRINTF("%s: announcing %04x:%04x \"%s\" class %u/%u/%u %u config(s) state=%s\n", __func__,
                         le16_to_cpu(short_info->vendor_id), le16_to_cpu(short_info->product_id), short_info->product,
@@ -475,7 +475,7 @@ static bool coroutine_fn vh_conn_fail_claim(USBVirtualHereConn* conn)
 {
     g_autofree VHDeviceDesc* fail = vh_msg_new(sizeof(*fail), VIRTUALHERE_MSG_DEVICE_DESC);
 
-    fail->header.device_id = cpu_to_le16(VIRTUALHERE_SERVER_DEVICE_ID);
+    fail->header.device_id = cpu_to_le16(conn->s->device_id);
     fail->bind_result      = cpu_to_le32(VIRTUALHERE_BIND_ERROR);
 
     return vh_conn_send_lz4(conn, (const uint8_t*)fail, sizeof(*fail));
@@ -494,7 +494,7 @@ static bool coroutine_fn vh_handle_use_device(USBVirtualHereConn* conn)
 
     conn->using_device = true;
 
-    long_info = vh_build_long_info(s, desc, VIRTUALHERE_SERVER_DEVICE_ID);
+    long_info = vh_build_long_info(s, desc, s->device_id);
 
     VIRTUALHERE_DPRINTF("%s: sending long-info (%zu bytes)\n", __func__, sizeof(*long_info));
 
@@ -617,6 +617,9 @@ static bool coroutine_fn vh_handle_bulk_submit(USBVirtualHereConn* conn, const u
     return true;
 }
 
+static void vh_advance_device_id(USBVirtualHereState* s)
+{ s->device_id = s->device_id == UINT16_MAX ? VIRTUALHERE_SERVER_DEVICE_ID : s->device_id + 1; }
+
 typedef struct VHRemovalNotice
 {
     USBVirtualHereConn* conn;
@@ -631,7 +634,7 @@ static void coroutine_fn vh_notify_device_removed_co(void* opaque)
     g_autoptr(GByteArray) frames       = g_byte_array_new();
 
     if (notice->unbind) {
-        VHHeader hdr         = {.device_id = cpu_to_le16(VIRTUALHERE_SERVER_DEVICE_ID)};
+        VHHeader hdr         = {.device_id = gone->device_id};
         uint8_t  released[4] = {1, 0, 0, 0};
 
         vh_msg_append(frames, VIRTUALHERE_MSG_UNBIND_ACK, (const uint8_t*)&hdr, released, sizeof(released));
@@ -652,10 +655,10 @@ static void vh_notify_device_removed(USBVirtualHereConn* conn, bool unbind)
 
     notice->conn   = conn;
     notice->unbind = unbind;
-    notice->msg    = desc != NULL ? vh_build_short_info(s, conn, desc, VIRTUALHERE_SERVER_DEVICE_ID) :
+    notice->msg    = desc != NULL ? vh_build_short_info(s, conn, desc, s->device_id) :
                                     vh_msg_new(sizeof(VHDeviceInfo), VIRTUALHERE_MSG_DEVICE_INFO);
 
-    notice->msg->device_id = cpu_to_le16(VIRTUALHERE_SERVER_DEVICE_ID);
+    notice->msg->device_id = cpu_to_le16(s->device_id);
     notice->msg->state     = VIRTUALHERE_DEVICE_STATE_GONE;
 
     VIRTUALHERE_DPRINTF("%s: sending gone for %04x:%04x (%s record)\n", __func__, le16_to_cpu(notice->msg->vendor_id),
@@ -804,6 +807,8 @@ static void coroutine_fn vh_conn_dispatch(USBVirtualHereConn* conn, const uint8_
             vh_conn_abort_packets(conn);
             usb_uplink_release(&conn->s->usb);
             vh_conn_send_msg(conn, VIRTUALHERE_MSG_UNBIND_ACK, msg, released, sizeof(released));
+            vh_notify_device_removed(conn, false);
+            vh_advance_device_id(conn->s);
             break;
         }
         case VIRTUALHERE_MSG_CTRL_SUBMIT: vh_handle_ctrl_submit(conn, msg, len); break;
@@ -938,8 +943,10 @@ static void usb_virtualhere_attach(USBPort* port)
 
 static void usb_virtualhere_detach(USBPort* port)
 {
-    USBVirtualHereState* s    = port->opaque;
-    USBVirtualHereConn*  conn = s->active_conn;
+    USBVirtualHereState* s     = port->opaque;
+    USBVirtualHereConn*  conn  = s->active_conn;
+    bool                 last  = usb_uplink_active_except(&s->usb, port) == NULL;
+    bool                 bound = conn != NULL && !conn->closed && conn->using_device;
 
     VIRTUALHERE_DPRINTF("%s: port[%d] detached, remaining=%p\n", __func__, port->index,
                         usb_uplink_active_except(&s->usb, port));
@@ -947,14 +954,14 @@ static void usb_virtualhere_detach(USBPort* port)
     if (conn != NULL && !conn->closed) {
         vh_conn_abort_packets(conn);
 
-        if (usb_uplink_active_except(&s->usb, port) == NULL) {
-            bool bound = conn->using_device;
-
+        if (last) {
             conn->using_device = false;
             conn->use_pending  = false;
             vh_notify_device_removed(conn, bound);
         }
     }
+
+    if (last && bound) { vh_advance_device_id(s); }
 
     usb_uplink_invalidate(&s->usb);
 }
@@ -1005,6 +1012,7 @@ static void usb_virtualhere_realize(DeviceState* dev, Error** errp)
     if (s->server_host == NULL) { s->server_host = g_strdup(g_get_host_name()); }
     if (s->addr == NULL) { s->addr = g_strdup(VIRTUALHERE_SERVER_DEFAULT_ADDR); }
     vh_init_server_guid(s);
+    s->device_id = VIRTUALHERE_SERVER_DEVICE_ID;
 
     usb_uplink_init(&s->usb, dev, &usb_virtualhere_bus_ops, &usb_virtualhere_port_ops, s);
 

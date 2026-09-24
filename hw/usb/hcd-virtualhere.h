@@ -58,6 +58,7 @@ struct USBVirtualHereState
     Notifier exit_notifier;
 
     USBVirtualHereConn* active_conn;
+    uint16_t            device_id;
 
     char*   server_name;
     char*   server_id;
