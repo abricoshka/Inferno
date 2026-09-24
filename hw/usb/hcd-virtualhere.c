@@ -788,8 +788,10 @@ static void coroutine_fn vh_conn_dispatch(USBVirtualHereConn* conn, const uint8_
             break;
         }
         case VIRTUALHERE_MSG_DEVICE_INIT: {
-            uint8_t status[4] = {0};
+            USBDevice* dev       = usb_uplink_active(&conn->s->usb);
+            uint8_t    status[4] = {0};
 
+            if (dev != NULL) { usb_device_reset(dev); }
             vh_conn_send_msg(conn, VIRTUALHERE_MSG_DEVICE_INIT_ACK, msg, status, sizeof(status));
             break;
         }
