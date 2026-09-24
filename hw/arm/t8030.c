@@ -698,7 +698,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     hdr = t8030->kernel;
     if (hdr == NULL) {
-        error_setg(&error_fatal, "No kernel to boot; specify it via `-kernel` or restore through DFU");
+        error_setg(&error_fatal, "No kernel to boot; restore through DFU");
         return;
     }
 
@@ -2613,19 +2613,12 @@ static void t8030_init(MachineState* machine)
         return;
     }
 
-    if (machine->kernel_filename != NULL) {
-        t8030_set_kernel(t8030, apple_boot_load_kernel(machine->kernel_filename, NULL));
-    }
-    else if (t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, NULL)) {
+    if (t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, NULL)) {
         t8030_set_kernel(t8030, apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL));
     }
 
     if (t8030->securerom_filename == NULL) {
-        if (t8030->trustcache_filename != NULL) {
-            t8030->trustcache =
-                apple_boot_load_trustcache_file(t8030->trustcache_filename, &t8030->boot_info.trustcache_size);
-        }
-        else if (t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, NULL)) {
+        if (t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, NULL)) {
             t8030->trustcache =
                 apple_boot_load_trustcache_data(PREBOOT_TRUSTCACHE, data, len, &t8030->boot_info.trustcache_size);
         }
@@ -2819,7 +2812,6 @@ static char* t8030_get_boot_mode(Object* obj, Error** errp)
 PROP_VISIT_GETTER_SETTER(uint64, ecid);
 PROP_GETTER_SETTER(bool, kaslr_off);
 PROP_GETTER_SETTER(bool, force_dfu);
-PROP_STR_GETTER_SETTER(trustcache_filename);
 PROP_STR_GETTER_SETTER(sep_rom_filename);
 PROP_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
@@ -2849,8 +2841,6 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     mc->fixup_ram_size    = t8030_fixup_ram_size;
     mc->default_ram_id    = "t8030.ram";
 
-    object_class_property_add_str(klass, "trustcache", t8030_get_trustcache_filename, t8030_set_trustcache_filename);
-    object_class_property_set_description(klass, "trustcache", "TrustCache");
     object_class_property_add_str(klass, "sep-rom", t8030_get_sep_rom_filename, t8030_set_sep_rom_filename);
     object_class_property_set_description(klass, "sep-rom", "SEP ROM");
     object_class_property_add_str(klass, "securerom", t8030_get_securerom_filename, t8030_set_securerom_filename);

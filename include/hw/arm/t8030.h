@@ -56,7 +56,6 @@ typedef struct
     gsize           securerom_size;
     AppleBootInfo   boot_info;
     AppleVideoArgs  video_args;
-    char*           trustcache_filename;
     char*           sep_rom_filename;
     char*           securerom_filename;
     uint32_t        sio_protocol;
