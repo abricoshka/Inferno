@@ -2557,6 +2557,7 @@ static void t8030_init(MachineState* machine)
     hwaddr*                 ranges;
     uint8_t*                data;
     gsize                   len;
+    Error*                  err = NULL;
 
     t8030 = APPLE_T8030(machine);
 
@@ -2600,7 +2601,11 @@ static void t8030_init(MachineState* machine)
 
     if (machine->dtb != NULL) { t8030->device_tree = apple_boot_load_dt_file(machine->dtb); }
     else {
-        t8030_load_preboot_file(PREBOOT_DEVICETREE, &data, &len, &error_fatal);
+        if (!t8030_load_preboot_file(PREBOOT_DEVICETREE, &data, &len, &err)) {
+            error_prepend(&err, "`-dtb` is required when the device tree cannot be read from Preboot: ");
+            error_propagate(&error_fatal, err);
+            return;
+        }
         t8030->device_tree = apple_boot_load_dt_data(PREBOOT_DEVICETREE, data, len);
     }
     if (t8030->device_tree == NULL) {
