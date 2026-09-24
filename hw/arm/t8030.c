@@ -415,6 +415,11 @@ static void t8030_rtkit_mem_setup(AppleT8030MachineState* t8030, CarveoutAllocat
     t8030_rtkit_seg_prop_setup(iop_nub, carveout_alloc_mem(ca, size), size);
 }
 
+static const uint8_t t8030_sep_nonce[] = {
+    0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED,
+    0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE,
+};
+
 static void t8030_memory_setup(AppleT8030MachineState* t8030)
 {
     AppleDTNode*       carveout_memory_map;
@@ -425,6 +430,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     AppleDTNode*       memory_map;
     bool               have_autoboot;
     bool               auto_boot;
+    bool               skip_dfu = false;
     char*              cmdline;
     char*              seprom;
     gsize              fsize;
@@ -475,7 +481,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     info_report("Boot Mode: %u", t8030->boot_info.boot_mode);
     switch (t8030->boot_info.boot_mode) {
-        case kAppleBootModeEnterRecovery:
+        case kAppleBootModeEnterRecovery: skip_dfu = true; QEMU_FALLTHROUGH;
+        case kAppleBootModeDFU:
             auto_boot = false;
             env_unset(nvram, "auto-boot");
             t8030->boot_info.boot_mode = kAppleBootModeAuto;
@@ -552,6 +559,16 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         return;
     }
 
+    if (!auto_boot && !skip_dfu && !apple_dfu_booted(t8030->dfu)) {
+        g_autofree uint8_t* nonce     = NULL;
+        size_t              nonce_len = 0;
+
+        apple_boot_compute_ap_nonce(t8030->device_tree, info->boot_nonce_generator, &nonce, &nonce_len);
+        apple_dfu_start(t8030->dfu, nonce, nonce_len, t8030_sep_nonce, sizeof(t8030_sep_nonce));
+        g_free(cmdline);
+        return;
+    }
+
     // HACK: Use DEV model to restore without FDR errors
     // NOTE: Previously restored back to AP, however,
     // iOS 16+ kernel panics because of the AP ticket,
@@ -611,7 +628,9 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         t8030->boot_info.ticket_length = 0;
     }
 
-    apple_boot_extract_manifest(buffer, fwlen, &info->ticket_data, &info->ticket_length);
+    if (!apple_dfu_copy_ticket(t8030->dfu, &info->ticket_data, &info->ticket_length)) {
+        apple_boot_extract_manifest(buffer, fwlen, &info->ticket_data, &info->ticket_length);
+    }
     g_free(buffer);
 
     hdr = t8030->kernel;
@@ -1404,6 +1423,7 @@ static void t8030_create_usb(AppleT8030MachineState* t8030)
     IOMMUMemoryRegion* iommu = NULL;
     uint32_t*          ints;
     DeviceState*       host;
+    USBDevice*         dfu;
 
     dart = APPLE_DART(object_property_get_link(OBJECT(t8030), "dart-usb", &error_fatal));
 
@@ -1445,6 +1465,14 @@ static void t8030_create_usb(AppleT8030MachineState* t8030)
         sysbus_connect_irq(SYS_BUS_DEVICE(atc), i, qdev_get_gpio_in(DEVICE(t8030->aic), ints[i]));
     }
     sysbus_connect_irq(SYS_BUS_DEVICE(atc), 4, qdev_get_gpio_in(DEVICE(t8030->aic), DWC2_IRQ));
+
+    dfu = USB_DEVICE(qdev_new(TYPE_APPLE_DFU));
+    qdev_prop_set_uint32(DEVICE(dfu), "cpid", 0x8030);
+    qdev_prop_set_uint32(DEVICE(dfu), "cprv", t8030->chip_revision);
+    qdev_prop_set_uint32(DEVICE(dfu), "bdid", t8030->board_id);
+    qdev_prop_set_uint64(DEVICE(dfu), "ecid", t8030->ecid);
+    usb_realize_and_unref(dfu, USB_BUS(QLIST_FIRST(&host->child_bus)), &error_fatal);
+    t8030->dfu = APPLE_DFU(dfu);
 }
 
 static void t8030_create_wdt(AppleT8030MachineState* t8030)
@@ -2394,6 +2422,8 @@ static void t8030_cpu_reset(AppleT8030MachineState* t8030)
     uint64_t       m_lo;
     uint64_t       m_hi;
 
+    if (apple_dfu_waiting(t8030->dfu)) { return; }
+
     qemu_guest_getrandom(&m_lo, sizeof(m_lo), NULL);
     qemu_guest_getrandom(&m_hi, sizeof(m_hi), NULL);
 
@@ -2707,6 +2737,9 @@ static void t8030_set_boot_mode(Object* obj, const char* value, Error** errp)
     else if (g_str_equal(value, "exit_recovery")) {
         boot_mode = kAppleBootModeExitRecovery;
     }
+    else if (g_str_equal(value, "dfu")) {
+        boot_mode = kAppleBootModeDFU;
+    }
     else {
         error_setg(errp, "Invalid boot mode: %s", value);
         return;
@@ -2720,6 +2753,7 @@ static char* t8030_get_boot_mode(Object* obj, Error** errp)
     switch (APPLE_T8030(obj)->boot_info.boot_mode) {
         case kAppleBootModeEnterRecovery: return g_strdup("enter_recovery");
         case kAppleBootModeExitRecovery : return g_strdup("exit_recovery");
+        case kAppleBootModeDFU          : return g_strdup("dfu");
         default                         : return g_strdup("auto");
     }
 }

@@ -26,6 +26,7 @@
 #include "hw/arm/boot.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
+#include "hw/usb/apple_dfu.h"
 #include "qapi/qapi-types-usb.h"
 #include "system/kvm.h"
 
@@ -69,6 +70,7 @@ typedef struct
     uint8_t         amcc_reg[0x100000];
     bool            kaslr_off;
     bool            force_dfu;
+    AppleDFUState*  dfu;
     uint32_t        board_id;
     uint32_t        chip_revision;
     char*           usb_uplink_addr;

@@ -337,6 +337,7 @@ typedef enum
     kAppleBootModeAuto = 0,
     kAppleBootModeEnterRecovery,
     kAppleBootModeExitRecovery,
+    kAppleBootModeDFU,
 } AppleBootMode;
 
 typedef struct
