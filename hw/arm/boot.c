@@ -983,8 +983,10 @@ MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_d
 
     extract_im4p_payload(filename, file_data, file_len, payload_type, &data, &len, (uint8_t**)secure_monitor);
 
-    if (memcmp(payload_type, "krnl", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
-        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `krnl`)", filename, payload_type);
+    if (memcmp(payload_type, "krnl", 4) != 0 && memcmp(payload_type, "rkrn", 4) != 0
+        && memcmp(payload_type, "raw", 4) != 0)
+    {
+        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `krnl`/`rkrn`)", filename, payload_type);
         return NULL;
     }
 
