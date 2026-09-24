@@ -317,9 +317,8 @@ void usb_unregister_port(USBBus* bus, USBPort* port)
 
 void usb_claim_port(USBDevice* dev, Error** errp)
 {
-    USBBus*    bus = usb_bus_from_device(dev);
-    USBPort*   port;
-    USBDevice* hub;
+    USBBus*  bus = usb_bus_from_device(dev);
+    USBPort* port;
 
     assert(dev->port == NULL);
 
@@ -333,11 +332,6 @@ void usb_claim_port(USBDevice* dev, Error** errp)
         }
     }
     else {
-        if (bus->nfree == 1 && strcmp(object_get_typename(OBJECT(dev)), "usb-hub") != 0) {
-            /* Create a new hub and chain it on */
-            hub = USB_DEVICE(qdev_try_new("usb-hub"));
-            if (hub) { usb_realize_and_unref(hub, bus, NULL); }
-        }
         if (bus->nfree == 0) {
             error_setg(errp,
                        "tried to attach usb device %s to a bus "
