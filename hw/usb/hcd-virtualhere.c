@@ -388,7 +388,7 @@ static void coroutine_fn vh_send_ctrl_ack_co(void* opaque)
 
     memcpy(ack->setup, pkt->setup, sizeof(ack->setup));
     ack->status   = cpu_to_le32(pkt->out_status);
-    ack->data_len = cpu_to_le32(length);
+    ack->data_len = cpu_to_le32(pkt->base.p.actual_length);
     if (length) { memcpy(ack->data, pkt->buffer, length); }
 
     vh_send_ack(pkt, ack, size);
