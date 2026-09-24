@@ -513,16 +513,29 @@ void apple_boot_setup_boot_nonce(AppleNvram* nvram, AppleBootInfo* info)
     }
 }
 
+void apple_boot_compute_ap_nonce(AppleDTNode* root, uint64_t generator, uint8_t** nonce, size_t* nonce_len)
+{
+    AppleDTNode*    chosen = apple_dt_get_node(root, "chosen");
+    QCryptoHashAlgo alg;
+    uint8_t         data[sizeof(generator)];
+    size_t          hash_len = 0;
+
+    assert_nonnull(chosen);
+
+    alg = apple_boot_get_crypto_hash_alg(chosen);
+    stq_le_p(data, generator);
+    qcrypto_hash_bytes(alg, (const char*)data, sizeof(data), nonce, &hash_len, &error_fatal);
+
+    *nonce_len = alg == QCRYPTO_HASH_ALGO_SHA1 ? 20 : 32;
+    assert_cmpuint(hash_len, >=, *nonce_len);
+}
+
 void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot)
 {
-    AppleDTNode*    child;
-    AppleDTProp*    prop;
-    char*           boot_nonce_data;
-    size_t          boot_nonce_len;
-    QCryptoHashAlgo nonce_alg;
-    size_t          nonce_len;
-    uint8_t*        hash     = NULL;
-    size_t          hash_len = 0;
+    AppleDTNode* child;
+    AppleDTProp* prop;
+    uint8_t*     nonce     = NULL;
+    size_t       nonce_len = 0;
 
     assert_cmphex(info->nvram_size, <=, XNU_MAX_NVRAM_SIZE);
 
@@ -537,13 +550,8 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 
     prop = apple_dt_get_prop(child, "boot-nonce");
     assert_nonnull(prop);
-    boot_nonce_data = prop->data;
-    boot_nonce_len  = prop->len;
-    assert_cmpuint(boot_nonce_len, ==, sizeof(info->boot_nonce_generator));
-    stq_le_p(boot_nonce_data, info->boot_nonce_generator);
-
-    nonce_alg = apple_boot_get_crypto_hash_alg(child);
-    nonce_len = nonce_alg == QCRYPTO_HASH_ALGO_SHA1 ? 20 : 32;
+    assert_cmpuint(prop->len, ==, sizeof(info->boot_nonce_generator));
+    stq_le_p(prop->data, info->boot_nonce_generator);
 
     apple_dt_set_prop_u64(child, "dram-base", info->dram_base);
     apple_dt_set_prop_u64(child, "dram-size", info->dram_size);
@@ -586,15 +594,9 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 
     child = apple_dt_get_node(root, "chosen/manifest-properties");
     assert_nonnull(child);
-    if (qcrypto_hash_bytes(nonce_alg, boot_nonce_data, boot_nonce_len, &hash, &hash_len, &error_fatal) >= 0) {
-        apple_dt_set_prop(child, "BNCH", nonce_len, hash);
-        g_free(hash);
-        hash     = NULL;
-        hash_len = 0;
-    }
-    else {
-        return;
-    }
+    apple_boot_compute_ap_nonce(root, info->boot_nonce_generator, &nonce, &nonce_len);
+    apple_dt_set_prop(child, "BNCH", nonce_len, nonce);
+    g_free(nonce);
 
     child = apple_dt_get_node(root, "product");
     assert_nonnull(child);
