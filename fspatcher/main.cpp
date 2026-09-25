@@ -22,112 +22,7 @@
 #include "patcher.hpp"
 #include <filesystem>
 #include <iostream>
-
-struct PatcherCLI
-{
-    union Flags
-    {
-        struct
-        {
-            std::uint8_t help         : 1;
-            std::uint8_t revertOnly   : 1;
-            std::uint8_t dryRun       : 1;
-            std::uint8_t unredactLogs : 1;
-            std::uint8_t openGLES     : 1;
-            std::uint8_t metal        : 1;
-            std::uint8_t cryptex      : 1;
-            std::uint8_t _rsvd        : 1;
-        } v;
-        std::uint8_t raw;
-
-        explicit constexpr Flags() :
-            raw(0)
-        { }
-    } flags;
-    std::filesystem::path diskPath;
-    std::filesystem::path cachePath;
-
-    static void print_usage(const int argc, char** argv)
-    {
-        const auto* const executable = argc == 0 || argv[0] == nullptr ? "inferno-fs-patcher" : argv[0];
-        std::cerr << "Usage: " << executable << " [OPTIONS..] <DYLD_CACHE_PATH>\n";
-        std::cerr << "\nOptions:\n";
-        std::cerr << "  -d, --disk IMAGE |  Patch DYLD_CACHE_PATH in the System volume of the disk image IMAGE.\n";
-        std::cerr << "  -c, --cryptex    |  With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead.\n";
-        std::cerr << "  -r, --revert     |  Revert bytes to the original state, without reapplying patches.\n";
-        std::cerr << "  -n, --dry-run    |  Revert bytes and run patcher, but do not apply the patch modifications.\n";
-        std::cerr << "  --unredact-logs  |  Patch libsystem_trace.dylib to unredact logs.\n";
-        std::cerr << "  --opengles       |  Apply minimal patches necessary for the lack of Metal rendering.\n";
-        std::cerr << "  --metal          |  Apply no rendering patches.\n";
-        std::cerr << "  -h, --help       |  Show usage of this program (this text).\n";
-    }
-
-    void check_mutually_exclusive() const
-    {
-        if (this->flags.v.revertOnly && this->flags.v.dryRun) {
-            throw std::runtime_error("--revert and --dry-run are mutually exclusive");
-        }
-        if (this->flags.v.openGLES && this->flags.v.metal) {
-            throw std::runtime_error("--opengles and --metal are mutually exclusive");
-        }
-    }
-
-    explicit PatcherCLI() = default;
-
-    explicit PatcherCLI(const int argc, char** argv)
-    {
-        if (argc < 2) { throw std::runtime_error("inadequate parameters (expected at least 1)"); }
-        if (argc > 8) { throw std::runtime_error("superfluous parameters (expected at most 7)"); }
-
-        for (int i = 1; i < argc; ++i) {
-            const std::string_view param = argv[i];
-
-            if (param == "-h" || param == "--help") {
-                this->flags.v.help = true;
-                return;
-            }
-
-            if (this->diskPath.empty() && (param == "-d" || param == "--disk")) {
-                if (++i == argc) { throw std::runtime_error("missing IMAGE parameter"); }
-                this->diskPath = argv[i];
-            }
-            else if (!this->flags.v.cryptex && (param == "-c" || param == "--cryptex")) {
-                this->flags.v.cryptex = true;
-            }
-            else if (!this->flags.v.revertOnly && (param == "-r" || param == "--revert")) {
-                this->flags.v.revertOnly = true;
-                this->check_mutually_exclusive();
-            }
-            else if (!this->flags.v.dryRun && (param == "-n" || param == "--dry-run")) {
-                this->flags.v.dryRun = true;
-                this->check_mutually_exclusive();
-            }
-            else if (!this->flags.v.unredactLogs && param == "--unredact-logs") {
-                this->flags.v.unredactLogs = true;
-            }
-            else if (!this->flags.v.openGLES && param == "--no-swr") {
-                this->flags.v.openGLES = true;
-            }
-            else if (this->cachePath.empty()) {
-                this->cachePath = param;
-            }
-            else {
-                throw std::runtime_error("unexpected combination of parameters");
-            }
-        }
-
-        if (this->cachePath.empty()) { throw std::runtime_error("missing DYLD_CACHE_PATH parameter"); }
-        if (this->flags.v.cryptex && this->diskPath.empty()) { throw std::runtime_error("--cryptex requires --disk"); }
-    }
-
-    constexpr bool help() const noexcept { return this->flags.v.help; }
-    constexpr bool revert_only() const noexcept { return this->flags.v.revertOnly; }
-    constexpr bool dry_run() const noexcept { return this->flags.v.dryRun; }
-    constexpr bool unredact_logs() const noexcept { return this->flags.v.unredactLogs; }
-    constexpr bool opengles() const noexcept { return this->flags.v.openGLES; }
-    constexpr bool metal() const noexcept { return this->flags.v.metal; }
-    constexpr bool cryptex() const noexcept { return this->flags.v.cryptex; }
-};
+#include <CLI/CLI.hpp>
 
 namespace
 {
@@ -452,27 +347,58 @@ namespace
         }
     };
 
-    void run(const PatcherCLI& cli)
+    auto run(const int argc, char* argv[])
     {
-        Storage             storage(cli.diskPath, cli.cryptex());
-        const CacheAnalyser analyser(storage, cli.cachePath);
+        std::filesystem::path diskPath;
+        std::filesystem::path cachePath;
+        bool                  cryptex      = false;
+        bool                  revertOnly   = false;
+        bool                  dryRun       = false;
+        bool                  unredactLogs = false;
+        bool                  opengles     = false;
+        bool                  metal        = false;
+
+        CLI::App app{"Inferno Filesystem Patcher"};
+        argv = app.ensure_utf8(argv);
+
+        app.add_option("-d,--disk", diskPath, "Patch DYLD_CACHE_PATH in the System volume of the disk image IMAGE")
+            ->check(CLI::ExistingFile);
+        app.add_option("-c,--cryptex", cryptex, "With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead");
+        const auto revertOnlyOpt =
+            app.add_option("-r,--revert", revertOnly, "Revert bytes to the original state, without reapplying patches");
+        const auto dryRunOpt = app.add_option("-n,--dry-run", dryRun,
+                                              "Revert bytes and run patcher, but do not apply the patch modifications");
+        revertOnlyOpt->excludes(dryRunOpt);
+        dryRunOpt->excludes(revertOnlyOpt);
+        app.add_option("--unredact-logs", unredactLogs, "Patch libsystem_trace.dylib to unredact logs");
+        const auto openglesOpt =
+            app.add_option("--opengles", opengles, "Apply minimal patches necessary for the lack of Metal rendering");
+        const auto metalOpt = app.add_option("--metal", metal, "Apply no rendering patches");
+        openglesOpt->excludes(metalOpt);
+        metalOpt->excludes(openglesOpt);
+        app.add_option("dyld_cache_path", cachePath, "Path to the main dyld_shared_cache_arm64e file")->required();
+
+        CLI11_PARSE(app, argc, argv);
+
+        Storage             storage(diskPath, cryptex);
+        const CacheAnalyser analyser(storage, cachePath);
 
         for (const auto& cache : analyser.caches) {
             if (Patcher::revert(storage, cache.first)) { std::cout << "Reverted `" << cache.first << "`.\n"; }
         }
 
-        if (cli.revert_only()) {
+        if (revertOnly) {
             std::cout << "Revert completed successfully.\n";
-            return;
+            return 0;
         }
 
         Patcher   patcher(storage);
         Assembler assembler(patcher);
 
         std::cout << "Building patches...\n";
-        if (!cli.metal()) {
-            CoreImagePatches(analyser, assembler).apply(cli.opengles());
-            QuartzCorePatches(analyser, assembler).apply(cli.opengles());
+        if (!metal) {
+            CoreImagePatches(analyser, assembler).apply(opengles);
+            QuartzCorePatches(analyser, assembler).apply(opengles);
             SpringBoardFoundationPatches(analyser, assembler).apply();
             CMCapturePatches(analyser, assembler).apply();
             NeutrinoCorePatches(analyser, assembler).apply();
@@ -490,18 +416,20 @@ namespace
             }
         }
         LibTelephonyUtilDynamicPatches(analyser, assembler, patcher).apply();
-        if (cli.unredact_logs()) { LibSystemTracePatches(analyser, assembler).apply(); }
+        if (unredactLogs) { LibSystemTracePatches(analyser, assembler).apply(); }
         std::cout << "Patches built successfully.\n";
 
         patcher.rehash();
 
         patcher.print_changes();
 
-        if (!cli.dry_run()) {
+        if (!dryRun) {
             std::cout << "Applying changes...\n";
             patcher.flush();
             std::cout << "Changes applied successfully.\n";
         }
+
+        return 0;
     }
 
 }    // namespace
@@ -511,25 +439,8 @@ auto main(const int argc, char* argv[]) -> int
     std::cout << std::hex << std::showbase;
     std::cerr << std::hex << std::showbase;
 
-    PatcherCLI cli;
     try {
-        cli = PatcherCLI(argc, argv);
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << ".\n\n";
-        PatcherCLI::print_usage(argc, argv);
-
-        return EXIT_FAILURE;
-    }
-
-    if (cli.help()) {
-        PatcherCLI::print_usage(argc, argv);
-
-        return EXIT_SUCCESS;
-    }
-
-    try {
-        run(cli);
+        return run(argc, argv);
     }
     catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << ".\n";
