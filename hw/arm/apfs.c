@@ -23,6 +23,7 @@
 #include "qemu/bswap.h"
 #include "qemu/units.h"
 #include "system/block-backend.h"
+#include "hw/arm/libzbitmap.h"
 #include <zlib.h>
 
 #define GPT_LBA_SIZE    (4096)
@@ -67,11 +68,12 @@
 #define APFS_XATTR_DATA_EMBEDDED (1 << 1)
 #define APFS_RSRC_XATTR          "com.apple.ResourceFork"
 
-#define DECMPFS_XATTR          "com.apple.decmpfs"
-#define DECMPFS_MAGIC          (0x636D7066)    // 'fpmc', little-endian on disk
-#define DECMPFS_TYPE_ZLIB_RSRC (4)
-#define DECMPFS_CHUNK_SIZE     (64 * KiB)
-#define DECMPFS_CHUNK_RAW      (0xFF)
+#define DECMPFS_XATTR              "com.apple.decmpfs"
+#define DECMPFS_MAGIC              (0x636D7066)    // 'fpmc', little-endian on disk
+#define DECMPFS_TYPE_ZLIB_RSRC     (4)
+#define DECMPFS_TYPE_LZBITMAP_RSRC (14)
+#define DECMPFS_CHUNK_SIZE         (64 * KiB)
+#define DECMPFS_CHUNK_RAW          (0xFF)
 
 static const uint8_t gpt_apfs_type_guid[16] = {
     0xEF, 0x57, 0x34, 0x7C, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC,
@@ -254,6 +256,7 @@ struct ApfsFile
     /// Bytes that `extents` hold: the file itself, or its resource fork when compressed.
     uint64_t data_size;
     bool     compressed;
+    uint32_t compression_type;
     uint64_t chunk_table;
     uint32_t chunk_count;
 };
@@ -805,9 +808,13 @@ static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* pat
         error_setg(errp, "`%s` has a bad decmpfs magic 0x%08x", path, ldl_le_p(decmpfs.data));
         return false;
     }
-    if (ldl_le_p(decmpfs.data + 4) != DECMPFS_TYPE_ZLIB_RSRC) {
-        error_setg(errp, "`%s` uses unsupported decmpfs compression type %u", path, ldl_le_p(decmpfs.data + 4));
-        return false;
+    file->compression_type = ldl_le_p(decmpfs.data + 4);
+    switch (file->compression_type) {
+        case DECMPFS_TYPE_ZLIB_RSRC    :
+        case DECMPFS_TYPE_LZBITMAP_RSRC: break;
+        default:
+            error_setg(errp, "`%s` uses unsupported decmpfs compression type %u", path, file->compression_type);
+            return false;
     }
     size = ldq_le_p(decmpfs.data + 8);
 
@@ -821,6 +828,13 @@ static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* pat
     file->data_size = ldq_le_p(rsrc.data + 8);
     if (!apfs_load_extents(ctx, ldq_le_p(rsrc.data), file->extents, errp)) { return false; }
 
+    file->compressed  = true;
+    file->size        = size;
+    file->chunk_count = (size + DECMPFS_CHUNK_SIZE - 1) / DECMPFS_CHUNK_SIZE;
+
+    // The resource fork is just the chunk offsets, one more than there are chunks, then the chunks.
+    if (file->compression_type == DECMPFS_TYPE_LZBITMAP_RSRC) { return true; }
+
     // Resource fork header (big-endian): dataOffset, mapOffset, dataLength, mapLength.
     // The chunk table sits right after the leading 4-byte length at dataOffset.
     if (!apfs_data_io(file, 0, sizeof(rsrc_hdr), rsrc_hdr, false, errp)) { return false; }
@@ -831,9 +845,6 @@ static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* pat
         return false;
     }
 
-    file->compressed  = true;
-    file->size        = size;
-    file->chunk_count = (size + DECMPFS_CHUNK_SIZE - 1) / DECMPFS_CHUNK_SIZE;
     return true;
 }
 
@@ -974,12 +985,24 @@ static bool apfs_chunk_entry(ApfsFile* file, uint32_t idx, uint64_t* off, uint32
         return false;
     }
 
-    if (!apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8, sizeof(entry), entry, false, errp)) {
-        return false;
-    }
+    if (file->compression_type == DECMPFS_TYPE_LZBITMAP_RSRC) {
+        if (!apfs_data_io(file, (uint64_t)idx * 4, sizeof(entry), entry, false, errp)) { return false; }
 
-    *off  = file->chunk_table + ldl_le_p(entry);
-    *size = ldl_le_p(entry + 4);
+        *off = ldl_le_p(entry);
+        if ((uint32_t)ldl_le_p(entry + 4) < *off) {
+            error_setg(errp, "APFS decmpfs chunk %u is corrupt", idx);
+            return false;
+        }
+        *size = (uint32_t)ldl_le_p(entry + 4) - *off;
+    }
+    else {
+        if (!apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8, sizeof(entry), entry, false, errp)) {
+            return false;
+        }
+
+        *off  = file->chunk_table + ldl_le_p(entry);
+        *size = ldl_le_p(entry + 4);
+    }
     if (*off + *size > file->data_size) {
         error_setg(errp, "APFS decmpfs chunk %u overruns the resource fork", idx);
         return false;
@@ -994,6 +1017,7 @@ static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t
     uint64_t            off;
     uint32_t            size;
     uLongf              dst_len;
+    size_t              zbm_len;
 
     if (!apfs_chunk_entry(file, idx, &off, &size, errp)) { return false; }
 
@@ -1006,6 +1030,14 @@ static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t
             return false;
         }
         memcpy(out, comp + 1, out_len);
+        return true;
+    }
+
+    if (file->compression_type == DECMPFS_TYPE_LZBITMAP_RSRC) {
+        if (zbm_decompress(out, out_len, comp, size, &zbm_len) != 0 || zbm_len != out_len) {
+            error_setg(errp, "APFS decmpfs chunk %u failed to decompress", idx);
+            return false;
+        }
         return true;
     }
 
@@ -1025,6 +1057,11 @@ static bool apfs_chunk_write(ApfsFile* file, uint32_t idx, const uint8_t* in, ui
     uint32_t            old_size;
     uLongf              comp_len;
     uint8_t             entry_size[4];
+
+    if (file->compression_type != DECMPFS_TYPE_ZLIB_RSRC) {
+        error_setg(errp, "APFS decmpfs compression type %u cannot be written", file->compression_type);
+        return false;
+    }
 
     if (!apfs_chunk_entry(file, idx, &off, &old_size, errp)) { return false; }
 
