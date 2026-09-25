@@ -66,19 +66,9 @@ ApfsFile* disk_file_open(BlockBackend* blk, const char* path, char** err)
 
 ApfsFile* disk_cryptex_open(BlockBackend* blk, char** err)
 {
-    Error*              local_err = NULL;
-    g_autofree uint8_t* active    = NULL;
-    g_autofree char*    path      = NULL;
-    gsize               active_len;
-    ApfsFile*           file;
+    Error*    local_err = NULL;
+    ApfsFile* file      = apfs_open_file(blk, APFS_VOL_ROLE_PREBOOT, "cryptex1/current/os.dmg", &local_err);
 
-    if (!apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, "active", &active, &active_len, &local_err)) {
-        *err = disk_take_error(local_err);
-        return NULL;
-    }
-
-    path = g_strdup_printf("%s/cryptex1/current/os.dmg", (char*)active);
-    file = apfs_open_file(blk, APFS_VOL_ROLE_PREBOOT, path, &local_err);
     if (file == NULL) { *err = disk_take_error(local_err); }
 
     return file;
