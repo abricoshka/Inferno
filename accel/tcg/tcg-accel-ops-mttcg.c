@@ -49,7 +49,7 @@ static void mttcg_force_rcu(Notifier* notify, void* data)
      * Called with rcu_registry_lock held, using async_run_on_cpu() ensures
      * that there are no deadlocks.
      */
-    async_run_on_cpu(cpu, do_nothing, RUN_ON_CPU_NULL);
+    async_run_on_cpu_no_bql(cpu, do_nothing, RUN_ON_CPU_NULL);
 }
 
 /*
@@ -58,14 +58,22 @@ static void mttcg_force_rcu(Notifier* notify, void* data)
  * current CPUState for a given thread.
  */
 
-/* Whether anything the outer loop handles under the BQL is pending. */
+/*
+ * Run BQL-free work and sleep while idle, then return whether anything the
+ * outer loop handles under the BQL is pending.
+ */
 static bool mttcg_exit_needs_bql(CPUState* cpu, int r)
 {
     if (r == EXCP_DEBUG || r == EXCP_ATOMIC) { return true; }
-    if (qatomic_read(&cpu->stop) || qatomic_read(&cpu->unplug)) { return true; }
-    if (!cpu_work_list_empty(cpu)) { return true; }
 
-    return cpu_thread_is_idle(cpu);
+    while (true) {
+        qemu_event_reset(&cpu->halt_event);
+        if (qatomic_read(&cpu->stop) || qatomic_read(&cpu->unplug)) { return true; }
+        process_queued_cpu_work_no_bql(cpu);
+        if (!cpu_work_list_empty(cpu)) { return true; }
+        if (!cpu_thread_is_idle(cpu)) { return false; }
+        qemu_event_wait(&cpu->halt_event);
+    }
 }
 
 static void* mttcg_cpu_thread_fn(void* arg)

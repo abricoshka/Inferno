@@ -115,7 +115,7 @@ struct qemu_work_item
     QSIMPLEQ_ENTRY(qemu_work_item) node;
     run_on_cpu_func func;
     run_on_cpu_data data;
-    bool            free, exclusive, done;
+    bool            free, exclusive, no_bql, done;
 };
 
 static void queue_work_on_cpu(CPUState* cpu, struct qemu_work_item* wi)
@@ -143,6 +143,7 @@ void do_run_on_cpu(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data, Qe
     wi.done      = false;
     wi.free      = false;
     wi.exclusive = false;
+    wi.no_bql    = false;
 
     queue_work_on_cpu(cpu, &wi);
     while (!qatomic_load_acquire(&wi.done)) {
@@ -161,6 +162,19 @@ void async_run_on_cpu(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data)
     wi->func = func;
     wi->data = data;
     wi->free = true;
+
+    queue_work_on_cpu(cpu, wi);
+}
+
+void async_run_on_cpu_no_bql(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data)
+{
+    struct qemu_work_item* wi;
+
+    wi         = g_new0(struct qemu_work_item, 1);
+    wi->func   = func;
+    wi->data   = data;
+    wi->free   = true;
+    wi->no_bql = true;
 
     queue_work_on_cpu(cpu, wi);
 }
@@ -360,6 +374,28 @@ void process_queued_cpu_work(CPUState* cpu)
     }
     qemu_mutex_unlock(&cpu->work_mutex);
     qemu_cond_broadcast(&qemu_work_cond);
+}
+
+void process_queued_cpu_work_no_bql(CPUState* cpu)
+{
+    struct qemu_work_item* wi;
+
+    qemu_mutex_lock(&cpu->work_mutex);
+    while ((wi = QSIMPLEQ_FIRST(&cpu->work_list)) != NULL && (wi->no_bql || wi->exclusive)) {
+        QSIMPLEQ_REMOVE_HEAD(&cpu->work_list, node);
+        qemu_mutex_unlock(&cpu->work_mutex);
+        if (wi->exclusive) {
+            start_exclusive();
+            wi->func(cpu, wi->data);
+            end_exclusive();
+        }
+        else {
+            wi->func(cpu, wi->data);
+        }
+        g_free(wi);
+        qemu_mutex_lock(&cpu->work_mutex);
+    }
+    qemu_mutex_unlock(&cpu->work_mutex);
 }
 
 /* Add a breakpoint.  */

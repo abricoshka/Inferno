@@ -815,6 +815,16 @@ void run_on_cpu(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data);
 void async_run_on_cpu(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data);
 
 /**
+ * async_run_on_cpu_no_bql:
+ * @cpu: The vCPU to run on.
+ * @func: The function to be executed.
+ * @data: Data to pass to the function.
+ *
+ * Like async_run_on_cpu, but the function may be run outside the BQL.
+ */
+void async_run_on_cpu_no_bql(CPUState* cpu, run_on_cpu_func func, run_on_cpu_data data);
+
+/**
  * async_safe_run_on_cpu:
  * @cpu: The vCPU to run on.
  * @func: The function to be executed.
@@ -958,6 +968,14 @@ void free_queued_cpu_work(CPUState* cpu);
  * @cpu: The CPU which work queue to process.
  */
 void process_queued_cpu_work(CPUState* cpu);
+
+/**
+ * process_queued_cpu_work_no_bql() - process leading work items that do not need the BQL
+ * @cpu: The CPU which work queue to process.
+ *
+ * Must be called without the BQL and from outside cpu_exec.
+ */
+void process_queued_cpu_work_no_bql(CPUState* cpu);
 
 /**
  * cpu_exec_start:

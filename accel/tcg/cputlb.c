@@ -343,7 +343,7 @@ static bool flush_all_helper(CPUState* src, run_on_cpu_func fn, run_on_cpu_data 
 
     CPU_FOREACH (cpu) {
         if (cpu != src && tlb_cpu_has_dirty(cpu, idxmap)) {
-            async_run_on_cpu(cpu, fn, d);
+            async_run_on_cpu_no_bql(cpu, fn, d);
             queued = true;
         }
     }
@@ -648,7 +648,7 @@ void tlb_flush_page_by_mmuidx_all_cpus_synced(CPUState* src_cpu, vaddr addr, MMU
                 d         = g_new(TLBFlushPageByMMUIdxData, 1);
                 d->addr   = addr;
                 d->idxmap = idxmap;
-                async_run_on_cpu(dst_cpu, tlb_flush_page_by_mmuidx_async_2, RUN_ON_CPU_HOST_PTR(d));
+                async_run_on_cpu_no_bql(dst_cpu, tlb_flush_page_by_mmuidx_async_2, RUN_ON_CPU_HOST_PTR(d));
                 queued = true;
             }
         }
@@ -827,7 +827,7 @@ void tlb_flush_range_by_mmuidx_all_cpus_synced(CPUState* src_cpu, vaddr addr, va
     CPU_FOREACH (dst_cpu) {
         if (dst_cpu != src_cpu && tlb_cpu_has_dirty(dst_cpu, idxmap)) {
             p = g_memdup(&d, sizeof(d));
-            async_run_on_cpu(dst_cpu, tlb_flush_range_by_mmuidx_async_1, RUN_ON_CPU_HOST_PTR(p));
+            async_run_on_cpu_no_bql(dst_cpu, tlb_flush_range_by_mmuidx_async_1, RUN_ON_CPU_HOST_PTR(p));
             queued = true;
         }
     }
@@ -890,8 +890,8 @@ void tlb_flush_pages_by_mmuidx_all_cpus_synced(CPUState* src_cpu, const TLBFlush
 
     CPU_FOREACH (dst_cpu) {
         if (dst_cpu != src_cpu && tlb_cpu_has_dirty(dst_cpu, idxmap)) {
-            async_run_on_cpu(dst_cpu, tlb_flush_pages_by_mmuidx_async_0,
-                             RUN_ON_CPU_HOST_PTR(tlb_flush_pages_dup(pages, n)));
+            async_run_on_cpu_no_bql(dst_cpu, tlb_flush_pages_by_mmuidx_async_0,
+                                    RUN_ON_CPU_HOST_PTR(tlb_flush_pages_dup(pages, n)));
             queued = true;
         }
     }
