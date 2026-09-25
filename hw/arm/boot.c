@@ -506,6 +506,22 @@ AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize 
     return root;
 }
 
+void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len)
+{
+    g_autofree uint8_t* file_data = NULL;
+    uint32_t            length;
+    char                payload_type[4];
+
+    extract_im4p_payload(filename, data, len, payload_type, &file_data, &length, NULL);
+
+    if (memcmp(payload_type, "isys", 4) != 0) {
+        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `isys`)", filename, payload_type);
+        return;
+    }
+
+    apple_dt_set_prop(chosen, "system-volume-auth-blob", length, file_data);
+}
+
 static void apple_boot_init_mem_ranges(AppleDTNode* root)
 {
     AppleDTNode* child;

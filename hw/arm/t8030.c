@@ -124,6 +124,7 @@
 #define PREBOOT_KERNELCACHE "System/Library/Caches/com.apple.kernelcaches/kernelcache"
 #define PREBOOT_DEVICETREE  "usr/standalone/firmware/devicetree.img4"
 #define PREBOOT_TRUSTCACHE  "usr/standalone/firmware/FUD/StaticTrustCache.img4"
+#define PREBOOT_ROOT_HASH   "usr/standalone/firmware/root_hash.img4"
 
 #define SPI0_IRQ     (444)
 #define GPIO_SPI0_CS (204)
@@ -779,6 +780,9 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     if (!apple_dfu_copy_ticket(t8030->dfu, &info->ticket_data, &info->ticket_length)) {
         t8030_load_preboot_file(PREBOOT_APTICKET, (uint8_t**)&info->ticket_data, &info->ticket_length, NULL);
+        if (t8030_load_preboot_file(PREBOOT_ROOT_HASH, &data, &len, NULL)) {
+            apple_boot_load_root_hash_data(chosen, PREBOOT_ROOT_HASH, data, len);
+        }
     }
 
     if (apple_dfu_copy_image(t8030->dfu, "rkrn", &data, &len)) {

@@ -425,6 +425,9 @@ AppleDTNode* apple_boot_load_dt_file(const char* filename);
 /// Consumes `data`.
 AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize len);
 
+/// Consumes `data`.
+void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len);
+
 struct AppleNvram;
 
 void apple_boot_setup_boot_nonce(struct AppleNvram* nvram, AppleBootInfo* info);

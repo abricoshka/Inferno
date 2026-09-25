@@ -239,6 +239,24 @@ static void ck_kp_apfs_patches(CKPatcherRange* range)
     };
     ck_patcher_find_callback(range, "bypass root hash authentication", root_hash_pattern, NULL,
                              sizeof(root_hash_pattern), sizeof(uint32_t), ck_kp_root_hash_callback);
+
+    // Plain and decmpfs reads each have a compare; a patched one no longer matches.
+    static const uint8_t data_hash_pattern[] = {
+        0x00, 0x68, 0x40, 0x39,    // ldrb w0, [x?, #0x1A]
+        0x00, 0x00, 0x00, 0x00,    // ?
+        0x00, 0x00, 0x00, 0x00,    // ?
+        0x00, 0x00, 0x00, 0x94,    // bl cc_cmp_safe
+    };
+    static const uint8_t data_hash_mask[] = {
+        0x1F, 0xFC, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(data_hash_pattern) != sizeof(data_hash_mask));
+    static const uint8_t data_hash_repl[] = {MOV_W0_0_BYTES};
+    for (int i = 0; i < 2; ++i) {
+        ck_patcher_find_replace(range, "bypass sealed volume data hash verification", data_hash_pattern, data_hash_mask,
+                                sizeof(data_hash_pattern), sizeof(uint32_t), data_hash_repl, NULL, 12,
+                                sizeof(data_hash_repl));
+    }
 }
 
 static bool ck_kp_tc_callback(void* ctx, uint8_t* buffer)
