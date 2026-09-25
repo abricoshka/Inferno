@@ -26,6 +26,7 @@
 #include "hw/registerfields.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
+#include "qemu/units.h"
 #include "system/dma.h"
 #include "ui/console.h"
 #include "pixman.h"
@@ -142,6 +143,8 @@ struct AppleDisplayPipeV4State
     uint32_t            commit_pending;
     uint32_t            present_pending;
     bool                direct_scanout;
+    bool                boot_fb_valid;
+    uint32_t            boot_fb_iova;
     uint32_t            vftg_control;
     uint32_t            vftg_timings[ADP_V4_VFTG_TIMING_COUNT];
     QEMUTimer*          vsync_timer;
@@ -789,6 +792,8 @@ static void adp_v4_read_and_draw_boot_splash(AppleDisplayPipeV4State* adp)
     timer_mod(adp->boot_splash_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (NANOSECONDS_PER_SECOND / 2));
 }
 
+static void adp_v4_boot_display(AppleDisplayPipeV4State* adp);
+
 static void adp_v4_reset_hold(Object* obj, ResetType type)
 {
     AppleDisplayPipeV4State* adp = APPLE_DISPLAY_PIPE_V4(obj);
@@ -811,6 +816,8 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     adp_v4_blend_reset(&adp->blend_unit);
 
     adp_v4_read_and_draw_boot_splash(adp);
+
+    if (adp->boot_fb_valid) { adp_v4_boot_display(adp); }
 }
 
 static void adp_v4_realize(DeviceState* dev, Error** errp)
@@ -1072,8 +1079,41 @@ void adp_v4_update_vram_mapping(AppleDisplayPipeV4State* adp, MemoryRegion* mr, 
     adp->vram_mr   = mr;
     adp->vram_off  = base;
     adp->vram_size = size;
-    // Put framebuffer at the end of VRAM (the start is used for GP stuff).
-    adp->fb_off = adp->vram_size - ((hwaddr)adp->height * adp->width * sizeof(uint32_t));
+    // Put framebuffer at the end of VRAM (the start is used for GP stuff), on a DART page boundary.
+    adp->fb_off = QEMU_ALIGN_DOWN(adp->vram_size - ((hwaddr)adp->height * adp->width * sizeof(uint32_t)), 16 * KiB);
 }
 
 uint64_t adp_v4_get_fb_off(AppleDisplayPipeV4State* adp) { return adp->fb_off; }
+
+static void adp_v4_boot_display(AppleDisplayPipeV4State* adp)
+{
+    ADPV4GenPipe* genpipe = &adp->genpipe[0];
+    uint32_t      size    = (adp->width << 16) | adp->height;
+
+    // IOMFB's `get_dfb_info` reads the framebuffer back from GP0.
+    adp_v4_gp_reg_write(genpipe, A_GP_PIXEL_FORMAT, GP_PIXEL_FORMAT_ARGB);
+    adp_v4_gp_reg_write(genpipe, A_GP_LAYER_0_DATA_START, adp->boot_fb_iova);
+    adp_v4_gp_reg_write(genpipe, A_GP_LAYER_0_STRIDE, adp->width * sizeof(uint32_t));
+    adp_v4_gp_reg_write(genpipe, A_GP_LAYER_0_DIMENSIONS, size);
+    adp_v4_gp_reg_write(genpipe, A_GP_DEST_DIMENSIONS, size);
+    adp_v4_gp_reg_write(genpipe, A_GP_CONFIG_CONTROL, R_GP_CONFIG_CONTROL_ENABLED_MASK);
+
+    qemu_mutex_lock(&genpipe->lock);
+    adp_v4_gp_scanout(adp, genpipe);
+    qemu_mutex_unlock(&genpipe->lock);
+
+    adp_v4_reg_write(adp, A_VFTG_ACTIVE_SIZE, (adp_v4_timing_info[4] << 16) | adp_v4_timing_info[0], 4);
+    adp_v4_reg_write(adp, A_VFTG_FRONT_PORCH, (adp_v4_timing_info[6] << 16) | adp_v4_timing_info[2], 4);
+    adp_v4_reg_write(adp, A_VFTG_SYNC_PULSE, (adp_v4_timing_info[7] << 16) | adp_v4_timing_info[3], 4);
+    adp_v4_reg_write(adp, A_VFTG_BACK_PORCH, (adp_v4_timing_info[5] << 16) | adp_v4_timing_info[1], 4);
+    adp_v4_reg_write(adp, A_VFTG_CONTROL, R_VFTG_CONTROL_ENABLE_MASK, 4);
+}
+
+void adp_v4_set_boot_fb(AppleDisplayPipeV4State* adp, uint32_t fb_iova)
+{
+    adp->boot_fb_valid = true;
+    adp->boot_fb_iova  = fb_iova;
+    adp_v4_boot_display(adp);
+}
+
+void adp_v4_clear_boot_fb(AppleDisplayPipeV4State* adp) { adp->boot_fb_valid = false; }

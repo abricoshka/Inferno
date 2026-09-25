@@ -30,3 +30,7 @@ SysBusDevice* adp_v4_from_node(AppleDTNode* node, MemoryRegion* dma_mr);
 
 void     adp_v4_update_vram_mapping(AppleDisplayPipeV4State* s, MemoryRegion* mr, hwaddr off, uint64_t size);
 uint64_t adp_v4_get_fb_off(AppleDisplayPipeV4State* s);
+/* Leave the display running and scanning out the framebuffer at @fb_iova, as iBoot does, also after reset. */
+void adp_v4_set_boot_fb(AppleDisplayPipeV4State* s, uint32_t fb_iova);
+/* Leave the display off from the next reset on. */
+void adp_v4_clear_boot_fb(AppleDisplayPipeV4State* s);
