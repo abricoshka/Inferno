@@ -671,9 +671,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     auto_boot     = env_get_bool(nvram, "auto-boot", false);
 
     if (t8030->boot_info.non_cold_boot && (!t8030->boot_info.had_autoboot && have_autoboot && auto_boot)) {
-        fprintf(stdout, "\n--------\nDetected potentially-completed restore process. "
-                        "Turning "
-                        "off so the filesystem patches can be performed.\n--------\n");
+        fprintf(stdout, "\n--------\nPotentially-completed restore process.\nPlease check the restore status, and "
+                        "continue forth with the filesystem patches if success is observed.\n--------\n");
         exit(0);
         return;
     }
