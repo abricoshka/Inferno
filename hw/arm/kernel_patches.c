@@ -676,11 +676,70 @@ static void ck_kp_pmap_cs_enforce_patch(CKPatcherRange* range)
                             NULL, 0, sizeof(repl));
 }
 
+// From iOS 18, APFS compares data hashes with corecrypto's `cc_cmp_safe` instead of an inlined copy.
+static void ck_kp_apfs_data_hash_patch(CKPatcherRange* apfs, CKPatcherRange* corecrypto)
+{
+    static const uint8_t cc_cmp_safe_sig[] = {
+        0x28, 0x04, 0x00, 0xD1,    // sub x8, x1, #1
+        0x49, 0x04, 0x00, 0xD1,    // sub x9, x2, #1
+        0x0A, 0x01, 0x00, 0x8B,    // add x10, x8, x0
+        0x4A, 0x01, 0x40, 0x39,    // ldrb w10, [x10]
+    };
+
+    if (corecrypto == NULL) { return; }
+
+    uint8_t* sig = NULL;
+    for (vaddr i = 0; i + sizeof(cc_cmp_safe_sig) <= corecrypto->length; i += sizeof(uint32_t)) {
+        if (memcmp(corecrypto->ptr + i, cc_cmp_safe_sig, sizeof(cc_cmp_safe_sig)) == 0) {
+            sig = corecrypto->ptr + i;
+            break;
+        }
+    }
+    if (sig == NULL) { return; }
+
+    uint8_t* inner = ck_patcher_find_prev_insn(sig, 0x20, PACIBSP, 0xFFFFFFFF, 0);
+    if (inner == NULL) {
+        error_report("Failed to find the `cc_cmp_safe` entry.");
+        return;
+    }
+    vaddr inner_va = corecrypto->addr + (inner - corecrypto->ptr);
+
+    bool patched = false;
+    for (vaddr i = 0; i + sizeof(uint32_t) <= apfs->length; i += sizeof(uint32_t)) {
+        uint8_t* insn = apfs->ptr + i;
+        if ((ldl_le_p(insn) & 0xFC000000) != 0x94000000) { continue; }    // bl #?
+
+        vaddr target = (apfs->addr + i) + ((int64_t)sextract32(ldl_le_p(insn), 0, 26) << 2);
+        if (target < corecrypto->addr || target >= corecrypto->addr + corecrypto->length) { continue; }
+
+        // The call reaches `cc_cmp_safe` directly, or through a thin forwarding wrapper.
+        vaddr rel     = target - corecrypto->addr;
+        bool  reaches = target == inner_va;
+        for (vaddr j = 0; !reaches && j < 24 && rel + (j + 1) * sizeof(uint32_t) <= corecrypto->length; ++j) {
+            uint32_t w = ldl_le_p(corecrypto->ptr + rel + j * sizeof(uint32_t));
+            if ((w & 0xFC000000) == 0x94000000
+                && (target + j * sizeof(uint32_t)) + ((int64_t)sextract32(w, 0, 26) << 2) == inner_va)
+            {
+                reaches = true;
+            }
+        }
+        if (reaches) {
+            stl_le_p(insn, MOV_W0_0);
+            patched = true;
+        }
+    }
+
+    if (patched) {
+        info_report("`bypass sealed volume data hash verification (iOS 18+)` patch applied in `%s`.", apfs->name);
+    }
+}
+
 void ck_patch_kernel(MachoHeader64* hdr)
 {
     MachoHeader64*             apfs_hdr;
     g_autofree CKPatcherRange* apfs_text;
     g_autofree CKPatcherRange* apfs_cstring;
+    g_autofree CKPatcherRange* corecrypto_text;
     g_autofree CKPatcherRange* amfi_text;
     g_autofree CKPatcherRange* sep_mgr_text;
     g_autofree CKPatcherRange* img4_text;
@@ -691,6 +750,8 @@ void ck_patch_kernel(MachoHeader64* hdr)
     apfs_hdr  = ck_kp_find_image_header(hdr, "com.apple.filesystems.apfs");
     apfs_text = ck_kp_find_section_range(apfs_hdr, "__TEXT_EXEC", "__text");
     ck_kp_apfs_patches(apfs_text);
+    corecrypto_text = ck_kp_find_image_text(hdr, "com.apple.kec.corecrypto");
+    ck_kp_apfs_data_hash_patch(apfs_text, corecrypto_text);
     apfs_cstring = ck_kp_find_section_range(apfs_hdr, "__TEXT", "__cstring");
     if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, "__TEXT", "__cstring"); }
 
