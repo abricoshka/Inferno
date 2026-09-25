@@ -499,6 +499,7 @@ static bool dwc3_bd_writeback(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p, 
     // this surely needs better conditions
     ret = p->actual_length == usb_packet_size(p) || desc->actual_length % p->ep->max_packet_size != 0 || !xfer_size
           || length <= 0;
+    if (p->pid == USB_TOKEN_OUT && p->actual_length < usb_packet_size(p)) { ret = false; }
     if (!ret) {
         // struct dwc3_event_depevt event = { .endpoint_number = desc->epid,
         //                                    .endpoint_event =
@@ -1786,7 +1787,7 @@ static void dwc3_process_packet(DWC3State* s, DWC3Endpoint* ep, USBPacket* p)
     xfer = ep->xfer;
     if (xfer == NULL) {
         // xfer == NULL == URB_COMPLETE
-        assert(p->status != USB_RET_ASYNC);
+        assert(p->status != USB_RET_ASYNC || p->state == USB_PACKET_ASYNC);
         if (setup_ep->last_control_command == TRBCTL_CONTROL_SETUP) {
             DPRINTF("%s: TRBCTL_CONTROL_SETUP: setup_packet.wLength == 0x%x\n", __func__,
                     setup_ep->setup_packet.wLength);
@@ -1917,8 +1918,12 @@ complete:
     // while not is_inflight? keep that if, and don't call "complete" if the
     // status is "async". it looks like ASYNC and NAK can be interchanged most
     // of the times without change in behavior.
+    if (p->status == USB_RET_NAK && (p->state == USB_PACKET_QUEUED || (p->state == USB_PACKET_ASYNC && ep->epid >= 2)))
+    {
+        p->status = USB_RET_ASYNC;
+    }
     if (p->status != USB_RET_ASYNC) {
-        if (usb_packet_is_inflight(p)) {
+        if (p->state == USB_PACKET_ASYNC) {
             if (p->status == USB_RET_NAK) { p->status = USB_RET_IOERROR; }
             // usb_packet_complete must be inside the usb_packet_is_inflight
             // "if"
