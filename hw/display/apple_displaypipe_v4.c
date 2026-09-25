@@ -867,8 +867,8 @@ static void adp_v4_update_disp_bh(void* opaque)
 }
 
 // `display-timing-info`
-// w_active, v_back_porch, v_front_porch, v_sync_pulse, h_active, h_back_porch,
-// h_front_porch, h_sync_pulse
+// h_active, h_back_porch, h_front_porch, h_sync_pulse, v_active, v_back_porch,
+// v_front_porch, v_sync_pulse
 // FIXME: Unhardcode.
 static const uint32_t adp_v4_timing_info[] = {828, 144, 1, 1, 1792, 1, 1, 1};
 
