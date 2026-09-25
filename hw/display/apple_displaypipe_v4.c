@@ -140,6 +140,8 @@ struct AppleDisplayPipeV4State
     uint32_t            int_status;
     uint32_t            int_enable;
     uint32_t            commit_pending;
+    uint32_t            present_pending;
+    bool                direct_scanout;
     uint32_t            vftg_control;
     uint32_t            vftg_timings[ADP_V4_VFTG_TIMING_COUNT];
     QEMUTimer*          vsync_timer;
@@ -472,6 +474,8 @@ static void adp_v4_vsync_tick(void* opaque)
 
     if (!REG_FIELD_EX32(qatomic_read(&adp->vftg_control), VFTG_CONTROL, ENABLE)) { return; }
 
+    if (adp->direct_scanout || qatomic_xchg(&adp->present_pending, 0)) { dpy_gfx_update_full(adp->console); }
+
     qatomic_or(&adp->int_status, R_CONTROL_INT_OUTPUT_READY_MASK);
     adp_v4_update_irqs(adp);
 
@@ -644,34 +648,8 @@ static const MemoryRegionOps adp_v4_reg_ops = {
 
 static void adp_v4_invalidate(void* opaque) { }
 
-static void adp_v4_gfx_update(void* opaque)
-{
-    AppleDisplayPipeV4State* adp = opaque;
-    DirtyBitmapSnapshot*     snap;
-    bool                     dirty;
-    uint32_t                 y, ys;
-
-    snap =
-        memory_region_snapshot_and_clear_dirty(adp->vram_mr, adp->vram_off + adp->fb_off,
-                                               (hwaddr)adp->height * adp->width * sizeof(uint32_t), DIRTY_MEMORY_VGA);
-    ys = -1U;
-    for (y = 0; y < adp->height; ++y) {
-        dirty = memory_region_snapshot_get_dirty(adp->vram_mr, snap,
-                                                 adp->vram_off + adp->fb_off + adp->width * sizeof(uint32_t) * y,
-                                                 (hwaddr)adp->width * sizeof(uint32_t));
-        if (dirty && ys == -1U) { ys = y; }
-        if (!dirty && ys != -1U) {
-            dpy_gfx_update(adp->console, 0, ys, adp->width, y - ys);
-            ys = -1U;
-        }
-    }
-    if (ys != -1U) { dpy_gfx_update(adp->console, 0, ys, adp->width, y - ys); }
-    g_free(snap);
-}
-
 static const GraphicHwOps adp_v4_ops = {
     .invalidate = adp_v4_invalidate,
-    .gfx_update = adp_v4_gfx_update,
 };
 
 static void* adp_v4_get_fb_ptr(AppleDisplayPipeV4State* adp)
@@ -819,6 +797,7 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     qatomic_set(&adp->int_status, 0);
     qatomic_set(&adp->int_enable, 0);
     qatomic_set(&adp->commit_pending, 0);
+    qatomic_set(&adp->present_pending, 0);
     qatomic_set(&adp->vftg_control, 0);
     for (i = 0; i < ARRAY_SIZE(adp->vftg_timings); ++i) { qatomic_set(&adp->vftg_timings[i], 0); }
     timer_del(adp->vsync_timer);
@@ -826,6 +805,7 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     adp_v4_update_irqs(adp);
 
     adp_v4_update_disp_image_ptr(adp);
+    adp->direct_scanout = true;
 
     for (i = 0; i < ARRAY_SIZE(adp->genpipe); ++i) { adp_v4_gp_reset(&adp->genpipe[i], i); }
     adp_v4_blend_reset(&adp->blend_unit);
@@ -862,14 +842,13 @@ static void adp_v4_class_init(ObjectClass* klass, const void* data)
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleDisplayPipeV4State, adp_v4, APPLE_DISPLAY_PIPE_V4, SYS_BUS_DEVICE)
 
 // TODO: handle source/dest position, etc.
-static void adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_image_t* disp_image,
-                           QemuConsole* console)
+static bool adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_image_t* disp_image)
 {
     pixman_format_code_t fmt;
     pixman_image_t*      image;
     pixman_transform_t   transform;
 
-    if (REG_FIELD_EX32(genpipe->state.config_control, GP_CONFIG_CONTROL, ENABLED) == 0) { return; }
+    if (REG_FIELD_EX32(genpipe->state.config_control, GP_CONFIG_CONTROL, ENABLED) == 0) { return false; }
 
     qemu_mutex_lock(&genpipe->lock);
     adp_v4_gp_read(genpipe, dma_as);
@@ -900,19 +879,137 @@ static void adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_i
         pixman_image_composite(PIXMAN_OP_SRC, image, NULL, disp_image, 0, 0, 0, 0, 0, 0, genpipe->state.dest_width,
                                genpipe->state.dest_height);
 
-        dpy_gfx_update(console, 0, 0, genpipe->state.dest_width, genpipe->state.dest_height);
+        return true;
     }
+
+    return false;
+}
+
+/* The RAM behind [@iova, @iova + @len) if it is one contiguous run, or NULL. */
+static void* adp_v4_dma_contiguous_ptr(AppleDisplayPipeV4State* adp, hwaddr iova, hwaddr len)
+{
+    MemoryRegion* first_mr = NULL;
+    MemoryRegion* mr;
+    hwaddr        first = 0;
+    hwaddr        next  = 0;
+    hwaddr        off   = 0;
+    hwaddr        xlat;
+    hwaddr        plen;
+
+    RCU_READ_LOCK_GUARD();
+
+    while (off < len) {
+        plen = len - off;
+        mr   = address_space_translate(&adp->dma_as, iova + off, &xlat, &plen, false, MEMTXATTRS_UNSPECIFIED);
+
+        if (!memory_region_is_ram(mr) || plen == 0) { return NULL; }
+        if (first_mr == NULL) {
+            first_mr = mr;
+            first    = xlat;
+        }
+        else if (mr != first_mr || xlat != next) {
+            return NULL;
+        }
+
+        next  = xlat + plen;
+        off  += plen;
+    }
+
+    return memory_region_get_ram_ptr(first_mr) + first;
+}
+
+/*
+ * Show @genpipe's source 1:1 when it alone covers the panel unscaled: in place
+ * if it is one contiguous run of RAM, otherwise by reading it straight into a
+ * console surface of the same format and stride.
+ */
+static bool adp_v4_gp_scanout(AppleDisplayPipeV4State* adp, ADPV4GenPipe* genpipe)
+{
+    DisplaySurface* surface;
+    pixman_image_t* image;
+    hwaddr          len;
+    void*           ptr;
+
+    if (genpipe->state.pixel_format & GP_PIXEL_FORMAT_COMPRESSED) { return false; }
+    if (adp_v4_gp_fmt_to_pixman(genpipe) != PIXMAN_a8r8g8b8) { return false; }
+    if (genpipe->state.src_width != adp->width || genpipe->state.src_height != adp->height
+        || genpipe->state.dest_width != adp->width || genpipe->state.dest_height != adp->height
+        || genpipe->state.stride < adp->width * sizeof(uint32_t) || genpipe->state.stride % sizeof(uint32_t) != 0)
+    {
+        return false;
+    }
+
+    len = (hwaddr)genpipe->state.stride * genpipe->state.src_height;
+
+    ptr = adp_v4_dma_contiguous_ptr(adp, genpipe->state.data_start, len);
+    if (ptr != NULL) {
+        image = pixman_image_create_bits(PIXMAN_a8r8g8b8, adp->width, adp->height, ptr, genpipe->state.stride);
+        dpy_gfx_replace_surface(adp->console, qemu_create_displaysurface_pixman(image));
+        qemu_pixman_image_unref(image);
+        adp->direct_scanout = true;
+        return true;
+    }
+
+    surface = qemu_console_surface(adp->console);
+    if (adp->direct_scanout || surface_format(surface) != PIXMAN_a8r8g8b8
+        || surface_stride(surface) != genpipe->state.stride)
+    {
+        surface =
+            qemu_create_displaysurface_from(adp->width, adp->height, PIXMAN_a8r8g8b8, genpipe->state.stride, NULL);
+        dpy_gfx_replace_surface(adp->console, surface);
+        adp->direct_scanout = false;
+    }
+
+    if (dma_memory_read(&adp->dma_as, genpipe->state.data_start, surface_data(surface), len, MEMTXATTRS_UNSPECIFIED)
+        != MEMTX_OK)
+    {
+        qemu_log_mask(LOG_GUEST_ERROR, "gp%d: failed to read from DMA.\n", genpipe->index);
+    }
+
+    return true;
+}
+
+static ADPV4GenPipe* adp_v4_single_enabled_gp(AppleDisplayPipeV4State* adp)
+{
+    ADPV4GenPipe* found = NULL;
+    int           i;
+
+    for (i = 0; i < ADP_V4_GP_COUNT; ++i) {
+        if (REG_FIELD_EX32(adp->genpipe[i].state.config_control, GP_CONFIG_CONTROL, ENABLED) == 0) { continue; }
+        if (found != NULL) { return NULL; }
+        found = &adp->genpipe[i];
+    }
+
+    return found;
 }
 
 static void adp_v4_update_disp_bh(void* opaque)
 {
     AppleDisplayPipeV4State* adp = opaque;
+    ADPV4GenPipe*            genpipe;
     pixman_image_t*          disp_image;
+    bool                     drawn = false;
     int                      i;
 
-    disp_image = qemu_console_surface(adp->console)->image;
+    genpipe = adp_v4_single_enabled_gp(adp);
+    if (genpipe != NULL) {
+        qemu_mutex_lock(&genpipe->lock);
+        drawn = adp_v4_gp_scanout(adp, genpipe);
+        qemu_mutex_unlock(&genpipe->lock);
+    }
 
-    for (i = 0; i < ADP_V4_GP_COUNT; ++i) { adp_v4_gp_draw(&adp->genpipe[i], &adp->dma_as, disp_image, adp->console); }
+    if (!drawn) {
+        if (adp->direct_scanout) {
+            dpy_gfx_replace_surface(adp->console, qemu_create_displaysurface(adp->width, adp->height));
+            adp->direct_scanout = false;
+        }
+
+        disp_image = qemu_console_surface(adp->console)->image;
+
+        for (i = 0; i < ADP_V4_GP_COUNT; ++i) { drawn |= adp_v4_gp_draw(&adp->genpipe[i], &adp->dma_as, disp_image); }
+    }
+
+    if (drawn) { qatomic_set(&adp->present_pending, 1); }
 
     qatomic_set(&adp->commit_pending, 0);
 
