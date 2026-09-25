@@ -119,7 +119,7 @@ typedef struct DWC3State
     uint8_t         pending_addr;
     bool            addr_pending;
     qemu_irq        irq;
-    QemuMutex       lock;
+    QemuRecMutex    lock;
 
     DWC3EventRing intrs[DWC3_NUM_INTRS];
     uint32_t      numintrs;

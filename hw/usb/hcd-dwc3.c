@@ -1757,7 +1757,7 @@ static void usb_dwc3_init(Object* obj)
     memory_region_init_io(&s->iomem, obj, &usb_dwc3_ops, s, "dwc3-io", DWC3_MMIO_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
 
-    qemu_mutex_init(&s->lock);
+    qemu_rec_mutex_init(&s->lock);
 
     for (int i = 0; i < DWC3_NUM_EPS; i++) { s->eps[i].epid = i; }
 }
