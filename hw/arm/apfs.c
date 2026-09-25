@@ -34,6 +34,7 @@
 #define APFS_BTNODE_ROOT          (1 << 0)
 #define APFS_BTNODE_LEAF          (1 << 1)
 #define APFS_BTNODE_FIXED_KV_SIZE (1 << 2)
+#define APFS_BTNODE_HASHED        (1 << 3)
 #define APFS_BTREE_INFO_SIZE      (40)
 #define APFS_BTREE_MAX_LEVEL      (31)
 
@@ -166,6 +167,7 @@ typedef struct
     uint64_t      base;
     uint64_t      xid;
     uint64_t      omap_tree;
+    uint64_t      root_tree;
 } ApfsContext;
 
 typedef struct
@@ -350,6 +352,7 @@ static int apfs_fs_walk(ApfsContext* ctx, uint64_t node_oid, uint16_t max_level,
     uint64_t                 order = (obj_id << 4) | type;
     uint64_t                 paddr;
     uint64_t                 key_order;
+    uint64_t                 child;
     uint32_t                 nkeys;
     uint32_t                 i;
     ApfsEntry                entry;
@@ -388,7 +391,10 @@ static int apfs_fs_walk(ApfsContext* ctx, uint64_t node_oid, uint16_t max_level,
             return -1;
         }
 
-        ret = apfs_fs_walk(ctx, ldq_le_p(entry.val), le16_to_cpu(hdr->level) - 1, obj_id, type, fn, opaque, errp);
+        child = ldq_le_p(entry.val);
+        if (le16_to_cpu(hdr->flags) & APFS_BTNODE_HASHED) { child += ctx->root_tree; }
+
+        ret = apfs_fs_walk(ctx, child, le16_to_cpu(hdr->level) - 1, obj_id, type, fn, opaque, errp);
         if (ret != 0) { return ret; }
     }
 
@@ -576,7 +582,7 @@ static bool apfs_load_omap(ApfsContext* ctx, uint64_t omap_oid, Error** errp)
     return true;
 }
 
-static bool apfs_mount_volume(ApfsContext* ctx, uint16_t role, uint64_t* root_tree, Error** errp)
+static bool apfs_mount_volume(ApfsContext* ctx, uint16_t role, Error** errp)
 {
     uint8_t                 nx_block[APFS_BLOCK_SIZE];
     uint8_t                 block[APFS_BLOCK_SIZE];
@@ -597,7 +603,7 @@ static bool apfs_mount_volume(ApfsContext* ctx, uint16_t role, uint64_t* root_tr
         if (!apfs_omap_lookup(ctx, oid, &paddr, errp) || !apfs_read_block(ctx, paddr, block, errp)) { return false; }
 
         if (le16_to_cpu(fs->role) == role) {
-            *root_tree = le64_to_cpu(fs->root_tree_oid);
+            ctx->root_tree = le64_to_cpu(fs->root_tree_oid);
             return apfs_load_omap(ctx, le64_to_cpu(fs->omap_oid), errp);
         }
     }
@@ -614,17 +620,16 @@ bool apfs_read_file(BlockBackend* blk, uint16_t role, const char* path, uint8_t*
     ApfsDirLookup       lookup = {0};
     ApfsInode           inode  = {0};
     ApfsExtentRead      extents;
-    uint64_t            root_tree;
     uint64_t            ino = APFS_ROOT_DIR_INO;
     char**              component;
 
-    if (!apfs_find_container(&ctx, errp) || !apfs_mount_volume(&ctx, role, &root_tree, errp)) { return false; }
+    if (!apfs_find_container(&ctx, errp) || !apfs_mount_volume(&ctx, role, errp)) { return false; }
 
     for (component = components; *component != NULL; component++) {
         lookup.name     = *component;
         lookup.name_len = strlen(*component);
         lookup.found    = false;
-        if (apfs_fs_walk(&ctx, root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_DIR_REC, apfs_dir_lookup_fn, &lookup,
+        if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_DIR_REC, apfs_dir_lookup_fn, &lookup,
                          errp)
             < 0)
         {
@@ -639,7 +644,8 @@ bool apfs_read_file(BlockBackend* blk, uint16_t role, const char* path, uint8_t*
         ino = lookup.file_id;
     }
 
-    if (apfs_fs_walk(&ctx, root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_INODE, apfs_inode_fn, &inode, errp) < 0) {
+    if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_INODE, apfs_inode_fn, &inode, errp) < 0)
+    {
         return false;
     }
 
@@ -647,7 +653,7 @@ bool apfs_read_file(BlockBackend* blk, uint16_t role, const char* path, uint8_t*
     extents.ctx  = &ctx;
     extents.data = buffer;
     extents.size = inode.size;
-    if (apfs_fs_walk(&ctx, root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn,
+    if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn,
                      &extents, errp)
         < 0)
     {
