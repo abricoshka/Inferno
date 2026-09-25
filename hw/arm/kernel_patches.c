@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/kernel_patches.h"
+#include "hw/arm/apfs.h"
 #include "hw/arm/hfs.h"
 #include "hw/arm/patcher.h"
 #include "qapi/error.h"
@@ -722,16 +723,66 @@ void ck_patch_kernel(MachoHeader64* hdr)
     }
 }
 
+/// Patch `buffer` and find the span that changed; returns false if nothing did.
+static bool ck_kp_patch_libimg4(uint8_t* buffer, uint64_t len, uint64_t* first, uint64_t* last)
+{
+    g_autofree uint8_t*        original = g_memdup2(buffer, len);
+    g_autofree CKPatcherRange* range    = ck_patcher_range_from_ptr("libimg4.dylib", buffer, len);
+
+    ck_kp_img4_patches(range);
+
+    // Write back only the touched span so a single decmpfs chunk is recompressed.
+    for (*first = 0; *first < len && buffer[*first] == original[*first]; (*first)++) { }
+    if (*first == len) { return false; }
+    for (*last = len; *last > *first && buffer[*last - 1] == original[*last - 1]; (*last)--) { }
+    return true;
+}
+
+static void ck_patch_ramdisk_apfs(uint8_t* image, uint64_t size)
+{
+    g_autoptr(ApfsFile) file   = NULL;
+    g_autofree uint8_t* buffer = NULL;
+    Error*              err    = NULL;
+    uint64_t            len;
+    uint64_t            first;
+    uint64_t            last;
+
+    // iOS 26 made libimg4.dylib a symlink to libimage4.dylib.
+    file = apfs_open_memory_file(image, size, "/usr/lib/libimage4.dylib", NULL);
+    if (file == NULL) { file = apfs_open_memory_file(image, size, "/usr/lib/libimg4.dylib", &err); }
+    if (file == NULL) {
+        info_report("Not patching ramdisk libimg4: %s", error_get_pretty(err));
+        error_free(err);
+        return;
+    }
+
+    len    = apfs_file_size(file);
+    buffer = g_malloc(len);
+    if (!apfs_file_pread(file, 0, len, buffer, &err)) {
+        warn_report_err(err);
+        return;
+    }
+
+    if (ck_kp_patch_libimg4(buffer, len, &first, &last)
+        && !apfs_file_pwrite(file, first, last - first, buffer + first, &err))
+    {
+        warn_report_err(err);
+    }
+}
+
 void ck_patch_ramdisk(uint8_t* image, uint64_t size)
 {
-    g_autoptr(HfsFile) file             = NULL;
-    g_autofree uint8_t*        buffer   = NULL;
-    g_autofree uint8_t*        original = NULL;
-    g_autofree CKPatcherRange* range    = NULL;
-    Error*                     err      = NULL;
-    uint64_t                   len;
-    uint64_t                   first;
-    uint64_t                   last;
+    g_autoptr(HfsFile) file    = NULL;
+    g_autofree uint8_t* buffer = NULL;
+    Error*              err    = NULL;
+    uint64_t            len;
+    uint64_t            first;
+    uint64_t            last;
+
+    if (size >= 0x24 && ldl_le_p(image + 0x20) == 0x4253584E) {    // 'NXSB'
+        ck_patch_ramdisk_apfs(image, size);
+        return;
+    }
 
     file = hfs_open_file(image, size, "/usr/lib/libimg4.dylib", &err);
     if (file == NULL) {
@@ -746,17 +797,12 @@ void ck_patch_ramdisk(uint8_t* image, uint64_t size)
         warn_report_err(err);
         return;
     }
-    original = g_memdup2(buffer, len);
 
-    range = ck_patcher_range_from_ptr("libimg4.dylib", buffer, len);
-    ck_kp_img4_patches(range);
-
-    // Write back only the touched span so a single decmpfs chunk is recompressed.
-    for (first = 0; first < len && buffer[first] == original[first]; first++) { }
-    if (first == len) { return; }
-    for (last = len; last > first && buffer[last - 1] == original[last - 1]; last--) { }
-
-    if (!hfs_file_pwrite(file, first, last - first, buffer + first, &err)) { warn_report_err(err); }
+    if (ck_kp_patch_libimg4(buffer, len, &first, &last)
+        && !hfs_file_pwrite(file, first, last - first, buffer + first, &err))
+    {
+        warn_report_err(err);
+    }
 }
 
 #define MOVK_IMM16_SHIFT 5
