@@ -401,11 +401,12 @@ static uint32_t adp_v4_gp_reg_read(ADPV4GenPipe* genpipe, hwaddr addr)
     }
 }
 
-static void adp_v4_gp_reset(ADPV4GenPipe* genpipe)
+static void adp_v4_gp_reset(ADPV4GenPipe* genpipe, uint8_t index)
 {
     qemu_pixman_image_unref(genpipe->state.image);
     g_free(genpipe->state.buf);
     genpipe->state = (ADPV4GenPipeState){0};
+    genpipe->index = index;
 }
 
 static void adp_v4_blend_reg_write(ADPV4BlendUnitState* blend, uint64_t addr, uint64_t data)
@@ -760,6 +761,7 @@ static void adp_v4_read_and_draw_boot_splash(AppleDisplayPipeV4State* adp)
 static void adp_v4_reset_hold(Object* obj, ResetType type)
 {
     AppleDisplayPipeV4State* adp = APPLE_DISPLAY_PIPE_V4(obj);
+    size_t                   i;
 
     qatomic_set(&adp->int_status, 0);
     qatomic_set(&adp->int_enable, 0);
@@ -769,8 +771,7 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
 
     adp_v4_update_disp_image_ptr(adp);
 
-    adp_v4_gp_reset(&adp->genpipe[0]);
-    adp_v4_gp_reset(&adp->genpipe[1]);
+    for (i = 0; i < ARRAY_SIZE(adp->genpipe); ++i) { adp_v4_gp_reset(&adp->genpipe[i], i); }
     adp_v4_blend_reset(&adp->blend_unit);
 
     adp_v4_read_and_draw_boot_splash(adp);
