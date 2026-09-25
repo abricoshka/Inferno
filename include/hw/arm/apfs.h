@@ -36,6 +36,7 @@ void      apfs_file_free(ApfsFile* file);
 uint64_t  apfs_file_size(const ApfsFile* file);
 bool      apfs_file_pread(ApfsFile* file, uint64_t off, uint64_t len, void* buf, Error** errp);
 /// Overwrite existing bytes in place; the file cannot grow and no metadata changes.
+/// Compressed chunks are recompressed and must still fit in their old space.
 bool apfs_file_pwrite(ApfsFile* file, uint64_t off, uint64_t len, const void* buf, Error** errp);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(ApfsFile, apfs_file_free)

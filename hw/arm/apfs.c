@@ -965,13 +965,9 @@ static bool apfs_data_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
     return true;
 }
 
-static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t out_len, Error** errp)
+static bool apfs_chunk_entry(ApfsFile* file, uint32_t idx, uint64_t* off, uint32_t* size, Error** errp)
 {
-    g_autofree uint8_t* comp = NULL;
-    uint8_t             entry[8];
-    uint64_t            off;
-    uint32_t            size;
-    uLongf              dst_len;
+    uint8_t entry[8];
 
     if (idx >= file->chunk_count) {
         error_setg(errp, "APFS decmpfs chunk %u is out of bounds", idx);
@@ -982,12 +978,24 @@ static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t
         return false;
     }
 
-    off  = file->chunk_table + ldl_le_p(entry);
-    size = ldl_le_p(entry + 4);
-    if (off + size > file->data_size) {
+    *off  = file->chunk_table + ldl_le_p(entry);
+    *size = ldl_le_p(entry + 4);
+    if (*off + *size > file->data_size) {
         error_setg(errp, "APFS decmpfs chunk %u overruns the resource fork", idx);
         return false;
     }
+
+    return true;
+}
+
+static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t out_len, Error** errp)
+{
+    g_autofree uint8_t* comp = NULL;
+    uint64_t            off;
+    uint32_t            size;
+    uLongf              dst_len;
+
+    if (!apfs_chunk_entry(file, idx, &off, &size, errp)) { return false; }
 
     comp = g_malloc(size);
     if (!apfs_data_io(file, off, size, comp, false, errp)) { return false; }
@@ -1010,6 +1018,42 @@ static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t
     return true;
 }
 
+static bool apfs_chunk_write(ApfsFile* file, uint32_t idx, const uint8_t* in, uint64_t in_len, Error** errp)
+{
+    g_autofree uint8_t* comp = NULL;
+    uint64_t            off;
+    uint32_t            old_size;
+    uLongf              comp_len;
+    uint8_t             entry_size[4];
+
+    if (!apfs_chunk_entry(file, idx, &off, &old_size, errp)) { return false; }
+
+    comp_len = compressBound(in_len);
+    comp     = g_malloc(comp_len);
+    if (compress2(comp, &comp_len, in, in_len, Z_BEST_COMPRESSION) != Z_OK) {
+        error_setg(errp, "APFS decmpfs chunk %u failed to compress", idx);
+        return false;
+    }
+
+    if (comp_len > in_len) {
+        comp[0] = DECMPFS_CHUNK_RAW;
+        memcpy(comp + 1, in, in_len);
+        comp_len = in_len + 1;
+    }
+
+    if (comp_len > old_size) {
+        error_setg(errp, "APFS decmpfs chunk %u grew from 0x%x to 0x%lx bytes, cannot patch in place", idx, old_size,
+                   comp_len);
+        return false;
+    }
+
+    if (!apfs_data_io(file, off, comp_len, comp, true, errp)) { return false; }
+
+    stl_le_p(entry_size, comp_len);
+    return apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8 + 4, sizeof(entry_size), entry_size, true,
+                        errp);
+}
+
 static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
 {
     g_autofree uint8_t* chunk = NULL;
@@ -1028,11 +1072,6 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
         return false;
     }
 
-    if (write) {
-        error_setg(errp, "Compressed APFS files cannot be written");
-        return false;
-    }
-
     chunk = g_malloc(DECMPFS_CHUNK_SIZE);
     for (pos = off; pos < end; pos += n) {
         idx         = pos / DECMPFS_CHUNK_SIZE;
@@ -1043,7 +1082,13 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
 
         if (!apfs_chunk_read(file, idx, chunk, chunk_len, errp)) { return false; }
 
-        memcpy(buf + (pos - off), chunk + local, n);
+        if (write) {
+            memcpy(chunk + local, buf + (pos - off), n);
+            if (!apfs_chunk_write(file, idx, chunk, chunk_len, errp)) { return false; }
+        }
+        else {
+            memcpy(buf + (pos - off), chunk + local, n);
+        }
     }
 
     return true;
