@@ -21,6 +21,7 @@
 
 #include "qemu/osdep.h"
 
+#define APFS_VOL_ROLE_SYSTEM  (0x0001)
 #define APFS_VOL_ROLE_PREBOOT (0x0010)
 
 typedef struct ApfsFile ApfsFile;

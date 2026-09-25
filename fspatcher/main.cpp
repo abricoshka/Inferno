@@ -35,7 +35,8 @@ struct PatcherCLI
             std::uint8_t unredactLogs : 1;
             std::uint8_t openGLES     : 1;
             std::uint8_t metal        : 1;
-            std::uint8_t _rsvd        : 2;
+            std::uint8_t cryptex      : 1;
+            std::uint8_t _rsvd        : 1;
         } v;
         std::uint8_t raw;
 
@@ -43,6 +44,7 @@ struct PatcherCLI
             raw(0)
         { }
     } flags;
+    std::filesystem::path diskPath;
     std::filesystem::path cachePath;
 
     static void print_usage(const int argc, char** argv)
@@ -50,6 +52,8 @@ struct PatcherCLI
         const auto* const executable = argc == 0 || argv[0] == nullptr ? "inferno-fs-patcher" : argv[0];
         std::cerr << "Usage: " << executable << " [OPTIONS..] <DYLD_CACHE_PATH>\n";
         std::cerr << "\nOptions:\n";
+        std::cerr << "  -d, --disk IMAGE |  Patch DYLD_CACHE_PATH in the System volume of the disk image IMAGE.\n";
+        std::cerr << "  -c, --cryptex    |  With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead.\n";
         std::cerr << "  -r, --revert     |  Revert bytes to the original state, without reapplying patches.\n";
         std::cerr << "  -n, --dry-run    |  Revert bytes and run patcher, but do not apply the patch modifications.\n";
         std::cerr << "  --unredact-logs  |  Patch libsystem_trace.dylib to unredact logs.\n";
@@ -73,7 +77,7 @@ struct PatcherCLI
     explicit PatcherCLI(const int argc, char** argv)
     {
         if (argc < 2) { throw std::runtime_error("inadequate parameters (expected at least 1)"); }
-        if (argc > 5) { throw std::runtime_error("superfluous parameters (expected at most 3)"); }
+        if (argc > 8) { throw std::runtime_error("superfluous parameters (expected at most 7)"); }
 
         for (int i = 1; i < argc; ++i) {
             const std::string_view param = argv[i];
@@ -83,7 +87,14 @@ struct PatcherCLI
                 return;
             }
 
-            if (!this->flags.v.revertOnly && (param == "-r" || param == "--revert")) {
+            if (this->diskPath.empty() && (param == "-d" || param == "--disk")) {
+                if (++i == argc) { throw std::runtime_error("missing IMAGE parameter"); }
+                this->diskPath = argv[i];
+            }
+            else if (!this->flags.v.cryptex && (param == "-c" || param == "--cryptex")) {
+                this->flags.v.cryptex = true;
+            }
+            else if (!this->flags.v.revertOnly && (param == "-r" || param == "--revert")) {
                 this->flags.v.revertOnly = true;
                 this->check_mutually_exclusive();
             }
@@ -106,6 +117,7 @@ struct PatcherCLI
         }
 
         if (this->cachePath.empty()) { throw std::runtime_error("missing DYLD_CACHE_PATH parameter"); }
+        if (this->flags.v.cryptex && this->diskPath.empty()) { throw std::runtime_error("--cryptex requires --disk"); }
     }
 
     constexpr bool help() const noexcept { return this->flags.v.help; }
@@ -114,6 +126,7 @@ struct PatcherCLI
     constexpr bool unredact_logs() const noexcept { return this->flags.v.unredactLogs; }
     constexpr bool opengles() const noexcept { return this->flags.v.openGLES; }
     constexpr bool metal() const noexcept { return this->flags.v.metal; }
+    constexpr bool cryptex() const noexcept { return this->flags.v.cryptex; }
 };
 
 namespace
@@ -441,7 +454,7 @@ namespace
 
     void run(const PatcherCLI& cli)
     {
-        Storage             storage;
+        Storage             storage(cli.diskPath, cli.cryptex());
         const CacheAnalyser analyser(storage, cli.cachePath);
 
         for (const auto& cache : analyser.caches) {

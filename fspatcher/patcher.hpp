@@ -45,7 +45,7 @@ public:
 
     static bool revert(Storage& storage, const std::filesystem::path& path)
     {
-        auto orig_bytes_path  = path;
+        auto orig_bytes_path  = storage.host_path(path);
         orig_bytes_path      += ORIG_BYTE_FILE_EXT;
 
         if (!std::filesystem::exists(orig_bytes_path)) { return false; }
@@ -108,7 +108,7 @@ public:
     {
         for (const auto& cache_entries : this->write_queue) {
             auto cache_file       = this->storage.open(cache_entries.first, std::ios::in | std::ios::out);
-            auto orig_bytes_path  = cache_entries.first;
+            auto orig_bytes_path  = this->storage.host_path(cache_entries.first);
             orig_bytes_path      += ORIG_BYTE_FILE_EXT;
             std::ofstream diff_file(orig_bytes_path, std::ios::out | std::ios::trunc);
             if (!diff_file.is_open()) {

@@ -18,12 +18,99 @@
  */
 
 #pragma once
+#include "disk.h"
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+
+[[noreturn]]
+void throw_disk_error(char* err)
+{
+    std::string msg(err);
+    disk_error_free(err);
+    throw std::runtime_error(msg);
+}
+
+class DiskFileBuf : public std::streambuf
+{
+    ApfsFile*                 file;
+    std::uint64_t             size;
+    std::uint64_t             buf_off{0};
+    std::array<char, 0x10000> buf{};
+
+    [[nodiscard]]
+    auto pos() const -> std::uint64_t
+    { return this->buf_off + std::uint64_t(this->gptr() - this->eback()); }
+
+    auto seek_to(const off_type target) -> pos_type
+    {
+        if (target < 0) { return pos_type(off_type(-1)); }
+
+        const auto off   = std::uint64_t(target);
+        const auto avail = std::uint64_t(this->egptr() - this->eback());
+        if (off >= this->buf_off && off - this->buf_off <= avail) {
+            this->setg(this->eback(), this->eback() + (off - this->buf_off), this->egptr());
+        }
+        else {
+            this->buf_off = off;
+            this->setg(this->buf.data(), this->buf.data(), this->buf.data());
+        }
+
+        return pos_type(target);
+    }
+
+protected:
+    auto underflow() -> int_type override
+    {
+        const auto off = this->pos();
+        if (off >= this->size) { return traits_type::eof(); }
+
+        const auto len = std::min(std::uint64_t(this->buf.size()), this->size - off);
+        char*      err = nullptr;
+        if (!disk_file_pread(this->file, off, len, this->buf.data(), &err)) { throw_disk_error(err); }
+
+        this->buf_off = off;
+        this->setg(this->buf.data(), this->buf.data(), this->buf.data() + len);
+        return traits_type::to_int_type(this->buf[0]);
+    }
+
+    auto seekoff(const off_type off, const std::ios::seekdir dir, const std::ios::openmode /*which*/)
+        -> pos_type override
+    {
+        switch (dir) {
+            case std::ios::beg: return this->seek_to(off);
+            case std::ios::cur: return this->seek_to(off_type(this->pos()) + off);
+            case std::ios::end: return this->seek_to(off_type(this->size) + off);
+            default           : return pos_type(off_type(-1));
+        }
+    }
+
+    auto seekpos(const pos_type pos, const std::ios::openmode /*which*/) -> pos_type override
+    { return this->seek_to(off_type(pos)); }
+
+    auto xsputn(const char* const bytes, const std::streamsize nbytes) -> std::streamsize override
+    {
+        const auto off = this->pos();
+        char*      err = nullptr;
+        if (!disk_file_pwrite(this->file, off, std::uint64_t(nbytes), bytes, &err)) { throw_disk_error(err); }
+
+        this->buf_off = off + std::uint64_t(nbytes);
+        this->setg(this->buf.data(), this->buf.data(), this->buf.data());
+        return nbytes;
+    }
+
+public:
+    explicit DiskFileBuf(ApfsFile* const file) :
+        file(file),
+        size(disk_file_size(file))
+    { this->setg(this->buf.data(), this->buf.data(), this->buf.data()); }
+};
 
 class File : public std::iostream
 {
@@ -45,15 +132,77 @@ public:
     ~File() override                     = default;
 };
 
+/// Host files, or files in the System volume or OS cryptex of a disk image.
 class Storage
 {
+    std::filesystem::path                      disk_path;
+    BlockBackend*                              disk{nullptr};
+    ApfsFile*                                  cryptex{nullptr};
+    std::unordered_map<std::string, ApfsFile*> files;
+
 public:
+    explicit Storage(const std::filesystem::path& disk_path, const bool cryptex) :
+        disk_path(disk_path)
+    {
+        if (disk_path.empty()) { return; }
+
+        char* err  = nullptr;
+        this->disk = disk_open(disk_path.string().c_str(), &err);
+        if (this->disk == nullptr) { throw_disk_error(err); }
+
+        if (cryptex) {
+            this->cryptex = disk_cryptex_open(this->disk, &err);
+            if (this->cryptex == nullptr) {
+                disk_close(this->disk);
+                throw_disk_error(err);
+            }
+        }
+    }
+
+    Storage(const Storage&)                    = delete;
+    Storage(Storage&&)                         = delete;
+    auto operator=(const Storage&) -> Storage& = delete;
+    auto operator=(Storage&&) -> Storage&      = delete;
+
+    ~Storage()
+    {
+        for (const auto& file : this->files) { disk_file_close(file.second); }
+        if (this->cryptex != nullptr) { disk_file_close(this->cryptex); }
+        if (this->disk != nullptr) { disk_close(this->disk); }
+    }
+
     auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File
     {
-        auto buf = std::make_unique<std::filebuf>();
-        if (buf->open(path, mode | std::ios::binary) == nullptr) {
-            throw std::runtime_error("failed to open `" + path.string() + '`');
+        if (this->disk == nullptr) {
+            auto buf = std::make_unique<std::filebuf>();
+            if (buf->open(path, mode | std::ios::binary) == nullptr) {
+                throw std::runtime_error("failed to open `" + path.string() + '`');
+            }
+            return File(std::move(buf));
         }
-        return File(std::move(buf));
+
+        auto file = this->files.find(path.string());
+        if (file == this->files.end()) {
+            char*       err  = nullptr;
+            auto* const apfs = this->cryptex == nullptr ?
+                                   disk_file_open(this->disk, path.string().c_str(), &err) :
+                                   disk_image_file_open(this->cryptex, path.string().c_str(), &err);
+            if (apfs == nullptr) { throw_disk_error(err); }
+            file = this->files.emplace(path.string(), apfs).first;
+        }
+
+        return File(std::make_unique<DiskFileBuf>(file->second));
+    }
+
+    /// Where host-side files belonging to `path` go, since files cannot be created in the disk image.
+    [[nodiscard]]
+    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path
+    {
+        if (this->disk == nullptr) { return path; }
+
+        auto ret  = this->disk_path;
+        ret      += '.';
+        ret      += path.filename();
+        return ret;
     }
 };
