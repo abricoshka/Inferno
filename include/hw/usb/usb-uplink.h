@@ -66,6 +66,7 @@ typedef struct USBUplinkDevice
     USBBus  bus;
     USBPort ports[USB_UPLINK_PORTS];
     CoMutex ctrl_lock;
+    CoMutex xfer_lock[2 * (USB_MAX_ENDPOINTS + 1)];
 
     USBUplinkDescriptors* desc;
 

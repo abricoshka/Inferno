@@ -375,6 +375,7 @@ void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops,
     unsigned int i;
 
     qemu_co_mutex_init(&x->ctrl_lock);
+    for (i = 0; i < ARRAY_SIZE(x->xfer_lock); i++) { qemu_co_mutex_init(&x->xfer_lock[i]); }
     QTAILQ_INIT(&x->waiters);
     usb_bus_new(&x->bus, sizeof(x->bus), bus_ops, owner);
 
@@ -455,6 +456,8 @@ int32_t coroutine_fn usb_uplink_transfer(USBUplinkDevice* x, USBUplinkPacket* pk
     int64_t  started = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     uint64_t waited  = 0;
     bool     warned  = false;
+
+    QEMU_LOCK_GUARD(&x->xfer_lock[(ep_addr & USB_DIR_IN ? USB_MAX_ENDPOINTS + 1 : 0) + (ep_addr & 0xF)]);
 
     for (;;) {
         USBEndpoint* ep;
