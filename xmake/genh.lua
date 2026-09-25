@@ -79,7 +79,7 @@ target("genh")
 	set_kind("phony")
 	add_rules("inferno.genh")
 	add_packages("glib", "mlib", "keycodemapdb", {public = true})
-	add_includedirs(os.projectdir(), inferno_gendir, path.join(inferno_gendir, "qapi"), path.join(inferno_gendir, "trace"),
+	add_includedirs(inferno_gendir, path.join(inferno_gendir, "qapi"), path.join(inferno_gendir, "trace"),
 		path.join(inferno_gendir, "ui"), {public = true})
 	if is_plat("linux") then
 		add_sysincludedirs(path.join(inferno_gendir, "linux-headers"), {public = true})

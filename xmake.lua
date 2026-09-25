@@ -156,7 +156,7 @@ if has_config("__tsa_cleanup") then
 	add_cflags("-Wthread-safety")
 end
 
-local quote_dirs = {"include"}
+local quote_dirs = {".", "include"}
 if os.isdir(path.join(os.projectdir(), "host", "include", inferno_host_arch)) then
 	table.insert(quote_dirs, "host/include/" .. inferno_host_arch)
 end
