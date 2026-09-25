@@ -865,11 +865,21 @@ static void ck_kp_disable_ppl(CKPatcherRange* range)
     if (ck_patcher_find_replace(range, "neutralise gxf_enable", gxf_pattern, NULL, sizeof(gxf_pattern),
                                 sizeof(uint32_t), gxf_replace, NULL, 0, sizeof(gxf_replace)))
     {
-        static const uint8_t ppl_pattern[] = {0xDF, 0x47, 0x03, 0xD5};    // msr daifset, #7
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down", ppl_pattern, NULL, sizeof(ppl_pattern),
+        static const uint8_t ppl_pattern[]        = {0xDF, 0x47, 0x03, 0xD5};    // msr daifset, #7/#0xf
+        static const uint8_t ppl_mask[]           = {0xFF, 0xF7, 0xFF, 0xFF};
+        static const uint8_t ppl_masked_pattern[] = {
+            0x1F, 0x0C, 0x7A, 0xF2,    // tst x?, #0x3c0
+            0x01, 0x00, 0x00, 0x54,    // b.ne ?
+        };
+        static const uint8_t ppl_masked_mask[] = {0x1F, 0xFC, 0xFF, 0xFF, 0x1F, 0x00, 0x00, 0xFF};
+        QEMU_BUILD_BUG_ON(sizeof(ppl_masked_pattern) != sizeof(ppl_masked_mask));
+        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down", ppl_pattern, ppl_mask, sizeof(ppl_pattern),
                                  sizeof(uint32_t), ck_kp_disable_ppl_locked_down);
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (inlined)", ppl_pattern, NULL,
+        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (inlined)", ppl_pattern, ppl_mask,
                                  sizeof(ppl_pattern), sizeof(uint32_t), ck_kp_disable_ppl_locked_down);
+        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (interrupts already masked)",
+                                 ppl_masked_pattern, ppl_masked_mask, sizeof(ppl_masked_pattern), sizeof(uint32_t),
+                                 ck_kp_disable_ppl_locked_down);
     }
 }
 
