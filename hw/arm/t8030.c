@@ -131,7 +131,12 @@
 
 #define GPIO_FORCE_DFU (161)
 
-#define DISPLAY_SIZE (68 * MiB)
+#define DISPLAY_SIZE           (68 * MiB)
+#define DISPLAY_DART_PAGE_SIZE (16 * KiB)
+#define DISPLAY_FB_IOVA        (0x10000000)
+
+#define PMAP_IO_RANGE_SIZE         (24)
+#define PMAP_IO_RANGE_CARVEOUT_SIG (0x43415256)    // 'CARV'
 
 #define DWC2_IRQ (495)
 
@@ -480,6 +485,109 @@ static bool t8030_load_preboot_file(const char* path, uint8_t** data, gsize* len
     return apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, full_path, data, len, errp);
 }
 
+/* Mark the DART page table regions as PPL-protected, as `_t8020dart_init` requires. */
+static void t8030_protect_dart_tables(AppleT8030MachineState* t8030, const uint64_t (*regions)[2], uint32_t count)
+{
+    AppleDTNode* defaults;
+    AppleDTProp* prop;
+    uint8_t*     ranges;
+    uint32_t     len;
+    uint32_t     i;
+
+    defaults = apple_dt_get_node(t8030->device_tree, "defaults");
+    assert_nonnull(defaults);
+    prop = apple_dt_get_prop(defaults, "pmap-io-ranges");
+    assert_nonnull(prop);
+
+    ranges = g_malloc(prop->len + count * PMAP_IO_RANGE_SIZE);
+    len    = 0;
+    for (i = 0; i + PMAP_IO_RANGE_SIZE <= prop->len; i += PMAP_IO_RANGE_SIZE) {
+        if (ldl_le_p(prop->data + i + 20) != PMAP_IO_RANGE_CARVEOUT_SIG) {
+            memcpy(ranges + len, prop->data + i, PMAP_IO_RANGE_SIZE);
+            len += PMAP_IO_RANGE_SIZE;
+        }
+    }
+
+    // One range per region, since iOS 15 claims a range for each region and panics if it is already owned.
+    for (i = 0; i < count; i++, len += PMAP_IO_RANGE_SIZE) {
+        stq_le_p(ranges + len, regions[i][0]);
+        stq_le_p(ranges + len + 8, regions[i][1] - regions[i][0]);
+        stl_le_p(ranges + len + 16, 0x4007);    // PPL-protected, like the DART register ranges.
+        stl_le_p(ranges + len + 20, PMAP_IO_RANGE_CARVEOUT_SIG);
+    }
+
+    apple_dt_set_prop(defaults, "pmap-io-ranges", len, ranges);
+    g_free(ranges);
+}
+
+/*
+ * Map the framebuffer in dart-disp0 and leave the display scanning it out, as
+ * iBoot does. XNU adopts the tables through `pt-region-N` and `l2-tt-N`
+ * instead of clearing the TTBRs, until IOMFB takes over.
+ */
+static void t8030_boot_display(AppleT8030MachineState* t8030, CarveoutAllocator* ca)
+{
+    AppleDARTState* dart;
+    AppleDTNode*    node;
+    uint32_t        fb_sid;
+    uint32_t        sids;
+    uint32_t        sid;
+    hwaddr          fb_size;
+    hwaddr          size;
+    hwaddr          tables;
+    uint64_t        pt_regions[32][2];
+    uint32_t        count;
+    uint64_t        l2_tt[2];
+    char            name[16];
+
+    dart = APPLE_DART(object_property_get_link(OBJECT(t8030), "dart-disp0", &error_abort));
+    node = apple_dt_get_node(t8030->device_tree, "arm-io/dart-disp0/mapper-disp0");
+    assert_nonnull(node);
+    fb_sid = apple_dt_get_prop_u32(node, "reg", &error_abort);
+
+    node = apple_dt_get_node(t8030->device_tree, "arm-io/dart-disp0");
+    assert_nonnull(node);
+    // Allow persistent mappings.
+    apple_dt_set_prop_u32(node, "dart-options", apple_dt_get_prop_u32(node, "dart-options", &error_abort) | BIT32(6));
+
+    fb_size = ROUND_UP((hwaddr)t8030->video_args.row_bytes * t8030->video_args.height, DISPLAY_DART_PAGE_SIZE);
+
+    // XNU requires persistent tables for every translated SID once any SID has them.
+    sids = apple_dt_get_prop_u32(node, "sids", &error_abort) & ~apple_dt_get_prop_u32(node, "bypass", &error_abort);
+    assert_cmphex(sids & BIT32(fb_sid), !=, 0);
+
+    // An L1 table for each SID, plus the L2 table of the framebuffer's.
+    size   = (ctpop32(sids) + 1) * DISPLAY_DART_PAGE_SIZE;
+    tables = carveout_alloc_mem(ca, size);
+
+    count = 0;
+    for (sid = 0; sid < 32; sid++) {
+        if ((sids & BIT32(sid)) == 0) { continue; }
+
+        size = sid == fb_sid ? 2 * DISPLAY_DART_PAGE_SIZE : DISPLAY_DART_PAGE_SIZE;
+        apple_dart_map_boot_range(dart, sid, tables, DISPLAY_FB_IOVA, t8030->video_args.base_addr,
+                                  sid == fb_sid ? fb_size : 0);
+
+        pt_regions[count][0] = tables;
+        pt_regions[count][1] = tables + size;
+        snprintf(name, sizeof(name), "pt-region-%u", sid);
+        apple_dt_set_prop(node, name, sizeof(pt_regions[count]), pt_regions[count]);
+        count++;
+        l2_tt[0] = tables;
+        // iOS 15 reads the u32 after the address as the table's level, iOS 14 requires it to be 0.
+        l2_tt[1] = BUILD_VERSION_MAJOR(t8030->build_version) >= 15 ? 2 : 0;
+        snprintf(name, sizeof(name), "l2-tt-%u", sid);
+        apple_dt_set_prop(node, name, sizeof(l2_tt), l2_tt);
+
+        tables += size;
+    }
+
+    t8030_protect_dart_tables(t8030, pt_regions, count);
+
+    adp_v4_set_boot_fb(APPLE_DISPLAY_PIPE_V4(object_property_get_link(OBJECT(t8030), "disp0", &error_abort)),
+                       DISPLAY_FB_IOVA);
+}
+
 static void t8030_memory_setup(AppleT8030MachineState* t8030)
 {
     AppleDTNode*       carveout_memory_map;
@@ -499,6 +607,10 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     CKPatcherRange*    seprom_range;
 
     apple_dt_unfinalise(t8030->device_tree);
+
+    // Only a booting kernel gets the display as iBoot leaves it, see `t8030_boot_display`.
+    apple_dart_clear_boot_ranges(APPLE_DART(object_property_get_link(OBJECT(t8030), "dart-disp0", &error_abort)));
+    adp_v4_clear_boot_fb(APPLE_DISPLAY_PIPE_V4(object_property_get_link(OBJECT(t8030), "disp0", &error_abort)));
 
     carveout_memory_map = apple_dt_get_node(t8030->device_tree, "/chosen/carveout-memory-map");
 
@@ -686,6 +798,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         error_setg(&error_fatal, "No kernel to boot; restore through DFU");
         return;
     }
+
+    t8030_boot_display(t8030, ca);
 
     apple_boot_allocate_segment_records(memory_map, hdr);
 
