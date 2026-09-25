@@ -19,6 +19,7 @@
 
 #pragma once
 #include "parse.hpp"
+#include "storage.hpp"
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -32,14 +33,17 @@
 
 class Patcher
 {
+    Storage&                                                                                       storage;
     std::unordered_map<std::filesystem::path, std::map<std::streamoff, std::vector<std::uint8_t>>> write_queue;
 
     static constexpr std::string_view ORIG_BYTE_FILE_EXT = ".InfernoOriginalBytes";
 
 public:
-    explicit Patcher() = default;
+    explicit Patcher(Storage& storage) :
+        storage(storage)
+    { }
 
-    static bool revert(const std::filesystem::path& path)
+    static bool revert(Storage& storage, const std::filesystem::path& path)
     {
         auto orig_bytes_path  = path;
         orig_bytes_path      += ORIG_BYTE_FILE_EXT;
@@ -51,8 +55,7 @@ public:
             throw std::runtime_error("failed to open orig bytes file at `" + orig_bytes_path.string() + '`');
         }
 
-        std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
-        if (!file || !file.is_open()) { throw std::runtime_error("failed to open file at `" + path.string() + '`'); }
+        auto file = storage.open(path, std::ios::in | std::ios::out);
 
         bool        changed = false;
         std::string line;
@@ -104,10 +107,7 @@ public:
     void flush() const
     {
         for (const auto& cache_entries : this->write_queue) {
-            std::fstream cache_file(cache_entries.first, std::ios::binary | std::ios::in | std::ios::out);
-            if (!cache_file.is_open()) {
-                throw std::runtime_error("failed to open cache file suffix=" + cache_entries.first.string());
-            }
+            auto cache_file       = this->storage.open(cache_entries.first, std::ios::in | std::ios::out);
             auto orig_bytes_path  = cache_entries.first;
             orig_bytes_path      += ORIG_BYTE_FILE_EXT;
             std::ofstream diff_file(orig_bytes_path, std::ios::out | std::ios::trunc);

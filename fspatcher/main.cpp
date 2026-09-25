@@ -192,6 +192,7 @@ namespace
     {
         CacheAnalyser::Image image;
         Assembler&           assembler;
+        Storage&             storage;
 
         void fix_async_dispatcher(std::istream& stream, const std::uint64_t renderer, const char* sym)
         {
@@ -225,7 +226,8 @@ namespace
     public:
         QuartzCorePatches(const CacheAnalyser& analyser, Assembler& assembler) :
             image(analyser.find_image(FrameworkMatch("QuartzCore"))),
-            assembler(assembler)
+            assembler(assembler),
+            storage(analyser.storage)
         { }
 
         void apply(const bool opengles)
@@ -238,7 +240,7 @@ namespace
                 // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
                 const auto asyncDispatchRenderer =
                     this->image.resolve_sym("__ZN2CA3OGL22AsynchronousDispatcher8rendererEv");
-                std::ifstream cache_file(this->image.path);
+                auto cache_file = this->storage.open(this->image.path);
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
                                      "__ZN2CA3OGL22AsynchronousDispatcher10stop_timerEv");
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
@@ -439,10 +441,11 @@ namespace
 
     void run(const PatcherCLI& cli)
     {
-        const CacheAnalyser analyser(cli.cachePath);
+        Storage             storage;
+        const CacheAnalyser analyser(storage, cli.cachePath);
 
         for (const auto& cache : analyser.caches) {
-            if (Patcher::revert(cache.first)) { std::cout << "Reverted `" << cache.first << "`.\n"; }
+            if (Patcher::revert(storage, cache.first)) { std::cout << "Reverted `" << cache.first << "`.\n"; }
         }
 
         if (cli.revert_only()) {
@@ -450,7 +453,7 @@ namespace
             return;
         }
 
-        Patcher   patcher;
+        Patcher   patcher(storage);
         Assembler assembler(patcher);
 
         std::cout << "Building patches...\n";
