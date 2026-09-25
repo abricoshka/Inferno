@@ -40,3 +40,12 @@ IOMMUMemoryRegion* apple_dart_iommu_mr(AppleDARTState* dart, uint32_t sid);
 void               apple_dart_iommu_table_pages(IOMMUMemoryRegion* mr, GArray* out);
 IOMMUMemoryRegion* apple_dart_instance_iommu_mr(AppleDARTState* s, uint32_t instance, uint32_t sid);
 AppleDARTState*    apple_dart_from_node(AppleDTNode* node);
+
+/*
+ * Map [@iova, @iova + @size) to @pa for @sid with an L1 table and, unless
+ * @size is 0, an L2 table in the pages at @tables, and translate through them
+ * from now on, including after reset, as iBoot leaves it.
+ */
+void apple_dart_map_boot_range(AppleDARTState* dart, uint32_t sid, hwaddr tables, hwaddr iova, hwaddr pa, hwaddr size);
+/* Forget the tables of `apple_dart_map_boot_range` from the next reset on. */
+void apple_dart_clear_boot_ranges(AppleDARTState* dart);

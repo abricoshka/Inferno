@@ -222,6 +222,7 @@ struct AppleDARTState
     uint32_t            l_shift[3];
     uint64_t            sid_mask;
     uint32_t            dart_options;
+    hwaddr              boot_tables[DART_MAX_STREAMS];
 };
 
 static int apple_dart_device_list(Object* obj, void* opaque)
@@ -711,6 +712,24 @@ end:
     return entry;
 }
 
+/* Translate @sid through the tables iBoot left behind, see `apple_dart_map_boot_range`. */
+static void apple_dart_apply_boot_table(AppleDARTState* dart, uint32_t sid)
+{
+    AppleDARTMapperInstance* mapper;
+    uint32_t                 i;
+
+    for (i = 0; i < dart->num_instances; i++) {
+        if (dart->instances[i]->type != DART_DART) { continue; }
+
+        mapper = container_of(dart->instances[i], AppleDARTMapperInstance, common);
+        qatomic_set(&mapper->regs.ttbr[sid][0],
+                    REG_FIELD_DP32((dart->boot_tables[sid] >> DART_TTBR_SHIFT) & DART_TTBR_MASK, DART_TTBR, VALID, 1));
+        qatomic_set(&mapper->regs.sid_config[sid], REG_FIELD_DP32(0, DART_SID_CONFIG, TRANSLATION_ENABLE, 1));
+        apple_dart_tlb_flush_sid(mapper, sid);
+        apple_dart_notify_remap(mapper, sid);
+    }
+}
+
 static void apple_dart_reset_enter(Object* obj, ResetType type)
 {
     AppleDARTState*          dart = APPLE_DART(obj);
@@ -758,6 +777,10 @@ static void apple_dart_reset_enter(Object* obj, ResetType type)
             }
             default: break;
         }
+    }
+
+    for (i = 0; i < DART_MAX_STREAMS; i++) {
+        if (dart->boot_tables[i] != 0) { apple_dart_apply_boot_table(dart, i); }
     }
 }
 
@@ -814,6 +837,37 @@ IOMMUMemoryRegion* apple_dart_iommu_mr(AppleDARTState* dart, uint32_t sid)
     }
     return NULL;
 }
+
+void apple_dart_map_boot_range(AppleDARTState* dart, uint32_t sid, hwaddr tables, hwaddr iova, hwaddr pa, hwaddr size)
+{
+    hwaddr   l1   = tables;
+    hwaddr   l2   = tables + dart->page_size;
+    uint64_t page = iova >> dart->page_shift;
+    uint64_t i;
+
+    assert_cmpuint(sid, <, DART_MAX_STREAMS);
+    assert_cmphex((tables | iova | pa | size) & dart->page_bits, ==, 0);
+
+    address_space_set(&address_space_memory, l1, 0, dart->page_size, MEMTXATTRS_UNSPECIFIED);
+
+    if (size != 0) {
+        assert_cmphex(page & dart->l_mask[0], ==, 0);
+        assert_cmphex(page & dart->l_mask[1], ==, ((page + (size >> dart->page_shift) - 1) & dart->l_mask[1]));
+
+        address_space_set(&address_space_memory, l2, 0, dart->page_size, MEMTXATTRS_UNSPECIFIED);
+        address_space_stq_le(&address_space_memory, l1 + 8 * ((page & dart->l_mask[1]) >> dart->l_shift[1]),
+                             l2 | DART_PTE_TYPE_TABLE, MEMTXATTRS_UNSPECIFIED, NULL);
+        for (i = 0; i < (size >> dart->page_shift); i++) {
+            address_space_stq_le(&address_space_memory, l2 + 8 * ((page + i) & dart->l_mask[2]),
+                                 (pa + (i << dart->page_shift)) | DART_PTE_TYPE_BLOCK, MEMTXATTRS_UNSPECIFIED, NULL);
+        }
+    }
+
+    dart->boot_tables[sid] = l1;
+    apple_dart_apply_boot_table(dart, sid);
+}
+
+void apple_dart_clear_boot_ranges(AppleDARTState* dart) { memset(dart->boot_tables, 0, sizeof(dart->boot_tables)); }
 
 IOMMUMemoryRegion* apple_dart_instance_iommu_mr(AppleDARTState* dart, uint32_t instance, uint32_t sid)
 {
