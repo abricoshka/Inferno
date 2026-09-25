@@ -58,9 +58,10 @@ static uint8_t apple_mic_temp_sensor_rx(I2CSlave* s)
         case R_ID0   : ret = sensor->id0; break;
         case R_ID1   : ret = sensor->id1; break;
         case R_STATUS: ret = REG_FIELD_DP8(0, STATUS, OK, 1); break;
-        case R_VALUE0: ret = 0x0A; break;
-        case R_VALUE1:
-        case R_VALUE2: ret = 0x00; break;
+        // 0x1F131B is ~30 C for a type 1 sensor with zeroed trim.
+        case R_VALUE0: ret = 0x1B; break;
+        case R_VALUE1: ret = 0x13; break;
+        case R_VALUE2: ret = 0x1F; break;
         default      : ret = 0x00; break;
     }
 
