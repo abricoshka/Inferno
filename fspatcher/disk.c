@@ -22,7 +22,7 @@
 #include "disk.h"
 #include "block/block.h"
 #include "crypto/init.h"
-#include "hw/arm/apfs.h"
+#include "fs/apfs.h"
 #include "qapi/error.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"

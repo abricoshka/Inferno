@@ -19,8 +19,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/kernel_patches.h"
-#include "hw/arm/apfs.h"
-#include "hw/arm/hfs.h"
+#include "fs/apfs.h"
+#include "fs/hfs.h"
 #include "hw/arm/patcher.h"
 #include "qapi/error.h"
 #include "qemu/bitops.h"

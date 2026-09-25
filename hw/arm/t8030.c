@@ -20,7 +20,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/a13.h"
-#include "hw/arm/apfs.h"
+#include "fs/apfs.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/dart.h"
 #include "hw/arm/dt.h"

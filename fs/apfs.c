@@ -18,12 +18,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/apfs.h"
+#include "fs/apfs.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"
 #include "system/block-backend.h"
-#include "hw/arm/libzbitmap.h"
+#include "fs/libzbitmap.h"
 #include <zlib.h>
 
 #define GPT_LBA_SIZE    (4096)

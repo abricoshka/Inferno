@@ -18,7 +18,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/hfs.h"
+#include "fs/hfs.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
 #include "qemu/units.h"

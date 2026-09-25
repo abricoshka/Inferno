@@ -32,9 +32,9 @@ inferno_linux_arch = ({
 
 inferno_target = "aarch64-softmmu"
 inferno_gendir = "$(builddir)/.gens/inferno"
-inferno_subdirs = {"accel", "audio", "authz", "backends", "block", "chardev", "crypto", "fpu", "fspatcher", "gdbstub",
-	"hw", "io", "monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target", "tcg", "trace", "ui",
-	"util"}
+inferno_subdirs = {"accel", "audio", "authz", "backends", "block", "chardev", "crypto", "fpu", "fs", "fspatcher",
+	"gdbstub", "hw", "io", "monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target", "tcg", "trace",
+	"ui", "util"}
 
 includes("@builtin/check")
 includes("xmake/packages.lua")
@@ -212,6 +212,12 @@ target("crypto")
 	add_packages("glib", "gnutls", "nettle", "gmp", "hogweed", {public = true})
 target_end()
 
+target("fs")
+	set_kind("object")
+	add_deps("genh")
+	add_packages("glib", "zlib")
+target_end()
+
 target("io")
 	set_kind("object")
 	add_deps("genh", "crypto", "qom")
@@ -278,7 +284,7 @@ target_end()
 
 target("system_arm")
 	set_kind("object")
-	add_deps("genh", "common", "system")
+	add_deps("genh", "common", "fs", "system")
 	add_includedirs("target/arm")
 	add_defines("CPU_DEFS_H", "CONFIG_SOFTMMU")
 	add_packages("tasn1", {public = true})

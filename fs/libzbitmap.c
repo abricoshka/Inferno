@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "hw/arm/libzbitmap.h"
+#include "libzbitmap.h"
 
 #define MIN(x, y)   ((x) > (y) ? (y) : (x))
 
