@@ -493,6 +493,8 @@ namespace
         if (cli.unredact_logs()) { LibSystemTracePatches(analyser, assembler).apply(); }
         std::cout << "Patches built successfully.\n";
 
+        patcher.rehash();
+
         patcher.print_changes();
 
         if (!cli.dry_run()) {
