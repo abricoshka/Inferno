@@ -21,7 +21,9 @@
 #include "hw/arm/apfs.h"
 #include "qapi/error.h"
 #include "qemu/bswap.h"
+#include "qemu/units.h"
 #include "system/block-backend.h"
+#include <zlib.h>
 
 #define GPT_LBA_SIZE    (4096)
 #define APFS_BLOCK_SIZE (4096)
@@ -43,6 +45,7 @@
 #define APFS_OBJ_ID_MASK      (0x0FFFFFFFFFFFFFFFULL)
 #define APFS_OBJ_TYPE_SHIFT   (60)
 #define APFS_TYPE_INODE       (3)
+#define APFS_TYPE_XATTR       (4)
 #define APFS_TYPE_FILE_EXTENT (8)
 #define APFS_TYPE_DIR_REC     (9)
 
@@ -55,8 +58,19 @@
 #define APFS_DREC_LEN_MASK (0x3FF)
 
 #define APFS_INODE_VAL_SIZE       (92)
+#define APFS_UF_COMPRESSED        (0x20)
 #define APFS_INO_EXT_TYPE_DSTREAM (8)
 #define APFS_FILE_EXTENT_LEN_MASK (0x00FFFFFFFFFFFFFFULL)
+
+#define APFS_XATTR_DATA_STREAM   (1 << 0)
+#define APFS_XATTR_DATA_EMBEDDED (1 << 1)
+#define APFS_RSRC_XATTR          "com.apple.ResourceFork"
+
+#define DECMPFS_XATTR          "com.apple.decmpfs"
+#define DECMPFS_MAGIC          (0x636D7066)    // 'fpmc', little-endian on disk
+#define DECMPFS_TYPE_ZLIB_RSRC (4)
+#define DECMPFS_CHUNK_SIZE     (64 * KiB)
+#define DECMPFS_CHUNK_RAW      (0xFF)
 
 static const uint8_t gpt_apfs_type_guid[16] = {
     0xEF, 0x57, 0x34, 0x7C, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC,
@@ -207,7 +221,18 @@ typedef struct
 
 typedef struct
 {
+    const char* name;
+    size_t      name_len;
+    bool        found;
+    uint16_t    flags;
+    uint16_t    len;
+    uint8_t     data[48];
+} ApfsXattrLookup;
+
+typedef struct
+{
     uint64_t private_id;
+    uint32_t bsd_flags;
     uint64_t size;
 } ApfsInode;
 
@@ -223,6 +248,11 @@ struct ApfsFile
     ApfsDevice dev;
     uint64_t   size;
     GArray*    extents;
+    /// Bytes that `extents` hold: the file itself, or its resource fork when compressed.
+    uint64_t data_size;
+    bool     compressed;
+    uint64_t chunk_table;
+    uint32_t chunk_count;
 };
 
 static uint64_t apfs_fletcher64(const uint8_t* block)
@@ -516,6 +546,7 @@ static int apfs_inode_fn(void* opaque, const ApfsEntry* entry, Error** errp)
     if (entry->val_len < APFS_INODE_VAL_SIZE) { goto corrupt; }
 
     inode->private_id = ldq_le_p(entry->val + 8);
+    inode->bsd_flags  = ldl_le_p(entry->val + 68);
 
     xf   = entry->val + APFS_INODE_VAL_SIZE;
     rest = entry->val_len - APFS_INODE_VAL_SIZE;
@@ -544,6 +575,31 @@ static int apfs_inode_fn(void* opaque, const ApfsEntry* entry, Error** errp)
 
 corrupt:
     error_setg(errp, "APFS inode record is corrupt");
+    return -1;
+}
+
+static int apfs_xattr_lookup_fn(void* opaque, const ApfsEntry* entry, Error** errp)
+{
+    ApfsXattrLookup* lookup = opaque;
+    uint16_t         name_len;
+
+    if (entry->key_len < 10 || entry->val_len < 4) { goto corrupt; }
+
+    name_len = lduw_le_p(entry->key + 8);
+    if (10 + (uint32_t)name_len > entry->key_len) { goto corrupt; }
+
+    if (name_len != lookup->name_len + 1 || memcmp(entry->key + 10, lookup->name, lookup->name_len) != 0) { return 0; }
+
+    lookup->flags = lduw_le_p(entry->val);
+    lookup->len   = lduw_le_p(entry->val + 2);
+    if (4 + (uint32_t)lookup->len > entry->val_len) { goto corrupt; }
+
+    memcpy(lookup->data, entry->val + 4, MIN(lookup->len, sizeof(lookup->data)));
+    lookup->found = true;
+    return 1;
+
+corrupt:
+    error_setg(errp, "APFS extended attribute record is corrupt");
     return -1;
 }
 
@@ -687,6 +743,84 @@ static bool apfs_mount_volume(ApfsContext* ctx, int role, Error** errp)
     return false;
 }
 
+static bool apfs_lookup_xattr(ApfsContext* ctx, uint64_t ino, const char* path, ApfsXattrLookup* lookup, Error** errp)
+{
+    if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_XATTR, apfs_xattr_lookup_fn, lookup,
+                     errp)
+        < 0)
+    {
+        return false;
+    }
+
+    if (!lookup->found) {
+        error_setg(errp, "`%s` is compressed but has no %s attribute", path, lookup->name);
+        return false;
+    }
+
+    return true;
+}
+
+static bool apfs_load_extents(ApfsContext* ctx, uint64_t id, GArray* extents, Error** errp)
+{
+    if (ctx->fext_tree != 0) {
+        return apfs_fext_walk(ctx, ctx->fext_tree, APFS_BTREE_MAX_LEVEL, id, apfs_extent_fn, extents, errp) >= 0;
+    }
+
+    return apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn, extents,
+                        errp)
+           >= 0;
+}
+
+static bool apfs_data_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp);
+
+static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* path, ApfsFile* file, Error** errp)
+{
+    ApfsXattrLookup decmpfs = {.name = DECMPFS_XATTR, .name_len = strlen(DECMPFS_XATTR)};
+    ApfsXattrLookup rsrc    = {.name = APFS_RSRC_XATTR, .name_len = strlen(APFS_RSRC_XATTR)};
+    uint8_t         rsrc_hdr[16];
+    uint64_t        size;
+
+    if (!apfs_lookup_xattr(ctx, ino, path, &decmpfs, errp)) { return false; }
+    if (!(decmpfs.flags & APFS_XATTR_DATA_EMBEDDED) || decmpfs.len < 16) {
+        error_setg(errp, "`%s` has a corrupt decmpfs attribute", path);
+        return false;
+    }
+    if (ldl_le_p(decmpfs.data) != DECMPFS_MAGIC) {
+        error_setg(errp, "`%s` has a bad decmpfs magic 0x%08x", path, ldl_le_p(decmpfs.data));
+        return false;
+    }
+    if (ldl_le_p(decmpfs.data + 4) != DECMPFS_TYPE_ZLIB_RSRC) {
+        error_setg(errp, "`%s` uses unsupported decmpfs compression type %u", path, ldl_le_p(decmpfs.data + 4));
+        return false;
+    }
+    size = ldq_le_p(decmpfs.data + 8);
+
+    // The value is a j_xattr_dstream_t: the stream's object ID, then its j_dstream_t starting with the size.
+    if (!apfs_lookup_xattr(ctx, ino, path, &rsrc, errp)) { return false; }
+    if (!(rsrc.flags & APFS_XATTR_DATA_STREAM) || rsrc.len < 16) {
+        error_setg(errp, "`%s` has a corrupt resource fork attribute", path);
+        return false;
+    }
+
+    file->data_size = ldq_le_p(rsrc.data + 8);
+    if (!apfs_load_extents(ctx, ldq_le_p(rsrc.data), file->extents, errp)) { return false; }
+
+    // Resource fork header (big-endian): dataOffset, mapOffset, dataLength, mapLength.
+    // The chunk table sits right after the leading 4-byte length at dataOffset.
+    if (!apfs_data_io(file, 0, sizeof(rsrc_hdr), rsrc_hdr, false, errp)) { return false; }
+    file->chunk_table = ldl_be_p(rsrc_hdr) + 4;
+
+    if (file->chunk_table + 4 > file->data_size) {
+        error_setg(errp, "`%s` resource fork is too small for a chunk table", path);
+        return false;
+    }
+
+    file->compressed  = true;
+    file->size        = size;
+    file->chunk_count = (size + DECMPFS_CHUNK_SIZE - 1) / DECMPFS_CHUNK_SIZE;
+    return true;
+}
+
 static ApfsFile* apfs_open(ApfsContext* ctx, int role, const char* path, Error** errp)
 {
     g_auto(GStrv) components = g_strsplit(path, "/", -1);
@@ -726,16 +860,16 @@ static ApfsFile* apfs_open(ApfsContext* ctx, int role, const char* path, Error**
 
     file          = g_new0(ApfsFile, 1);
     file->dev     = ctx->dev;
-    file->size    = inode.size;
     file->extents = g_array_new(false, false, sizeof(ApfsExtent));
-    if ((ctx->fext_tree != 0 ? apfs_fext_walk(ctx, ctx->fext_tree, APFS_BTREE_MAX_LEVEL, inode.private_id,
-                                              apfs_extent_fn, file->extents, errp) :
-                               apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id,
-                                            APFS_TYPE_FILE_EXTENT, apfs_extent_fn, file->extents, errp))
-        < 0)
-    {
-        return NULL;
+
+    if (inode.bsd_flags & APFS_UF_COMPRESSED) {
+        if (!apfs_open_compressed(ctx, ino, path, file, errp)) { return NULL; }
+        return g_steal_pointer(&file);
     }
+
+    file->size      = inode.size;
+    file->data_size = inode.size;
+    if (!apfs_load_extents(ctx, inode.private_id, file->extents, errp)) { return NULL; }
 
     return g_steal_pointer(&file);
 }
@@ -764,8 +898,8 @@ void apfs_file_free(ApfsFile* file)
 
 uint64_t apfs_file_size(const ApfsFile* file) { return file->size; }
 
-/// Holes read as zeroes and cannot be written.
-static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
+/// Access the bytes that the extents hold. Holes read as zeroes and cannot be written.
+static bool apfs_data_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
 {
     const ApfsExtent* extent;
     uint64_t          start;
@@ -773,7 +907,7 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
     uint64_t          done = 0;
     guint             i;
 
-    if (off > file->size || len > file->size - off) {
+    if (off > file->data_size || len > file->data_size - off) {
         error_setg(errp, "APFS file access at 0x%" PRIx64 "+0x%" PRIx64 " is out of bounds", off, len);
         return false;
     }
@@ -798,6 +932,90 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
     if (write && done != len) {
         error_setg(errp, "APFS file write at 0x%" PRIx64 "+0x%" PRIx64 " hits a hole", off, len);
         return false;
+    }
+
+    return true;
+}
+
+static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t out_len, Error** errp)
+{
+    g_autofree uint8_t* comp = NULL;
+    uint8_t             entry[8];
+    uint64_t            off;
+    uint32_t            size;
+    uLongf              dst_len;
+
+    if (idx >= file->chunk_count) {
+        error_setg(errp, "APFS decmpfs chunk %u is out of bounds", idx);
+        return false;
+    }
+
+    if (!apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8, sizeof(entry), entry, false, errp)) {
+        return false;
+    }
+
+    off  = file->chunk_table + ldl_le_p(entry);
+    size = ldl_le_p(entry + 4);
+    if (off + size > file->data_size) {
+        error_setg(errp, "APFS decmpfs chunk %u overruns the resource fork", idx);
+        return false;
+    }
+
+    comp = g_malloc(size);
+    if (!apfs_data_io(file, off, size, comp, false, errp)) { return false; }
+
+    if (size > 0 && comp[0] == DECMPFS_CHUNK_RAW) {
+        if (size - 1 != out_len) {
+            error_setg(errp, "APFS decmpfs raw chunk %u has the wrong size", idx);
+            return false;
+        }
+        memcpy(out, comp + 1, out_len);
+        return true;
+    }
+
+    dst_len = out_len;
+    if (uncompress(out, &dst_len, comp, size) != Z_OK || dst_len != out_len) {
+        error_setg(errp, "APFS decmpfs chunk %u failed to decompress", idx);
+        return false;
+    }
+
+    return true;
+}
+
+static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
+{
+    g_autofree uint8_t* chunk = NULL;
+    uint64_t            pos;
+    uint64_t            end = off + len;
+    uint32_t            idx;
+    uint64_t            chunk_start;
+    uint64_t            chunk_len;
+    uint64_t            local;
+    uint64_t            n;
+
+    if (!file->compressed) { return apfs_data_io(file, off, len, buf, write, errp); }
+
+    if (off > file->size || len > file->size - off) {
+        error_setg(errp, "APFS file access at 0x%" PRIx64 "+0x%" PRIx64 " is out of bounds", off, len);
+        return false;
+    }
+
+    if (write) {
+        error_setg(errp, "Compressed APFS files cannot be written");
+        return false;
+    }
+
+    chunk = g_malloc(DECMPFS_CHUNK_SIZE);
+    for (pos = off; pos < end; pos += n) {
+        idx         = pos / DECMPFS_CHUNK_SIZE;
+        chunk_start = (uint64_t)idx * DECMPFS_CHUNK_SIZE;
+        chunk_len   = MIN(DECMPFS_CHUNK_SIZE, file->size - chunk_start);
+        local       = pos - chunk_start;
+        n           = MIN(end - pos, chunk_len - local);
+
+        if (!apfs_chunk_read(file, idx, chunk, chunk_len, errp)) { return false; }
+
+        memcpy(buf + (pos - off), chunk + local, n);
     }
 
     return true;
