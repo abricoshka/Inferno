@@ -30,6 +30,8 @@ typedef struct ApfsFile ApfsFile;
 ApfsFile* apfs_open_file(BlockBackend* blk, uint16_t role, const char* path, Error** errp);
 /// Open `path` in the volume of the APFS container that `image` holds, such as a cryptex; `image` must outlive it.
 ApfsFile* apfs_open_image_file(ApfsFile* image, const char* path, Error** errp);
+/// Open `path` in the volume of the APFS container `image`, which must outlive it.
+ApfsFile* apfs_open_memory_file(uint8_t* image, size_t image_len, const char* path, Error** errp);
 void      apfs_file_free(ApfsFile* file);
 uint64_t  apfs_file_size(const ApfsFile* file);
 bool      apfs_file_pread(ApfsFile* file, uint64_t off, uint64_t len, void* buf, Error** errp);

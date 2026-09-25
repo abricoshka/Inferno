@@ -30,6 +30,7 @@
 
 #define APFS_OBJ_TYPE_MASK          (0xFFFF)
 #define APFS_OBJ_TYPE_NX_SUPERBLOCK (0x1)
+#define APFS_NX_MAGIC               (0x4253584E)    // 'NXSB'
 
 #define APFS_NX_MAX_FILE_SYSTEMS (100)
 
@@ -183,11 +184,13 @@ typedef struct QEMU_PACKED
     uint16_t    val_free_list_len;
 } ApfsBtreeNodePhys;
 
-/// Where a container lives: on a disk, or in an image file in another container.
+/// Where a container lives: on a disk, in an image file in another container, or in memory.
 typedef struct
 {
     BlockBackend* blk;
     ApfsFile*     image;
+    uint8_t*      mem;
+    uint64_t      mem_len;
     uint64_t      base;
 } ApfsDevice;
 
@@ -280,6 +283,19 @@ static bool apfs_dev_io(const ApfsDevice* dev, uint64_t off, uint64_t len, uint8
     int ret;
 
     if (dev->image != NULL) { return apfs_file_io(dev->image, dev->base + off, len, buf, write, errp); }
+
+    if (dev->mem != NULL) {
+        if (off > dev->mem_len || len > dev->mem_len - off) {
+            error_setg(errp, "APFS %s at 0x%" PRIx64 "+0x%" PRIx64 " is out of bounds", write ? "write" : "read", off,
+                       len);
+            return false;
+        }
+        if (write) { memcpy(dev->mem + off, buf, len); }
+        else {
+            memcpy(buf, dev->mem + off, len);
+        }
+        return true;
+    }
 
     ret =
         write ? blk_pwrite(dev->blk, dev->base + off, len, buf, 0) : blk_pread(dev->blk, dev->base + off, len, buf, 0);
@@ -886,6 +902,18 @@ ApfsFile* apfs_open_file(BlockBackend* blk, uint16_t role, const char* path, Err
 ApfsFile* apfs_open_image_file(ApfsFile* image, const char* path, Error** errp)
 {
     ApfsContext ctx = {.dev.image = image};
+
+    return apfs_open(&ctx, APFS_VOL_ROLE_ANY, path, errp);
+}
+
+ApfsFile* apfs_open_memory_file(uint8_t* image, size_t image_len, const char* path, Error** errp)
+{
+    ApfsContext ctx = {.dev.mem = image, .dev.mem_len = image_len};
+
+    if (image_len < APFS_BLOCK_SIZE || ldl_le_p(image + offsetof(ApfsNxSuperblock, magic)) != APFS_NX_MAGIC) {
+        error_setg(errp, "Not an APFS container");
+        return NULL;
+    }
 
     return apfs_open(&ctx, APFS_VOL_ROLE_ANY, path, errp);
 }
