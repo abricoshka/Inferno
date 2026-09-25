@@ -1,5 +1,5 @@
 /*
- * Minimal read-only APFS reader.
+ * Minimal APFS file reader and in-place writer.
  *
  * Copyright (c) 2026 Visual Ehrmanntraut (VisualEhrmanntraut).
  *
@@ -47,6 +47,8 @@
 #define APFS_TYPE_DIR_REC     (9)
 
 #define APFS_ROOT_DIR_INO (2)
+
+#define APFS_VOL_ROLE_ANY (-1)
 
 #define APFS_DREC_LEN_MASK (0x3FF)
 
@@ -161,13 +163,20 @@ typedef struct QEMU_PACKED
     uint16_t    val_free_list_len;
 } ApfsBtreeNodePhys;
 
+/// Where a container lives: on a disk, or in an image file in another container.
 typedef struct
 {
     BlockBackend* blk;
+    ApfsFile*     image;
     uint64_t      base;
-    uint64_t      xid;
-    uint64_t      omap_tree;
-    uint64_t      root_tree;
+} ApfsDevice;
+
+typedef struct
+{
+    ApfsDevice dev;
+    uint64_t   xid;
+    uint64_t   omap_tree;
+    uint64_t   root_tree;
 } ApfsContext;
 
 typedef struct
@@ -197,10 +206,17 @@ typedef struct
 
 typedef struct
 {
-    ApfsContext* ctx;
-    uint8_t*     data;
-    uint64_t     size;
-} ApfsExtentRead;
+    uint64_t logical;
+    uint64_t len;
+    uint64_t paddr;
+} ApfsExtent;
+
+struct ApfsFile
+{
+    ApfsDevice dev;
+    uint64_t   size;
+    GArray*    extents;
+};
 
 static uint64_t apfs_fletcher64(const uint8_t* block)
 {
@@ -220,17 +236,26 @@ static uint64_t apfs_fletcher64(const uint8_t* block)
     return (c2 << 32) | c1;
 }
 
-static bool apfs_read(ApfsContext* ctx, uint64_t off, uint64_t len, void* buf, Error** errp)
-{
-    int ret = blk_pread(ctx->blk, ctx->base + off, len, buf, 0);
+static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp);
 
+static bool apfs_dev_io(const ApfsDevice* dev, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
+{
+    int ret;
+
+    if (dev->image != NULL) { return apfs_file_io(dev->image, dev->base + off, len, buf, write, errp); }
+
+    ret =
+        write ? blk_pwrite(dev->blk, dev->base + off, len, buf, 0) : blk_pread(dev->blk, dev->base + off, len, buf, 0);
     if (ret < 0) {
-        error_setg_errno(errp, -ret, "APFS read at 0x%" PRIx64 " failed", ctx->base + off);
+        error_setg_errno(errp, -ret, "APFS %s at 0x%" PRIx64 " failed", write ? "write" : "read", dev->base + off);
         return false;
     }
 
     return true;
 }
+
+static bool apfs_read(ApfsContext* ctx, uint64_t off, uint64_t len, void* buf, Error** errp)
+{ return apfs_dev_io(&ctx->dev, off, len, buf, false, errp); }
 
 static bool apfs_read_block(ApfsContext* ctx, uint64_t paddr, uint8_t* buf, Error** errp)
 { return apfs_read(ctx, paddr * APFS_BLOCK_SIZE, APFS_BLOCK_SIZE, buf, errp); }
@@ -470,27 +495,18 @@ corrupt:
 
 static int apfs_extent_fn(void* opaque, const ApfsEntry* entry, Error** errp)
 {
-    ApfsExtentRead* extents = opaque;
-    uint64_t        logical;
-    uint64_t        len;
-    uint64_t        paddr;
+    GArray*    extents = opaque;
+    ApfsExtent extent;
 
     if (entry->key_len < 16 || entry->val_len < 16) {
         error_setg(errp, "APFS file extent record is corrupt");
         return -1;
     }
 
-    logical = ldq_le_p(entry->key + 8);
-    len     = ldq_le_p(entry->val) & APFS_FILE_EXTENT_LEN_MASK;
-    paddr   = ldq_le_p(entry->val + 8);
-
-    if (logical >= extents->size) { return 0; }
-
-    len = MIN(len, extents->size - logical);
-    if (paddr != 0 && !apfs_read(extents->ctx, paddr * APFS_BLOCK_SIZE, len, extents->data + logical, errp)) {
-        return -1;
-    }
-
+    extent.logical = ldq_le_p(entry->key + 8);
+    extent.len     = ldq_le_p(entry->val) & APFS_FILE_EXTENT_LEN_MASK;
+    extent.paddr   = ldq_le_p(entry->val + 8);
+    g_array_append_val(extents, extent);
     return 0;
 }
 
@@ -526,7 +542,7 @@ static bool apfs_find_container(ApfsContext* ctx, Error** errp)
     for (i = 0; i < num_entries; i++) {
         entry = (const GptEntry*)(entries + (size_t)i * entry_size);
         if (memcmp(entry->type_guid, gpt_apfs_type_guid, sizeof(gpt_apfs_type_guid)) == 0) {
-            ctx->base = le64_to_cpu(entry->first_lba) * GPT_LBA_SIZE;
+            ctx->dev.base = le64_to_cpu(entry->first_lba) * GPT_LBA_SIZE;
             return true;
         }
     }
@@ -582,7 +598,7 @@ static bool apfs_load_omap(ApfsContext* ctx, uint64_t omap_oid, Error** errp)
     return true;
 }
 
-static bool apfs_mount_volume(ApfsContext* ctx, uint16_t role, Error** errp)
+static bool apfs_mount_volume(ApfsContext* ctx, int role, Error** errp)
 {
     uint8_t                 nx_block[APFS_BLOCK_SIZE];
     uint8_t                 block[APFS_BLOCK_SIZE];
@@ -602,65 +618,151 @@ static bool apfs_mount_volume(ApfsContext* ctx, uint16_t role, Error** errp)
 
         if (!apfs_omap_lookup(ctx, oid, &paddr, errp) || !apfs_read_block(ctx, paddr, block, errp)) { return false; }
 
-        if (le16_to_cpu(fs->role) == role) {
+        if (role == APFS_VOL_ROLE_ANY || le16_to_cpu(fs->role) == role) {
             ctx->root_tree = le64_to_cpu(fs->root_tree_oid);
             return apfs_load_omap(ctx, le64_to_cpu(fs->omap_oid), errp);
         }
     }
 
-    error_setg(errp, "No APFS volume with role 0x%x found", role);
+    if (role == APFS_VOL_ROLE_ANY) { error_setg(errp, "No APFS volume found"); }
+    else {
+        error_setg(errp, "No APFS volume with role 0x%x found", role);
+    }
     return false;
 }
 
-bool apfs_read_file(BlockBackend* blk, uint16_t role, const char* path, uint8_t** data, gsize* len, Error** errp)
+static ApfsFile* apfs_open(ApfsContext* ctx, int role, const char* path, Error** errp)
 {
-    ApfsContext ctx            = {.blk = blk};
-    g_auto(GStrv) components   = g_strsplit(path, "/", -1);
-    g_autofree uint8_t* buffer = NULL;
-    ApfsDirLookup       lookup = {0};
-    ApfsInode           inode  = {0};
-    ApfsExtentRead      extents;
-    uint64_t            ino = APFS_ROOT_DIR_INO;
-    char**              component;
+    g_auto(GStrv) components = g_strsplit(path, "/", -1);
+    g_autoptr(ApfsFile) file = NULL;
+    ApfsDirLookup lookup     = {0};
+    ApfsInode     inode      = {0};
+    uint64_t      ino        = APFS_ROOT_DIR_INO;
+    char**        component;
 
-    if (!apfs_find_container(&ctx, errp) || !apfs_mount_volume(&ctx, role, errp)) { return false; }
+    if (!apfs_mount_volume(ctx, role, errp)) { return NULL; }
 
     for (component = components; *component != NULL; component++) {
+        if (**component == '\0') { continue; }
+
         lookup.name     = *component;
         lookup.name_len = strlen(*component);
         lookup.found    = false;
-        if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_DIR_REC, apfs_dir_lookup_fn, &lookup,
+        if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_DIR_REC, apfs_dir_lookup_fn, &lookup,
                          errp)
             < 0)
         {
-            return false;
+            return NULL;
         }
 
         if (!lookup.found) {
             error_setg(errp, "`%s`: no such file or directory", path);
-            return false;
+            return NULL;
         }
 
         ino = lookup.file_id;
     }
 
-    if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_INODE, apfs_inode_fn, &inode, errp) < 0)
+    if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_INODE, apfs_inode_fn, &inode, errp) < 0)
     {
-        return false;
+        return NULL;
     }
 
-    buffer       = g_malloc0(inode.size + 1);
-    extents.ctx  = &ctx;
-    extents.data = buffer;
-    extents.size = inode.size;
-    if (apfs_fs_walk(&ctx, ctx.root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn,
-                     &extents, errp)
+    file          = g_new0(ApfsFile, 1);
+    file->dev     = ctx->dev;
+    file->size    = inode.size;
+    file->extents = g_array_new(false, false, sizeof(ApfsExtent));
+    if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn,
+                     file->extents, errp)
         < 0)
     {
+        return NULL;
+    }
+
+    return g_steal_pointer(&file);
+}
+
+ApfsFile* apfs_open_file(BlockBackend* blk, uint16_t role, const char* path, Error** errp)
+{
+    ApfsContext ctx = {.dev.blk = blk};
+
+    if (!apfs_find_container(&ctx, errp)) { return NULL; }
+
+    return apfs_open(&ctx, role, path, errp);
+}
+
+ApfsFile* apfs_open_image_file(ApfsFile* image, const char* path, Error** errp)
+{
+    ApfsContext ctx = {.dev.image = image};
+
+    return apfs_open(&ctx, APFS_VOL_ROLE_ANY, path, errp);
+}
+
+void apfs_file_free(ApfsFile* file)
+{
+    g_array_unref(file->extents);
+    g_free(file);
+}
+
+uint64_t apfs_file_size(const ApfsFile* file) { return file->size; }
+
+/// Holes read as zeroes and cannot be written.
+static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
+{
+    const ApfsExtent* extent;
+    uint64_t          start;
+    uint64_t          end;
+    uint64_t          done = 0;
+    guint             i;
+
+    if (off > file->size || len > file->size - off) {
+        error_setg(errp, "APFS file access at 0x%" PRIx64 "+0x%" PRIx64 " is out of bounds", off, len);
         return false;
     }
 
-    *data = g_steal_pointer(&buffer);
-    *len  = inode.size;
+    if (!write) { memset(buf, 0, len); }
+
+    for (i = 0; i < file->extents->len; i++) {
+        extent = &g_array_index(file->extents, ApfsExtent, i);
+        start  = MAX(off, extent->logical);
+        end    = MIN(off + len, extent->logical + extent->len);
+        if (start >= end || extent->paddr == 0) { continue; }
+
+        if (!apfs_dev_io(&file->dev, extent->paddr * APFS_BLOCK_SIZE + (start - extent->logical), end - start,
+                         buf + (start - off), write, errp))
+        {
+            return false;
+        }
+
+        done += end - start;
+    }
+
+    if (write && done != len) {
+        error_setg(errp, "APFS file write at 0x%" PRIx64 "+0x%" PRIx64 " hits a hole", off, len);
+        return false;
+    }
+
+    return true;
+}
+
+bool apfs_file_pread(ApfsFile* file, uint64_t off, uint64_t len, void* buf, Error** errp)
+{ return apfs_file_io(file, off, len, buf, false, errp); }
+
+bool apfs_file_pwrite(ApfsFile* file, uint64_t off, uint64_t len, const void* buf, Error** errp)
+{ return apfs_file_io(file, off, len, (uint8_t*)buf, true, errp); }
+
+bool apfs_read_file(BlockBackend* blk, uint16_t role, const char* path, uint8_t** data, gsize* len, Error** errp)
+{
+    g_autoptr(ApfsFile) file   = apfs_open_file(blk, role, path, errp);
+    g_autofree uint8_t* buffer = NULL;
+
+    if (file == NULL) { return false; }
+
+    buffer = g_malloc(file->size + 1);
+    if (!apfs_file_pread(file, 0, file->size, buffer, errp)) { return false; }
+
+    buffer[file->size] = '\0';
+    *data              = g_steal_pointer(&buffer);
+    *len               = file->size;
     return true;
 }
