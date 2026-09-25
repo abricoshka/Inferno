@@ -8,7 +8,8 @@ IM4P ::= SEQUENCE {
 	description		IA5String,
 	data			OCTET STRING,
 	kbag			OCTET STRING OPTIONAL,
-	trailer			SEQUENCE OF ANY OPTIONAL
+	trailer			SEQUENCE OF ANY OPTIONAL,
+	properties		[0] EXPLICIT ANY OPTIONAL
 }
 
 IM4R ::= SEQUENCE {
