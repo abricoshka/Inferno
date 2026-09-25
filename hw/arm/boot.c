@@ -508,8 +508,10 @@ AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize 
 
 void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len)
 {
+    g_autoptr(GString) snapshot   = NULL;
     g_autofree uint8_t* file_data = NULL;
     uint32_t            length;
+    uint32_t            hash_len;
     char                payload_type[4];
 
     extract_im4p_payload(filename, data, len, payload_type, &file_data, &length, NULL);
@@ -520,6 +522,22 @@ void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, u
     }
 
     apple_dt_set_prop(chosen, "system-volume-auth-blob", length, file_data);
+
+    // iBoot names the root snapshot after the root hash, which sits at 0x10 with its length at 0xC.
+    if ((length & ~0x80) != 0x50) {
+        error_setg(&error_fatal, "`%s` has an unexpected `isys` size 0x%x", filename, length);
+        return;
+    }
+
+    hash_len = (uint32_t)ldl_le_p(file_data + 0xC);
+    if (hash_len > 0x40) {
+        error_setg(&error_fatal, "`%s` has an oversized root hash (0x%x)", filename, hash_len);
+        return;
+    }
+
+    snapshot = g_string_new("com.apple.os.update-");
+    for (uint32_t i = 0; i < hash_len; ++i) { g_string_append_printf(snapshot, "%02X", file_data[0x10 + i]); }
+    apple_dt_set_prop_str(chosen, "root-snapshot-name", snapshot->str);
 }
 
 static void apple_boot_init_mem_ranges(AppleDTNode* root)
