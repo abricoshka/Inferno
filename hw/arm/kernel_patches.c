@@ -672,8 +672,25 @@ static void ck_kp_pmap_cs_enforce_patch(CKPatcherRange* range)
     };
     QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
     static const uint8_t repl[] = {MOV_W0_0_BYTES, NOP_BYTES};
-    ck_patcher_find_replace(range, "bypass pmap_cs_enforce", pattern, mask, sizeof(pattern), sizeof(uint32_t), repl,
-                            NULL, 0, sizeof(repl));
+    if (!ck_patcher_find_replace(range, "bypass pmap_cs_enforce", pattern, mask, sizeof(pattern), sizeof(uint32_t),
+                                 repl, NULL, 0, sizeof(repl)))
+    {
+        static const uint8_t alt[] = {
+            0x00, 0x00, 0x00, 0x94,    // bl #?
+            0x00, 0x00, 0x00, 0x90,    // adrp x?, #?
+            0x00, 0x00, 0x00, 0x35,    // cbnz w0, #?
+            0xE0, 0x03, 0x00, 0xAA,    // mov x?, x?
+            0x88, 0x63, 0x80, 0x92,    // mov x8, #0xfffffffffffffce3
+        };
+        static const uint8_t mask_alt[] = {
+            0x00, 0x00, 0x00, 0xFC, 0x00, 0x00, 0x00, 0x9F, 0x1F, 0x00,
+            0x00, 0xFF, 0xE0, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+        QEMU_BUILD_BUG_ON(sizeof(alt) != sizeof(mask_alt));
+        static const uint8_t repl_alt[] = {MOV_W0_0_BYTES};
+        ck_patcher_find_replace(range, "bypass pmap_cs_enforce (alt)", alt, mask_alt, sizeof(alt), sizeof(uint32_t),
+                                repl_alt, NULL, 0, sizeof(repl_alt));
+    }
 }
 
 // From iOS 18, APFS compares data hashes with corecrypto's `cc_cmp_safe` instead of an inlined copy.
