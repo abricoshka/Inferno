@@ -84,6 +84,9 @@
 
 #define ADP_V4_PANEL_HZ (60)
 
+/* Active size, front porch, sync pulse, back porch */
+#define ADP_V4_VFTG_TIMING_COUNT (4)
+
 /* 2 GenPipes, 2 Layers per GenPipe */
 #define ADP_V4_GP_COUNT    (2)
 #define ADP_V4_LAYER_COUNT (2)
@@ -137,6 +140,8 @@ struct AppleDisplayPipeV4State
     uint32_t            int_status;
     uint32_t            int_enable;
     uint32_t            commit_pending;
+    uint32_t            vftg_control;
+    uint32_t            vftg_timings[ADP_V4_VFTG_TIMING_COUNT];
     QEMUTimer*          vsync_timer;
     uint64_t            next_vsync_ns;
     ADPV4GenPipe        genpipe[ADP_V4_GP_COUNT];
@@ -172,6 +177,16 @@ REG32(CONTROL_UPDATE, 0x4602C)
     REG_FIELD(CONTROL_UPDATE, TAG, 8, 4)
     REG_FIELD(CONTROL_UPDATE, COMMIT, 12, 1)
 REG32(CONTROL_FRAME_SIZE, 0x4603C)
+
+// vertical frame timing generator
+REG32(VFTG_CONTROL, 0x48024)
+    REG_FIELD(VFTG_CONTROL, UPDATE, 14, 2)
+    REG_FIELD(VFTG_CONTROL, RUNNING, 30, 1)
+    REG_FIELD(VFTG_CONTROL, ENABLE, 31, 1)
+REG32(VFTG_ACTIVE_SIZE, 0x4802C)
+REG32(VFTG_FRONT_PORCH, 0x48030)
+REG32(VFTG_SYNC_PULSE, 0x48034)
+REG32(VFTG_BACK_PORCH, 0x48038)
 
 #define GP_BLOCK_BASE (0x50000)
 #define GP_BLOCK_SIZE (0x8000)
@@ -449,6 +464,47 @@ static uint64_t adp_v4_blend_reg_read(ADPV4BlendUnitState* blend, uint64_t addr)
 
 static void adp_v4_blend_reset(ADPV4BlendUnitState* blend) { *blend = (ADPV4BlendUnitState){0}; }
 
+static void adp_v4_vsync_tick(void* opaque)
+{
+    AppleDisplayPipeV4State* adp    = opaque;
+    uint64_t                 now    = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t                 period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
+
+    if (!REG_FIELD_EX32(qatomic_read(&adp->vftg_control), VFTG_CONTROL, ENABLE)) { return; }
+
+    qatomic_or(&adp->int_status, R_CONTROL_INT_OUTPUT_READY_MASK);
+    adp_v4_update_irqs(adp);
+
+    adp->next_vsync_ns += period;
+    if (adp->next_vsync_ns <= now) { adp->next_vsync_ns = now + period; }
+
+    timer_mod_ns(adp->vsync_timer, adp->next_vsync_ns);
+}
+
+static void adp_v4_vsync_start(AppleDisplayPipeV4State* adp)
+{
+    uint64_t period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
+
+    adp->next_vsync_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + period;
+    timer_mod_ns(adp->vsync_timer, adp->next_vsync_ns);
+}
+
+static void adp_v4_vftg_set_control(AppleDisplayPipeV4State* adp, uint32_t value)
+{
+    uint32_t old;
+
+    value = REG_FIELD_DP32(value, VFTG_CONTROL, UPDATE, 0);
+    value = REG_FIELD_DP32(value, VFTG_CONTROL, RUNNING, REG_FIELD_EX32(value, VFTG_CONTROL, ENABLE));
+    old   = qatomic_xchg(&adp->vftg_control, value);
+
+    if (REG_FIELD_EX32(value, VFTG_CONTROL, ENABLE) == REG_FIELD_EX32(old, VFTG_CONTROL, ENABLE)) { return; }
+
+    if (REG_FIELD_EX32(value, VFTG_CONTROL, ENABLE)) { adp_v4_vsync_start(adp); }
+    else {
+        timer_del(adp->vsync_timer);
+    }
+}
+
 static void adp_v4_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
 {
     AppleDisplayPipeV4State* adp = opaque;
@@ -487,6 +543,16 @@ static void adp_v4_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned 
             ADP_INFO("disp: int enable <- 0x%X", (uint32_t)data);
             qatomic_set(&adp->int_enable, (uint32_t)data);
             adp_v4_update_irqs(adp);
+            break;
+        }
+        case R_VFTG_CONTROL: {
+            ADP_INFO("vftg: control <- 0x%X", (uint32_t)data);
+            adp_v4_vftg_set_control(adp, (uint32_t)data);
+            break;
+        }
+        case R_VFTG_ACTIVE_SIZE ... R_VFTG_BACK_PORCH: {
+            ADP_INFO("vftg: timing @ 0x" HWADDR_FMT_plx " <- 0x%X", addr, (uint32_t)data);
+            qatomic_set(&adp->vftg_timings[(addr >> 2) - R_VFTG_ACTIVE_SIZE], (uint32_t)data);
             break;
         }
         case R_CONTROL_UPDATE: {
@@ -549,6 +615,15 @@ static uint64_t adp_v4_reg_read(void* const opaque, hwaddr addr, unsigned size)
             ADP_INFO("disp: int enable -> 0x%X", qatomic_read(&adp->int_enable));
             return qatomic_read(&adp->int_enable);
         }
+        case R_VFTG_CONTROL: {
+            ADP_INFO("vftg: control -> 0x%X", qatomic_read(&adp->vftg_control));
+            return qatomic_read(&adp->vftg_control);
+        }
+        case R_VFTG_ACTIVE_SIZE ... R_VFTG_BACK_PORCH: {
+            ADP_INFO("vftg: timing @ 0x" HWADDR_FMT_plx " -> 0x%X", addr,
+                     qatomic_read(&adp->vftg_timings[(addr >> 2) - R_VFTG_ACTIVE_SIZE]));
+            return qatomic_read(&adp->vftg_timings[(addr >> 2) - R_VFTG_ACTIVE_SIZE]);
+        }
         default: {
             ADP_INFO("disp: unknown @ 0x" HWADDR_FMT_plx " -> 0x" HWADDR_FMT_plx, addr, (hwaddr)0);
             return 0;
@@ -568,29 +643,6 @@ static const MemoryRegionOps adp_v4_reg_ops = {
 };
 
 static void adp_v4_invalidate(void* opaque) { }
-
-static void adp_v4_vsync_tick(void* opaque)
-{
-    AppleDisplayPipeV4State* adp    = opaque;
-    uint64_t                 now    = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    uint64_t                 period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
-
-    qatomic_or(&adp->int_status, R_CONTROL_INT_OUTPUT_READY_MASK);
-    adp_v4_update_irqs(adp);
-
-    adp->next_vsync_ns += period;
-    if (adp->next_vsync_ns <= now) { adp->next_vsync_ns = now + period; }
-
-    timer_mod_ns(adp->vsync_timer, adp->next_vsync_ns);
-}
-
-static void adp_v4_vsync_start(AppleDisplayPipeV4State* adp)
-{
-    uint64_t period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
-
-    adp->next_vsync_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + period;
-    timer_mod_ns(adp->vsync_timer, adp->next_vsync_ns);
-}
 
 static void adp_v4_gfx_update(void* opaque)
 {
@@ -767,6 +819,9 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     qatomic_set(&adp->int_status, 0);
     qatomic_set(&adp->int_enable, 0);
     qatomic_set(&adp->commit_pending, 0);
+    qatomic_set(&adp->vftg_control, 0);
+    for (i = 0; i < ARRAY_SIZE(adp->vftg_timings); ++i) { qatomic_set(&adp->vftg_timings[i], 0); }
+    timer_del(adp->vsync_timer);
 
     adp_v4_update_irqs(adp);
 
@@ -784,8 +839,6 @@ static void adp_v4_realize(DeviceState* dev, Error** errp)
 
     adp->console     = graphic_console_init(dev, 0, &adp_v4_ops, adp);
     adp->vsync_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adp_v4_vsync_tick, adp);
-
-    adp_v4_vsync_start(adp);
 }
 
 static const Property adp_v4_props[] = {
