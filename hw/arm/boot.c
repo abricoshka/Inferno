@@ -22,6 +22,7 @@
 #include "crypto/hash.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/dt.h"
+#include "hw/arm/kernel_patches.h"
 #include "hw/arm/mem.h"
 #include "hw/nvram/apple_nvram.h"
 #include "qapi/error.h"
@@ -797,6 +798,8 @@ void apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len
 
     file_size = length;
     file_data = g_realloc(file_data, file_size);
+
+    ck_patch_ramdisk(file_data, file_size);
 
     address_space_rw(as, pa, MEMTXATTRS_UNSPECIFIED, file_data, file_size, true);
     *size = file_size;

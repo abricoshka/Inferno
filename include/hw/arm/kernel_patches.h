@@ -23,3 +23,5 @@
 
 void ck_patch_kernel(MachoHeader64* hdr);
 void ck_patch_virt(MachoHeader64* hdr, bool enable_pac);
+/// Patch `libimg4.dylib` in an HFS+ restore ramdisk in place; other ramdisks are left alone.
+void ck_patch_ramdisk(uint8_t* image, uint64_t size);

@@ -19,7 +19,9 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/kernel_patches.h"
+#include "hw/arm/hfs.h"
 #include "hw/arm/patcher.h"
+#include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
 
@@ -710,6 +712,43 @@ void ck_patch_kernel(MachoHeader64* hdr)
         ck_kp_tc_patch(kernel_ppltext);
         ck_kp_pmap_cs_enforce_patch(kernel_ppltext);
     }
+}
+
+void ck_patch_ramdisk(uint8_t* image, uint64_t size)
+{
+    g_autoptr(HfsFile) file             = NULL;
+    g_autofree uint8_t*        buffer   = NULL;
+    g_autofree uint8_t*        original = NULL;
+    g_autofree CKPatcherRange* range    = NULL;
+    Error*                     err      = NULL;
+    uint64_t                   len;
+    uint64_t                   first;
+    uint64_t                   last;
+
+    file = hfs_open_file(image, size, "/usr/lib/libimg4.dylib", &err);
+    if (file == NULL) {
+        info_report("Not patching ramdisk libimg4: %s", error_get_pretty(err));
+        error_free(err);
+        return;
+    }
+
+    len    = hfs_file_size(file);
+    buffer = g_malloc(len);
+    if (!hfs_file_pread(file, 0, len, buffer, &err)) {
+        warn_report_err(err);
+        return;
+    }
+    original = g_memdup2(buffer, len);
+
+    range = ck_patcher_range_from_ptr("libimg4.dylib", buffer, len);
+    ck_kp_img4_patches(range);
+
+    // Write back only the touched span so a single decmpfs chunk is recompressed.
+    for (first = 0; first < len && buffer[first] == original[first]; first++) { }
+    if (first == len) { return; }
+    for (last = len; last > first && buffer[last - 1] == original[last - 1]; last--) { }
+
+    if (!hfs_file_pwrite(file, first, last - first, buffer + first, &err)) { warn_report_err(err); }
 }
 
 #define MOVK_IMM16_SHIFT 5
