@@ -666,6 +666,7 @@ static void adp_v4_draw_boot_splash_timer(void* opaque)
     adp_v4_draw_boot_splash(ctx);
 
     pixman_image_unref(ctx->image);
+    pixman_image_unref(ctx->disp_image);
     timer_free(ctx->adp->boot_splash_timer);
     ctx->adp->boot_splash_timer = NULL;
     g_free(ctx);
@@ -732,7 +733,7 @@ static void adp_v4_read_and_draw_boot_splash(AppleDisplayPipeV4State* adp)
     ctx->dest_width = (double)disp_width / 1.5;
     ctx->dest_x     = (disp_width / 2) - (ctx->dest_width / 2);
     ctx->dest_y     = (disp_height / 2) - (ctx->dest_width / 2);
-    ctx->disp_image = qemu_console_surface(adp->console)->image;
+    ctx->disp_image = pixman_image_ref(qemu_console_surface(adp->console)->image);
 
     pixman_image_set_filter(ctx->image, PIXMAN_FILTER_BEST, NULL, 0);
     pixman_transform_init_identity(&ctx->transform);
