@@ -547,15 +547,6 @@ static void ck_kp_amx_patch(CKPatcherRange* range)
     }
 }
 
-static void ck_kp_apfs_snapshot_patch(CKPatcherRange* range)
-{
-    static const uint8_t pattern[] = "com.apple.os.update-";
-    static const uint8_t repl[]    = "shitcode.os.bullshit";
-    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(repl));
-    ck_patcher_find_replace(range, "disable APFS snapshots", pattern, NULL, sizeof(pattern), 0, repl, NULL, 0,
-                            sizeof(repl));
-}
-
 // this will tell launchd this is an internal build,
 // and that way we can get hactivation without bypassing
 // or patching the activation procedure.
@@ -683,7 +674,6 @@ void ck_patch_kernel(MachoHeader64* hdr)
     ck_kp_apfs_patches(apfs_text);
     apfs_cstring = ck_kp_find_section_range(apfs_hdr, "__TEXT", "__cstring");
     if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, "__TEXT", "__cstring"); }
-    ck_kp_apfs_snapshot_patch(apfs_cstring);
 
     amfi_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleMobileFileIntegrity");
     ck_kp_amfi_patches(amfi_text);
