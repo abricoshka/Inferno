@@ -48,6 +48,8 @@
 
 #define APFS_ROOT_DIR_INO (2)
 
+#define APFS_INCOMPAT_SEALED_VOLUME (1 << 5)
+
 #define APFS_VOL_ROLE_ANY (-1)
 
 #define APFS_DREC_LEN_MASK (0x3FF)
@@ -140,11 +142,15 @@ typedef struct QEMU_PACKED
 typedef struct QEMU_PACKED
 {
     ApfsObjPhys o;
-    uint8_t     unused0[96];
+    uint8_t     unused0[24];
+    uint64_t    incompat_features;
+    uint8_t     unused1[64];
     uint64_t    omap_oid;
     uint64_t    root_tree_oid;
-    uint8_t     unused1[820];
+    uint8_t     unused2[820];
     uint16_t    role;
+    uint8_t     unused3[66];
+    uint64_t    fext_tree_oid;
 } ApfsSuperblock;
 
 typedef struct QEMU_PACKED
@@ -177,6 +183,7 @@ typedef struct
     uint64_t   xid;
     uint64_t   omap_tree;
     uint64_t   root_tree;
+    uint64_t   fext_tree;
 } ApfsContext;
 
 typedef struct
@@ -426,6 +433,53 @@ static int apfs_fs_walk(ApfsContext* ctx, uint64_t node_oid, uint16_t max_level,
     return 0;
 }
 
+/// Calls `fn` for every extent of `private_id` in the physical file extent tree of a sealed volume, in key order.
+static int apfs_fext_walk(ApfsContext* ctx, uint64_t paddr, uint16_t max_level, uint64_t private_id, ApfsRecordFn fn,
+                          void* opaque, Error** errp)
+{
+    uint8_t                  node[APFS_BLOCK_SIZE];
+    const ApfsBtreeNodePhys* hdr = (const ApfsBtreeNodePhys*)node;
+    uint64_t                 key_id;
+    uint32_t                 nkeys;
+    uint32_t                 i;
+    ApfsEntry                entry;
+    ApfsEntry                next;
+    int                      ret;
+
+    if (!apfs_read_block(ctx, paddr, node, errp)) { return -1; }
+
+    if (!apfs_node_level_valid(node, max_level)) {
+        error_setg(errp, "APFS file extent node 0x%" PRIx64 " is corrupt", paddr);
+        return -1;
+    }
+
+    nkeys = le32_to_cpu(hdr->nkeys);
+    for (i = 0; i < nkeys; i++) {
+        if (!apfs_node_entry(node, i, &entry, errp)) { return -1; }
+
+        key_id = ldq_le_p(entry.key);
+        if (key_id > private_id) { return 1; }
+
+        if (le16_to_cpu(hdr->level) == 0) {
+            if (key_id == private_id) {
+                ret = fn(opaque, &entry, errp);
+                if (ret != 0) { return ret; }
+            }
+            continue;
+        }
+
+        if (i + 1 < nkeys) {
+            if (!apfs_node_entry(node, i + 1, &next, errp)) { return -1; }
+            if (ldq_le_p(next.key) < private_id) { continue; }
+        }
+
+        ret = apfs_fext_walk(ctx, ldq_le_p(entry.val), le16_to_cpu(hdr->level) - 1, private_id, fn, opaque, errp);
+        if (ret != 0) { return ret; }
+    }
+
+    return 0;
+}
+
 static int apfs_dir_lookup_fn(void* opaque, const ApfsEntry* entry, Error** errp)
 {
     ApfsDirLookup* lookup = opaque;
@@ -620,6 +674,8 @@ static bool apfs_mount_volume(ApfsContext* ctx, int role, Error** errp)
 
         if (role == APFS_VOL_ROLE_ANY || le16_to_cpu(fs->role) == role) {
             ctx->root_tree = le64_to_cpu(fs->root_tree_oid);
+            ctx->fext_tree =
+                (le64_to_cpu(fs->incompat_features) & APFS_INCOMPAT_SEALED_VOLUME) ? le64_to_cpu(fs->fext_tree_oid) : 0;
             return apfs_load_omap(ctx, le64_to_cpu(fs->omap_oid), errp);
         }
     }
@@ -672,8 +728,10 @@ static ApfsFile* apfs_open(ApfsContext* ctx, int role, const char* path, Error**
     file->dev     = ctx->dev;
     file->size    = inode.size;
     file->extents = g_array_new(false, false, sizeof(ApfsExtent));
-    if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id, APFS_TYPE_FILE_EXTENT, apfs_extent_fn,
-                     file->extents, errp)
+    if ((ctx->fext_tree != 0 ? apfs_fext_walk(ctx, ctx->fext_tree, APFS_BTREE_MAX_LEVEL, inode.private_id,
+                                              apfs_extent_fn, file->extents, errp) :
+                               apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, inode.private_id,
+                                            APFS_TYPE_FILE_EXTENT, apfs_extent_fn, file->extents, errp))
         < 0)
     {
         return NULL;
