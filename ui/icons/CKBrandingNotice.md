@@ -1,10 +1,6 @@
 # “ChefKiss Inferno” Project Branding Notice
 
-The artwork located at the source path:
-`ui/icons/CKQEMUBootSplash_512x512@2x.png`
-and installed at:
-`hicolor/512x512/apps/CKQEMUBootSplash@2x.png`
-is © 2025 ChefKiss. All rights reserved.
+The artworks located at the source path: `ui/icons/inferno` and installed at: `hicolor/<dimension>/apps/inferno` are © 2025-2026 ChefKiss. All rights reserved.
 
 The artwork is NOT covered by the open-source license used for the “ChefKiss Inferno” project.
 The artwork and the project branding name “ChefKiss Inferno” are copyrights of ChefKiss.

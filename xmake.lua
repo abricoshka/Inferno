@@ -406,16 +406,15 @@ local function emulator(name, gui)
 						always_added = true})
 				end
 			end
-			add_installfiles("ui/qemu.desktop", {prefixdir = "share/applications"})
+			add_installfiles("ui/inferno.desktop", {prefixdir = "share/applications"})
 			for _, size in ipairs({16, 24, 32, 48, 64, 128, 256, 512}) do
 				local dim = size .. "x" .. size
-				add_installfiles("ui/icons/qemu_" .. dim .. ".png", {prefixdir = "share/icons/hicolor/" .. dim .. "/apps",
-					filename = "qemu.png"})
+				add_installfiles("ui/icons/inferno_" .. dim .. ".png", {prefixdir = "share/icons/hicolor/" .. dim .. "/apps",
+					filename = "inferno.png"})
 			end
-			add_installfiles("ui/icons/qemu_32x32.bmp", {prefixdir = "share/icons/hicolor/32x32/apps", filename = "qemu.bmp"})
-			add_installfiles("ui/icons/qemu.svg", {prefixdir = "share/icons/hicolor/scalable/apps"})
-			add_installfiles("ui/icons/CKQEMUBootSplash_512x512@2x.png", {prefixdir = "share/icons/hicolor/512x512/apps",
-				filename = "CKQEMUBootSplash@2x.png"})
+			add_installfiles("ui/icons/inferno_32x32.bmp", {prefixdir = "share/icons/hicolor/32x32/apps", filename = "inferno.bmp"})
+			add_installfiles("ui/icons/bootsplash_512x512@2x.png", {prefixdir = "share/icons/hicolor/512x512/apps/inferno",
+				filename = "bootsplash@2x.png"})
 			if not (#inferno_trace_backends == 1 and inferno_trace_backends[1] == "nop") then
 				add_installfiles(path.join(inferno_gendir, "trace-events-all"), {prefixdir = "share/qemu", always_added = true})
 			end

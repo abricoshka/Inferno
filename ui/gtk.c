@@ -1985,7 +1985,7 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         dir   = get_relocated_path(CONFIG_QEMU_ICONDIR);
         gtk_icon_theme_prepend_search_path(theme, dir);
         g_free(dir);
-        g_set_prgname("qemu");
+        g_set_prgname("inferno");
 
         s->window   = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         s->vbox     = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -2010,7 +2010,7 @@ default: warn_report("gtk: unexpected touch event type\n"); return FALSE;
         qemu_add_mouse_mode_change_notifier(&s->mouse_mode_notifier);
         qemu_add_vm_change_state_handler(gd_change_runstate, s);
 
-        gtk_window_set_icon_name(GTK_WINDOW(s->window), "qemu");
+        gtk_window_set_icon_name(GTK_WINDOW(s->window), "inferno");
 
         gd_create_menus(s, opts);
 

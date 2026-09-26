@@ -1200,6 +1200,86 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (IBAction)do_about_menu_item:(id)sender;
 @end
 
+static NSBezierPath* qemu_cocoa_superellipse_path(NSRect rect, CGFloat exponent, NSUInteger segments)
+{
+    CGFloat cx = NSMidX(rect);
+    CGFloat cy = NSMidY(rect);
+    CGFloat a  = NSWidth(rect) / 2.0;
+    CGFloat b  = NSHeight(rect) / 2.0;
+
+    NSBezierPath* path = [NSBezierPath bezierPath];
+    for (NSUInteger i = 0; i <= segments; i++) {
+        CGFloat t    = (2.0 * M_PI) * ((CGFloat)i / (CGFloat)segments);
+        CGFloat cosT = cos(t);
+        CGFloat sinT = sin(t);
+        CGFloat x    = cx + a * copysign(pow(fabs(cosT), 2.0 / exponent), cosT);
+        CGFloat y    = cy + b * copysign(pow(fabs(sinT), 2.0 / exponent), sinT);
+        NSPoint p    = NSMakePoint(x, y);
+        if (i == 0) { [path moveToPoint:p]; }
+        else {
+            [path lineToPoint:p];
+        }
+    }
+    [path closePath];
+    return path;
+}
+
+static NSImage* qemu_cocoa_squircle_icon(NSImage* source)
+{
+    if (!source) { return nil; }
+
+    const CGFloat side    = 1024;
+    const CGFloat margin  = side * 0.10;
+    const CGFloat visible = side - margin * 2;
+    NSRect        tile    = NSMakeRect(margin, margin, visible, visible);
+
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                    pixelsWide:side
+                                                                    pixelsHigh:side
+                                                                 bitsPerSample:8
+                                                               samplesPerPixel:4
+                                                                      hasAlpha:YES
+                                                                      isPlanar:NO
+                                                                colorSpaceName:NSDeviceRGBColorSpace
+                                                                   bytesPerRow:0
+                                                                  bitsPerPixel:0];
+    rep.size              = NSMakeSize(side, side);
+
+    NSGraphicsContext* context = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:context];
+
+    NSBezierPath* squircle = qemu_cocoa_superellipse_path(tile, 5.0, 128);
+    [NSGraphicsContext saveGraphicsState];
+    [squircle addClip];
+
+    [[NSColor colorWithSRGBRed:0.17 green:0.17 blue:0.18 alpha:1.0] set];
+    NSRectFill(tile);
+
+    NSSize  imageSize   = source.size;
+    CGFloat glyphMargin = visible * 0.08;
+    NSRect  glyphBounds = NSInsetRect(tile, glyphMargin, glyphMargin);
+    CGFloat scale       = MIN(NSWidth(glyphBounds) / imageSize.width, NSHeight(glyphBounds) / imageSize.height);
+    NSSize  drawSize    = NSMakeSize(imageSize.width * scale, imageSize.height * scale);
+    NSRect  drawRect    = NSMakeRect(NSMidX(glyphBounds) - drawSize.width / 2.0,
+                                     NSMidY(glyphBounds) - drawSize.height / 2.0, drawSize.width, drawSize.height);
+    [source drawInRect:drawRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
+
+    [NSGraphicsContext restoreGraphicsState];
+
+    [squircle setLineWidth:side * 0.01];
+    [[NSColor colorWithSRGBRed:1.0 green:1.0 blue:1.0 alpha:0.18] set];
+    [squircle stroke];
+
+    [NSGraphicsContext restoreGraphicsState];
+
+    NSImage* result = [[[NSImage alloc] initWithSize:NSMakeSize(side, side)] autorelease];
+    [result addRepresentation:rep];
+    [rep release];
+
+    return result;
+}
+
 @implementation QemuCocoaAppController
 - (id)init
 {
@@ -1548,10 +1628,10 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
 - (IBAction)do_about_menu_item:(id)sender
 {
     NSAutoreleasePool* pool        = [[NSAutoreleasePool alloc] init];
-    char*              icon_path_c = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/qemu.png");
+    char*              icon_path_c = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno.png");
     NSString*          icon_path   = [NSString stringWithUTF8String:icon_path_c];
     g_free(icon_path_c);
-    NSImage*  icon    = [[NSImage alloc] initWithContentsOfFile:icon_path];
+    NSImage*  icon    = qemu_cocoa_squircle_icon([[[NSImage alloc] initWithContentsOfFile:icon_path] autorelease]);
     NSString* version = @"ChefKiss Inferno emulator version " QEMU_FULL_VERSION;
     NSString* copyright =
         @QEMU_COPYRIGHT "\n\nChefKiss Inferno\nCopyright (c) 2023-2026 Visual Ehrmanntraut and Inferno team\n\n";
@@ -1562,7 +1642,6 @@ static CGEventRef handleTapEvent(CGEventTapProxy proxy, CGEventType type, CGEven
             NSAboutPanelOptionApplicationVersion : version,
             @"Copyright" : copyright,
         };
-        [icon release];
     }
     else {
         options = @{
@@ -1938,6 +2017,12 @@ static void cocoa_display_init(DisplayState* ds, DisplayOptions* opts)
     TransformProcessType(&psn, kProcessTransformToForegroundApplication);
 
     [QemuApplication sharedApplication];
+
+    char*     dock_icon_path_c = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno.png");
+    NSString* dock_icon_path   = [NSString stringWithUTF8String:dock_icon_path_c];
+    g_free(dock_icon_path_c);
+    NSImage* dock_icon_source = [[[NSImage alloc] initWithContentsOfFile:dock_icon_path] autorelease];
+    [NSApp setApplicationIconImage:qemu_cocoa_squircle_icon(dock_icon_source)];
 
     // Create an Application controller
     QemuCocoaAppController* controller = [[QemuCocoaAppController alloc] init];

@@ -62,7 +62,7 @@ function jobs()
 end
 
 function entitle(file)
-	local argv = {srcfile("scripts", "entitlement.sh"), file, srcfile("pc-bios", "qemu.rsrc")}
+	local argv = {srcfile("scripts", "entitlement.sh"), file}
 	if config.get("hvf") then
 		table.insert(argv, srcfile("accel", "hvf", "entitlements.plist"))
 	end

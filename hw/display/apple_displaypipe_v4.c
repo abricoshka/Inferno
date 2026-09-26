@@ -719,7 +719,7 @@ static void adp_v4_read_and_draw_boot_splash(AppleDisplayPipeV4State* adp)
     uint32_t                    disp_width;
     uint32_t                    disp_height;
 
-    path = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/CKQEMUBootSplash@2x.png");
+    path = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno/bootsplash@2x.png");
     assert_nonnull(path);
     fp = fopen(path, "rb");
     if (fp == NULL) {
