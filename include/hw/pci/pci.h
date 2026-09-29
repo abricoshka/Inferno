@@ -4,8 +4,6 @@
 #include "system/dma.h"
 #include "system/host_iommu_device.h"
 
-extern bool pci_available;
-
 /* PCI bus */
 
 #define PCI_DEVFN(slot, func)     ((((slot) & 0x1f) << 3) | ((func) & 0x07))

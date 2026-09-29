@@ -26,8 +26,6 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 
-bool pci_available;
-
 PciInfoList* qmp_query_pci(Error** errp) { return NULL; }
 
 void hmp_info_pci(Monitor* mon, const QDict* qdict) { }

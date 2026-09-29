@@ -47,8 +47,6 @@
 #include "qemu/cutils.h"
 #include "pci-internal.h"
 
-bool pci_available = true;
-
 static char* pcibus_get_dev_path(DeviceState* dev);
 static char* pcibus_get_fw_dev_path(DeviceState* dev);
 static void  pcibus_reset_hold(Object* obj, ResetType type);
