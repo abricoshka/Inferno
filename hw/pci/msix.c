@@ -265,12 +265,6 @@ int msix_init(struct PCIDevice* dev, uint32_t nentries, MemoryRegion* table_bar,
     unsigned table_size, pba_size;
     uint8_t* config;
 
-    /* Nothing to do if MSI is not supported by interrupt controller */
-    if (!msi_nonbroken) {
-        error_setg(errp, "MSI-X is not supported by interrupt controller");
-        return -ENOTSUP;
-    }
-
     if (nentries < 1 || nentries > PCI_MSIX_FLAGS_QSIZE + 1) {
         error_setg(errp, "The number of MSI-X vectors is invalid");
         return -EINVAL;

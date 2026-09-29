@@ -26,7 +26,6 @@
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 
-bool msi_nonbroken;
 bool pci_available;
 
 PciInfoList* qmp_query_pci(Error** errp) { return NULL; }
