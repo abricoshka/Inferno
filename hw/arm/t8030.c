@@ -262,7 +262,8 @@ static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kerne
         case 16: t8030->sio_protocol = 9; break;
         case 17:
         case 18:
-        case 26: t8030->sio_protocol = 10; break;
+        case 26:
+        case 27: t8030->sio_protocol = 10; break;
         default: assert_not_reached();
     }
 
