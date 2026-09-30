@@ -32,12 +32,13 @@ CKPatcherRange* ck_patcher_range_from_ptr(const char* name, uint8_t* ptr, vaddr 
 }
 
 bool ck_patcher_find_callback_ctx(CKPatcherRange* range, const char* name, const uint8_t* pattern, const uint8_t* mask,
-                                  size_t len, size_t align, void* ctx, CKPatcherCallback callback)
+                                  size_t len, size_t align, uint32_t count, void* ctx, CKPatcherCallback callback)
 {
     size_t   i;
     size_t   match_i;
     uint8_t* match;
     bool     found;
+    uint32_t applied = 0;
 
     if (align == 0) { align = 1; }
     else {
@@ -59,10 +60,7 @@ bool ck_patcher_find_callback_ctx(CKPatcherRange* range, const char* name, const
                     break;
                 }
             }
-            if (found && callback(ctx, match)) {
-                info_report("`%s` patch applied in `%s`.", name, range->name);
-                return true;
-            }
+            if (found && callback(ctx, match) && ++applied == count) { break; }
         }
     }
     else {
@@ -77,20 +75,29 @@ bool ck_patcher_find_callback_ctx(CKPatcherRange* range, const char* name, const
                     break;
                 }
             }
-            if (found && callback(ctx, match)) {
-                info_report("`%s` patch applied in `%s`.", name, range->name);
-                return true;
-            }
+            if (found && callback(ctx, match) && ++applied == count) { break; }
         }
     }
-    error_report("`%s` patch did not apply in `%s`.", name, range->name);
 
-    return false;
+    if (applied == 0) {
+        error_report("`%s` patch did not apply in `%s`.", name, range->name);
+        return false;
+    }
+    if (count != 0 && applied != count) {
+        error_report("`%s` patch applied %u of %u times in `%s`.", name, applied, count, range->name);
+        return false;
+    }
+    if (applied == 1) { info_report("`%s` patch applied in `%s`.", name, range->name); }
+    else {
+        info_report("`%s` patch applied %u times in `%s`.", name, applied, range->name);
+    }
+
+    return true;
 }
 
 bool ck_patcher_find_callback(CKPatcherRange* range, const char* name, const uint8_t* pattern, const uint8_t* mask,
-                              size_t len, size_t align, CKPatcherCallback callback)
-{ return ck_patcher_find_callback_ctx(range, name, pattern, mask, len, align, NULL, callback); }
+                              size_t len, size_t align, uint32_t count, CKPatcherCallback callback)
+{ return ck_patcher_find_callback_ctx(range, name, pattern, mask, len, align, count, NULL, callback); }
 
 typedef struct
 {
@@ -117,8 +124,8 @@ static bool ck_patcher_find_replace_callback(void* ctx, uint8_t* buffer)
 }
 
 bool ck_patcher_find_replace(CKPatcherRange* range, const char* name, const uint8_t* pattern, const uint8_t* mask,
-                             size_t len, size_t align, const uint8_t* replacement, const uint8_t* replacement_mask,
-                             size_t replace_off, size_t replace_len)
+                             size_t len, size_t align, uint32_t count, const uint8_t* replacement,
+                             const uint8_t* replacement_mask, size_t replace_off, size_t replace_len)
 {
     CKPatcherFindReplaceContext ctx;
 
@@ -129,7 +136,8 @@ bool ck_patcher_find_replace(CKPatcherRange* range, const char* name, const uint
     ctx.offset      = replace_off;
     ctx.len         = replace_len;
 
-    return ck_patcher_find_callback_ctx(range, name, pattern, mask, len, align, &ctx, ck_patcher_find_replace_callback);
+    return ck_patcher_find_callback_ctx(range, name, pattern, mask, len, align, count, &ctx,
+                                        ck_patcher_find_replace_callback);
 }
 
 uint8_t* ck_patcher_find_next_insn(uint8_t* buffer, uint32_t num, uint32_t insn, uint32_t mask, uint32_t skip)

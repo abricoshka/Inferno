@@ -128,9 +128,9 @@ void ck_sep_seprom_patches(CKPatcherRange* range)
     QEMU_BUILD_BUG_ON(sizeof(memcmp_0x14) != sizeof(memcmp_mask));
     static const uint8_t repl[] = {MOV_W0_0_BYTES};
     ck_patcher_find_replace(range, "memcmp_validstrs30", memcmp_0x30, memcmp_mask, sizeof(memcmp_0x30),
-                            sizeof(uint32_t), repl, NULL, 8, sizeof(repl));
+                            sizeof(uint32_t), 1, repl, NULL, 8, sizeof(repl));
     ck_patcher_find_replace(range, "memcmp_validstrs14", memcmp_0x14, memcmp_mask, sizeof(memcmp_0x14),
-                            sizeof(uint32_t), repl, NULL, 8, sizeof(repl));
+                            sizeof(uint32_t), 1, repl, NULL, 8, sizeof(repl));
 
     // Doesn't match for A11
     static const uint8_t verify_rsa_signature[] = {
@@ -138,7 +138,7 @@ void ck_sep_seprom_patches(CKPatcherRange* range)
         0x7f, 0x03, 0x00, 0x91,    // mov sp, x27
     };
     ck_patcher_find_replace(range, "verify_rsa_signature", verify_rsa_signature, NULL, sizeof(verify_rsa_signature),
-                            sizeof(uint32_t), repl, NULL, 0, sizeof(repl));
+                            sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl));
 }
 
 typedef struct
