@@ -90,8 +90,17 @@ typedef struct AppleA13State
     A13_CPREG_VAR_DEF(IMP_BARRIER_LBSY_BST_SYNC_W1_EL0);
     A13_CPREG_VAR_DEF(PMC0);
     A13_CPREG_VAR_DEF(PMC1);
+    A13_CPREG_VAR_DEF(PMC2);
+    A13_CPREG_VAR_DEF(PMC3);
+    A13_CPREG_VAR_DEF(PMC4);
+    A13_CPREG_VAR_DEF(PMC5);
+    A13_CPREG_VAR_DEF(PMC6);
+    A13_CPREG_VAR_DEF(PMC7);
+    A13_CPREG_VAR_DEF(PMC8);
+    A13_CPREG_VAR_DEF(PMC9);
     A13_CPREG_VAR_DEF(PMCR0);
     A13_CPREG_VAR_DEF(PMCR1);
+    A13_CPREG_VAR_DEF(PMCR1_GL1);
     A13_CPREG_VAR_DEF(PMSR);
     A13_CPREG_VAR_DEF(S3_4_c15_c0_5);
     A13_CPREG_VAR_DEF(AMX_STATUS_EL1);
@@ -105,6 +114,13 @@ typedef struct AppleA13State
     A13_CPREG_VAR_DEF(UPMPCM);
     A13_CPREG_VAR_DEF(UPMCR0);
     A13_CPREG_VAR_DEF(UPMSR);
+    /* CTRR (per-core on hardware) */
+    A13_CPREG_VAR_DEF(CTRR_A_LWR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_A_UPR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_B_LWR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_B_UPR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_CTL_EL1);
+    A13_CPREG_VAR_DEF(CTRR_LOCK_EL1);
 } AppleA13State;
 
 typedef struct AppleA13Cluster
@@ -117,12 +133,6 @@ typedef struct AppleA13Cluster
     uint32_t        noWakeIPI[A13_MAX_CPU];
     uint64_t        ipi_cr;
     QTAILQ_ENTRY(AppleA13Cluster) next;
-    A13_CPREG_VAR_DEF(CTRR_A_LWR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_A_UPR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_B_LWR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_B_UPR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_CTL_EL1);
-    A13_CPREG_VAR_DEF(CTRR_LOCK_EL1);
 } AppleA13Cluster;
 
 AppleA13State* apple_a13_create(const char* name, uint32_t cpu_id, uint32_t phys_id, uint32_t cluster_id,

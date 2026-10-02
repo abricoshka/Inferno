@@ -50,21 +50,6 @@
      .type        = ARM_CP_OVERRIDE,                                                             \
      .fieldoffset = offsetof(AppleA13State, A13_CPREG_VAR_NAME(p_name)) - offsetof(ARMCPU, env)}
 
-#define A13_CLUSTER_CPREG_DEF(p_name, p_op0, p_op1, p_crn, p_crm, p_op2, p_access) \
-    {.cp          = CP_REG_ARM64_SYSREG_CP,                                        \
-     .name        = #p_name,                                                       \
-     .opc0        = p_op0,                                                         \
-     .crn         = p_crn,                                                         \
-     .crm         = p_crm,                                                         \
-     .opc1        = p_op1,                                                         \
-     .opc2        = p_op2,                                                         \
-     .access      = p_access,                                                      \
-     .type        = ARM_CP_IO,                                                     \
-     .state       = ARM_CP_STATE_AA64,                                             \
-     .readfn      = apple_a13_cluster_cpreg_read,                                  \
-     .writefn     = apple_a13_cluster_cpreg_write,                                 \
-     .fieldoffset = offsetof(AppleA13Cluster, A13_CPREG_VAR_NAME(p_name))}
-
 #define IPI_SR_SRC_CPU_SHIFT       8
 #define IPI_SR_SRC_CPU_WIDTH       8
 #define IPI_SR_SRC_CPU_MASK        (((1 << IPI_SR_SRC_CPU_WIDTH) - 1) << IPI_SR_SRC_CPU_SHIFT)
@@ -150,25 +135,6 @@ static AppleA13Cluster* apple_a13_find_cluster(uint32_t cluster_id)
     }
 
     return NULL;
-}
-
-static uint64_t apple_a13_cluster_cpreg_read(CPUARMState* env, const ARMCPRegInfo* ri)
-{
-    AppleA13State*   acpu = container_of(env_archcpu(env), AppleA13State, parent_obj);
-    AppleA13Cluster* c    = apple_a13_find_cluster(acpu->cluster_id);
-
-    if (unlikely(!c)) { return 0; }
-
-    return *(uint64_t*)((char*)(c) + (ri)->fieldoffset);
-}
-
-static void apple_a13_cluster_cpreg_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
-{
-    AppleA13State*   acpu = container_of(env_archcpu(env), AppleA13State, parent_obj);
-    AppleA13Cluster* c    = apple_a13_find_cluster(acpu->cluster_id);
-
-    if (unlikely(!c)) { return; }
-    *(uint64_t*)((char*)(c) + (ri)->fieldoffset) = value;
 }
 
 /* Deliver IPI */
@@ -418,8 +384,17 @@ static const ARMCPRegInfo apple_a13_cp_reginfo_tcg[] = {
     A13_CPREG_DEF(IMP_BARRIER_LBSY_BST_SYNC_W1_EL0, 3, 3, 15, 15, 1, PL1_RW, 0),
     A13_CPREG_DEF(PMC0, 3, 2, 15, 0, 0, PL1_RW, 0),
     A13_CPREG_DEF(PMC1, 3, 2, 15, 1, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC2, 3, 2, 15, 2, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC3, 3, 2, 15, 3, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC4, 3, 2, 15, 4, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC5, 3, 2, 15, 5, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC6, 3, 2, 15, 6, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC7, 3, 2, 15, 7, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC8, 3, 2, 15, 9, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMC9, 3, 2, 15, 10, 0, PL1_RW, 0),
     A13_CPREG_DEF(PMCR0, 3, 1, 15, 0, 0, PL1_RW, 0),
     A13_CPREG_DEF(PMCR1, 3, 1, 15, 1, 0, PL1_RW, 0),
+    A13_CPREG_DEF(PMCR1_GL1, 3, 6, 15, 8, 7, PL1_RW, 0),
     A13_CPREG_DEF(PMSR, 3, 1, 15, 13, 0, PL1_RW, 0),
     A13_CPREG_DEF(S3_4_c15_c0_5, 3, 4, 15, 0, 5, PL1_RW, 0),
     A13_CPREG_DEF(AMX_STATUS_EL1, 3, 4, 15, 1, 3, PL1_R, 0),
@@ -432,12 +407,12 @@ static const ARMCPRegInfo apple_a13_cp_reginfo_tcg[] = {
     A13_CPREG_DEF(UPMPCM, 3, 7, 15, 5, 4, PL1_RW, 0),
     A13_CPREG_DEF(UPMCR0, 3, 7, 15, 0, 4, PL1_RW, 0),
     A13_CPREG_DEF(UPMSR, 3, 7, 15, 6, 4, PL1_RW, 0),
-    A13_CLUSTER_CPREG_DEF(CTRR_A_LWR_EL1, 3, 4, 15, 2, 3, PL1_RW),
-    A13_CLUSTER_CPREG_DEF(CTRR_A_UPR_EL1, 3, 4, 15, 2, 4, PL1_RW),
-    A13_CLUSTER_CPREG_DEF(CTRR_B_LWR_EL1, 3, 4, 15, 1, 7, PL1_RW),
-    A13_CLUSTER_CPREG_DEF(CTRR_B_UPR_EL1, 3, 4, 15, 1, 6, PL1_RW),
-    A13_CLUSTER_CPREG_DEF(CTRR_CTL_EL1, 3, 4, 15, 2, 5, PL1_RW),
-    A13_CLUSTER_CPREG_DEF(CTRR_LOCK_EL1, 3, 4, 15, 2, 2, PL1_RW),
+    A13_CPREG_DEF(CTRR_A_LWR_EL1, 3, 4, 15, 2, 3, PL1_RW, 0),
+    A13_CPREG_DEF(CTRR_A_UPR_EL1, 3, 4, 15, 2, 4, PL1_RW, 0),
+    A13_CPREG_DEF(CTRR_B_LWR_EL1, 3, 4, 15, 1, 7, PL1_RW, 0),
+    A13_CPREG_DEF(CTRR_B_UPR_EL1, 3, 4, 15, 1, 6, PL1_RW, 0),
+    A13_CPREG_DEF(CTRR_CTL_EL1, 3, 4, 15, 2, 5, PL1_RW, 0),
+    A13_CPREG_DEF(CTRR_LOCK_EL1, 3, 4, 15, 2, 2, PL1_RW, 0),
     {
         .cp      = CP_REG_ARM64_SYSREG_CP,
         .name    = "ARM64_REG_IPI_RR_LOCAL",
