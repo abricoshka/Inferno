@@ -154,6 +154,7 @@
 #define AMCC_PLANE_COUNT                        (4)
 #define AMCC_PLANE_STRIDE                       (0x40000)
 #define AMCC_PLANE_BLK_MCC_CHANNEL_DEC(_p)      (0x4 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_MCC_CHANNEL_DEC_STACKED  BIT(0)
 #define AMCC_PLANE_BLK_HASH0_LO(_p)             (0x8 + (_p) * AMCC_PLANE_STRIDE)
 #define AMCC_PLANE_BLK_HASH0_HI(_p)             (0xC + (_p) * AMCC_PLANE_STRIDE)
 #define AMCC_PLANE_BLK_HASH1_LO(_p)             (0x10 + (_p) * AMCC_PLANE_STRIDE)
@@ -351,7 +352,7 @@ static void get_kaslr_slides(AppleT8030MachineState* t8030, hwaddr* phys_slide_o
 #define T8030_TZ0_SIZE (240 * MiB)    // FIXME: workaround for sepos >= 16
 
 // for booting sepfw 26 without opcode17:
-// tz0_base must be, at least, aligned to 32 MiB
+// tz0_addr must be, at least, aligned to 32 MiB
 #define T8030_TZ0_ALIGN (32 * MiB)
 
 // SPTM locks the read-only region itself.
@@ -366,7 +367,7 @@ static void t8030_lock_regions(AppleT8030MachineState* t8030, hwaddr ro_lower, h
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_BASE(i), (info->tz0_addr - info->dram_base) >> 12);
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_END(i), ((info->tz0_addr + info->tz0_size - 1) - info->dram_base) >> 12);
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_LOCK(i), 1);
-        AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i), 0x2F);
+        AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i), ((info->dram_size >> 27) - 1) << 1);
     }
 
     if (t8030->sep_rom_filename != NULL) {
