@@ -37,6 +37,7 @@ const uint32_t arm_mmuidx_table[ARM_MMU_IDX_NOTLB + 8] = {
      * GXF variants mirror the properties of the index they are derived
      * from; the guarded state itself is carried by ARM_MMU_IDX_A_GXF.
      */
+    [ARMMMUIdx_GE10_0]     = EL(0) | REL(1) | R2,
     [ARMMMUIdx_GE10_1]     = EL(1) | REL(1) | R2,
     [ARMMMUIdx_GE10_1_PAN] = EL(1) | REL(1) | R2 | PAN,
     [ARMMMUIdx_GE20_2]     = EL(2) | REL(2) | R2,
@@ -50,4 +51,5 @@ const uint32_t arm_mmuidx_table[ARM_MMU_IDX_NOTLB + 8] = {
     [ARMMMUIdx_Stage1_E1_PAN]  = REL(1) | R2 | S1 | PAN,
     [ARMMMUIdx_Stage1_GE1]     = REL(1) | R2 | S1,
     [ARMMMUIdx_Stage1_GE1_PAN] = REL(1) | R2 | S1 | PAN,
+    [ARMMMUIdx_Stage1_GE0]     = REL(1) | R2 | S1 | USER,
 };

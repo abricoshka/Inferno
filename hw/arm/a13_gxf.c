@@ -115,7 +115,7 @@ static void far_el1_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t val
     }
 }
 
-#define SPRR_EL0_IDXMASK (ARMMMUIdxBit_E10_0)
+#define SPRR_EL0_IDXMASK (ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_GE10_0)
 #define SPRR_EL1_IDXMASK (ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_GE10_1 | ARMMMUIdxBit_GE10_1_PAN)
 
 static void sprr_config_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)

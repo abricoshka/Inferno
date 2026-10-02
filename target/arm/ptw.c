@@ -140,6 +140,7 @@ ARMMMUIdx stage_1_mmu_idx(ARMMMUIdx mmu_idx)
 {
     switch (mmu_idx) {
         case ARMMMUIdx_E10_0     : return ARMMMUIdx_Stage1_E0;
+        case ARMMMUIdx_GE10_0    : return ARMMMUIdx_Stage1_GE0;
         case ARMMMUIdx_E10_1     : return ARMMMUIdx_Stage1_E1;
         case ARMMMUIdx_E10_1_PAN : return ARMMMUIdx_Stage1_E1_PAN;
         case ARMMMUIdx_GE10_1    : return ARMMMUIdx_Stage1_GE1;
@@ -214,6 +215,7 @@ static bool regime_translation_disabled(CPUARMState* env, ARMMMUIdx mmu_idx, ARM
         case ARMMMUIdx_E10_0    :
         case ARMMMUIdx_E10_1    :
         case ARMMMUIdx_E10_1_PAN:
+        case ARMMMUIdx_GE10_0   :
         case ARMMMUIdx_GE10_1   :
         case ARMMMUIdx_GE10_1_PAN:
             /* TGE means that EL0/1 act as if SCTLR_EL1.M is zero */
@@ -221,11 +223,12 @@ static bool regime_translation_disabled(CPUARMState* env, ARMMMUIdx mmu_idx, ARM
             if (hcr_el2 & HCR_TGE) { return true; }
             break;
 
-        case ARMMMUIdx_Stage1_E0    :
-        case ARMMMUIdx_Stage1_E1    :
-        case ARMMMUIdx_Stage1_E1_PAN:
-        case ARMMMUIdx_Stage1_GE1   :
+        case ARMMMUIdx_Stage1_E0     :
+        case ARMMMUIdx_Stage1_E1     :
+        case ARMMMUIdx_Stage1_E1_PAN :
+        case ARMMMUIdx_Stage1_GE1    :
         case ARMMMUIdx_Stage1_GE1_PAN:
+        case ARMMMUIdx_Stage1_GE0:
             /* HCR.DC means SCTLR_EL1.M behaves as 0 */
             hcr_el2 = arm_hcr_el2_eff_secstate(env, space);
             if (hcr_el2 & HCR_DC) { return true; }
@@ -1293,14 +1296,17 @@ static int get_S1prot(CPUARMState* env, ARMMMUIdx mmu_idx, bool is_aa64, int use
  * @mmu_idx:  MMU index indicating required translation regime
  * @select:   The TTBR the address translates through
  * @sprr_idx: The SPRR permission index
- * @user_rw:  Translated AP for user access
  * @guarded:  TRUE if accessing from GXF
  */
-static int get_S1prot_sprr(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int sprr_idx, int user_rw, bool guarded)
+static int get_S1prot_sprr(CPUARMState* env, ARMMMUIdx mmu_idx, int select, int sprr_idx, bool guarded)
 {
-    int prot = sprr_to_prot(env, mmu_idx, select, sprr_idx, guarded);
+    int prot  = sprr_to_prot(env, mmu_idx, select, sprr_idx, guarded);
+    int uattr = extract64(env->sprr.sprr_uperm_br[select], sprr_idx * 4, 4);
 
-    if (!regime_is_user(mmu_idx) && user_rw && regime_is_pan(mmu_idx)) { prot &= PAGE_EXEC; }
+    /* PAN applies to what EL0 may access through the index, not to AP[1]. */
+    if (!regime_is_user(mmu_idx) && (guarded ? uattr >> 2 : uattr & 3) != 0 && regime_is_pan(mmu_idx)) {
+        prot &= PAGE_EXEC;
+    }
     return prot;
 }
 
@@ -1794,7 +1800,7 @@ restart_atomic_update:
      */
     attrs = new_descriptor & (MAKE_64BIT_MASK(2, 10) | MAKE_64BIT_MASK(50, 14));
     if (!regime_is_stage2(mmu_idx)) {
-        if (!param.hpd) {
+        if (!param.hpd && !arm_is_sprr_enabled(env)) {
             attrs |= extract64(tableattrs, 0, 2) << 53; /* XN, PXN */
             /*
              * The sense of AP[1] vs APTable[0] is reversed, as APTable[0] == 1
@@ -1904,7 +1910,7 @@ restart_atomic_update:
             int  sprr_idx = sprr_index(ap, xn, pxn);
             bool guarded  = arm_is_guarded(env);
 
-            result->f.prot           = get_S1prot_sprr(env, mmu_idx, param.select, sprr_idx, user_rw, guarded);
+            result->f.prot           = get_S1prot_sprr(env, mmu_idx, param.select, sprr_idx, guarded);
             result->f.extra.arm.sprr = ARM_SPRR_TLB_KEY(param.select, sprr_idx);
 
             if (access_type == MMU_INST_FETCH && !guarded && !(result->f.prot & PAGE_EXEC)
@@ -2348,7 +2354,7 @@ static bool get_phys_addr_twostage(CPUARMState* env, S1Translate* ptw, vaddr add
     ipa_secure = result->f.attrs.secure;
     ipa_space  = result->f.attrs.space;
 
-    ptw->in_s1_is_el0 = ptw->in_mmu_idx == ARMMMUIdx_Stage1_E0;
+    ptw->in_s1_is_el0 = ptw->in_mmu_idx == ARMMMUIdx_Stage1_E0 || ptw->in_mmu_idx == ARMMMUIdx_Stage1_GE0;
     ptw->in_mmu_idx   = ipa_secure ? ARMMMUIdx_Stage2_S : ARMMMUIdx_Stage2;
     ptw->in_space     = ipa_space;
     ptw->in_ptw_idx   = ptw_idx_for_stage_2(env, ptw->in_mmu_idx);
@@ -2445,11 +2451,12 @@ static bool get_phys_addr_nogpc(CPUARMState* env, S1Translate* ptw, vaddr addres
             /* Checking Phys early avoids special casing later vs regime_el. */
             return get_phys_addr_disabled(env, ptw, address, access_type, result, fi);
 
-        case ARMMMUIdx_Stage1_E0    :
-        case ARMMMUIdx_Stage1_E1    :
-        case ARMMMUIdx_Stage1_E1_PAN:
-        case ARMMMUIdx_Stage1_GE1   :
+        case ARMMMUIdx_Stage1_E0     :
+        case ARMMMUIdx_Stage1_E1     :
+        case ARMMMUIdx_Stage1_E1_PAN :
+        case ARMMMUIdx_Stage1_GE1    :
         case ARMMMUIdx_Stage1_GE1_PAN:
+        case ARMMMUIdx_Stage1_GE0:
             /*
              * First stage lookup uses second stage for ptw; only
              * Secure has both S and NS IPA and starts with Stage2_S.
@@ -2468,6 +2475,7 @@ static bool get_phys_addr_nogpc(CPUARMState* env, S1Translate* ptw, vaddr addres
             break;
 
         case ARMMMUIdx_E10_0    : s1_mmu_idx = ARMMMUIdx_Stage1_E0; goto do_twostage;
+        case ARMMMUIdx_GE10_0   : s1_mmu_idx = ARMMMUIdx_Stage1_GE0; goto do_twostage;
         case ARMMMUIdx_E10_1    : s1_mmu_idx = ARMMMUIdx_Stage1_E1; goto do_twostage;
         case ARMMMUIdx_E10_1_PAN: s1_mmu_idx = ARMMMUIdx_Stage1_E1_PAN; goto do_twostage;
         case ARMMMUIdx_GE10_1   : s1_mmu_idx = ARMMMUIdx_Stage1_GE1; goto do_twostage;
@@ -2571,6 +2579,8 @@ static ARMSecuritySpace arm_mmu_idx_to_security_space(CPUARMState* env, ARMMMUId
         case ARMMMUIdx_GE20_2_PAN    :
         case ARMMMUIdx_Stage1_GE1    :
         case ARMMMUIdx_Stage1_GE1_PAN:
+        case ARMMMUIdx_GE10_0        :
+        case ARMMMUIdx_Stage1_GE0    :
         case ARMMMUIdx_GE2           : ss = arm_security_space_below_el3(env); break;
         case ARMMMUIdx_Stage2:
             /*

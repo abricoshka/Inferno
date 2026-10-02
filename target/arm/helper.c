@@ -350,7 +350,7 @@ int alle1_tlbmask(CPUARMState* env)
      * writes, so only needs to apply to NS PL1&0, not S PL1&0.
      */
     return (ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_GE10_1
-            | ARMMMUIdxBit_GE10_1_PAN | ARMMMUIdxBit_Stage2 | ARMMMUIdxBit_Stage2_S);
+            | ARMMMUIdxBit_GE10_1_PAN | ARMMMUIdxBit_GE10_0 | ARMMMUIdxBit_Stage2 | ARMMMUIdxBit_Stage2_S);
 }
 
 static const ARMCPRegInfo cp_reginfo[] = {
@@ -808,10 +808,11 @@ static void scr_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)
      * we must invalidate all TLBs below EL3.
      */
     if (changed & (SCR_NS | SCR_NSE)) {
-        tlb_flush_by_mmuidx(env_cpu(env), (ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_E20_0 | ARMMMUIdxBit_E10_1
-                                           | ARMMMUIdxBit_E20_2 | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_E20_2_PAN
-                                           | ARMMMUIdxBit_E2 | ARMMMUIdxBit_GE10_1 | ARMMMUIdxBit_GE20_2
-                                           | ARMMMUIdxBit_GE10_1_PAN | ARMMMUIdxBit_GE20_2_PAN | ARMMMUIdxBit_GE2));
+        tlb_flush_by_mmuidx(env_cpu(env),
+                            (ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_E20_0 | ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E20_2
+                             | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_E20_2_PAN | ARMMMUIdxBit_E2 | ARMMMUIdxBit_GE10_1
+                             | ARMMMUIdxBit_GE20_2 | ARMMMUIdxBit_GE10_1_PAN | ARMMMUIdxBit_GE20_2_PAN
+                             | ARMMMUIdxBit_GE2 | ARMMMUIdxBit_GE10_0));
     }
 }
 
@@ -9819,8 +9820,10 @@ static void arm_cpu_do_interrupt_aarch64(CPUState* cs)
         case EXCP_VFIQ :
         case EXCP_VFNMI: addr += 0x100; break;
         case EXCP_GENTER:
-            addr   = env->gxf.gxf_enter_el[new_el];
-            genter = true;
+            addr                      = env->gxf.gxf_enter_el[new_el];
+            genter                    = true;
+            env->gxf.esr_gl[new_el]   = env->exception.syndrome;
+            env->gxf.aspsr_gl[new_el] = deposit64(env->gxf.aspsr_gl[new_el], 0, 1, arm_is_guarded(env));
             break;
         case EXCP_VSERR:
             addr += 0x180;
@@ -9919,6 +9922,29 @@ static void arm_cpu_do_interrupt_aarch64(CPUState* cs)
     env->pc = addr;
 
     qemu_log_mask(CPU_LOG_INT, "...to EL%d PC 0x%" PRIx64 " PSTATE 0x%x\n", new_el, env->pc, pstate_read(env));
+}
+
+void aarch64_gxf_exit(CPUARMState* env)
+{
+    int      cur_el = arm_current_el(env);
+    uint32_t spsr   = env->gxf.spsr_gl[cur_el];
+
+    aarch64_save_sp(env, cur_el);
+
+    if (arm_generate_debug_exceptions(env)) { spsr &= ~PSTATE_SS; }
+
+    spsr &= aarch64_pstate_valid_mask(&env_archcpu(env)->isar);
+    pstate_write(env, spsr);
+
+    if (!arm_singlestep_active(env)) { env->pstate &= ~PSTATE_SS; }
+
+    if (!(env->gxf.aspsr_gl[cur_el] & 1)) { env->gxf.gxf_status_el[cur_el] &= ~1; }
+    aarch64_restore_sp(env, cur_el);
+    env->pc = env->gxf.elr_gl[cur_el];
+    qemu_log_mask(CPU_LOG_INT,
+                  "Guarded execution exit from AArch64 GL%d to "
+                  "AArch64 %cL%d PC 0x%" PRIx64 "\n",
+                  cur_el, arm_is_guarded(env) ? 'G' : 'E', cur_el, env->pc);
 }
 
 /*
@@ -10318,7 +10344,7 @@ ARMMMUIdx arm_mmu_idx_el(CPUARMState* env, int el)
         default: assert_not_reached();
     }
 
-    if (arm_is_guarded(env) && (el > 0)) { idx |= ARM_MMU_IDX_A_GXF; }
+    if (arm_is_guarded(env) && (el > 0 || idx == ARMMMUIdx_E10_0)) { idx |= ARM_MMU_IDX_A_GXF; }
 
     return idx;
 }

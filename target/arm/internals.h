@@ -418,12 +418,14 @@ static inline int arm_current_el(CPUARMState* env)
     }
 }
 
-/* Return true if the processor is in GXF state */
+/* Return true if the processor is in GXF state. GL1 returns to EL0 as GL0. */
 static inline bool arm_is_guarded(CPUARMState* env)
 {
-    return arm_feature(env, ARM_FEATURE_GXF) && (arm_current_el(env) > 0)
-           && (env->gxf.gxf_status_el[arm_current_el(env)] & 1);
+    int el = arm_current_el(env);
+    return arm_feature(env, ARM_FEATURE_GXF) && (env->gxf.gxf_status_el[el == 0 ? 1 : el] & 1);
 }
+
+void aarch64_gxf_exit(CPUARMState* env);
 
 /* Return true if the processor has SPRR enabled */
 static inline bool arm_is_sprr_enabled(CPUARMState* env) { return env->sprr.sprr_config_el1 & 1; }
@@ -1144,7 +1146,7 @@ static inline int vae1_tlbmask(CPUARMState* env)
                | ARMMMUIdxBit_E20_0;
     }
     return ARMMMUIdxBit_E10_1 | ARMMMUIdxBit_E10_1_PAN | ARMMMUIdxBit_GE10_1 | ARMMMUIdxBit_GE10_1_PAN
-           | ARMMMUIdxBit_E10_0;
+           | ARMMMUIdxBit_E10_0 | ARMMMUIdxBit_GE10_0;
 }
 
 /* Security attributes for an address, as returned by v8m_security_lookup. */

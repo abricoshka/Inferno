@@ -690,26 +690,8 @@ illegal_return:
 
 void HELPER(gexit)(CPUARMState* env)
 {
-    int      cur_el = arm_current_el(env);
-    uint32_t spsr   = env->gxf.spsr_gl[cur_el];
-
-    aarch64_save_sp(env, cur_el);
-
-    if (arm_generate_debug_exceptions(env)) { spsr &= ~PSTATE_SS; }
-
-    spsr &= aarch64_pstate_valid_mask(&env_archcpu(env)->isar);
-    pstate_write(env, spsr);
-
-    if (!arm_singlestep_active(env)) { env->pstate &= ~PSTATE_SS; }
-
-    env->gxf.gxf_status_el[cur_el] &= ~1;
-    aarch64_restore_sp(env, cur_el);
-    env->pc = env->gxf.elr_gl[cur_el];
-    helper_rebuild_hflags_a64(env, cur_el);
-    qemu_log_mask(CPU_LOG_INT,
-                  "Guarded execution exit from AArch64 GL%d to "
-                  "AArch64 EL%d PC 0x%" PRIx64 "\n",
-                  cur_el, cur_el, env->pc);
+    aarch64_gxf_exit(env);
+    helper_rebuild_hflags_a64(env, arm_current_el(env));
 }
 
 void HELPER(dc_zva)(CPUARMState* env, uint64_t vaddr_in)
