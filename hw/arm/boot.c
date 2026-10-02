@@ -612,6 +612,9 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
     assert_nonnull(prop);
     qemu_guest_getrandom_nofail(prop->data, prop->len);
 
+    prop = apple_dt_get_prop(child, "cl4-entropy");
+    if (prop != NULL) { qemu_guest_getrandom_nofail(prop->data, prop->len); }
+
     prop = apple_dt_get_prop(child, "boot-nonce");
     assert_nonnull(prop);
     assert_cmpuint(prop->len, ==, sizeof(info->boot_nonce_generator));
@@ -1032,6 +1035,29 @@ MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* file_d
     return header;
 }
 
+MachoHeader64* apple_boot_load_monitor_data(const char* filename, uint8_t* file_data, gsize file_len, const char* type,
+                                            const char* restore_type)
+{
+    uint32_t       len;
+    uint8_t*       data = NULL;
+    char           payload_type[4];
+    MachoHeader64* header;
+
+    extract_im4p_payload(filename, file_data, file_len, payload_type, &data, &len, NULL);
+
+    if (memcmp(payload_type, type, 4) != 0 && memcmp(payload_type, restore_type, 4) != 0
+        && memcmp(payload_type, "raw", 4) != 0)
+    {
+        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `%s`/`%s`)", filename, payload_type, type,
+                   restore_type);
+        return NULL;
+    }
+
+    header = apple_boot_parse_macho(data, len);
+    g_free(data);
+    return header;
+}
+
 MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len)
 {
     uint8_t*          phys_base;
@@ -1261,6 +1287,18 @@ void apple_boot_allocate_segment_records(AppleDTNode* memory_map, MachoHeader64*
     }
 }
 
+void apple_boot_allocate_sptm_records(AppleDTNode* memory_map)
+{
+    static const char* const regions[] = {
+        "TXM-ro",        "TXM-rx",    "TXM-bx",    "TXM-rw",    "TXM-le",     "BootKC-rx",   "BootKC-bx",
+        "BootKC-ro",     "BootKC-rs", "BootKC-rw", "BootKC-le", "SPTM-ro",    "SPTM-rx",     "SPTM-rw",
+        "SPTM-le",       "TXM-virt",  "TXM-entry", "SPTM-virt", "SPTM-entry", "BootKC-virt", "BootKC-entry",
+        "CL4-dummypage", "slide",     "CL4-rx",    "CL4-ro",    "CL4-entry",  "CL4-virt",
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(regions); i++) { apple_dt_set_prop(memory_map, regions[i], 16, NULL); }
+}
+
 vaddr apple_boot_load_macho(MachoHeader64* header, AddressSpace* as, AppleDTNode* memory_map, hwaddr phys_base,
                             vaddr virt_slide)
 {
@@ -1405,6 +1443,18 @@ vaddr apple_boot_load_macho(MachoHeader64* header, AddressSpace* as, AppleDTNode
     if (!is_fileset) { apple_boot_process_symbols(header, -virt_slide); }
 
     return pc;
+}
+
+vaddr apple_boot_get_entry_point(MachoHeader64* header)
+{
+    MachoLoadCommand* cmd = (MachoLoadCommand*)(header + 1);
+
+    for (uint32_t i = 0; i < header->n_cmds; i++, cmd = (MachoLoadCommand*)((char*)cmd + cmd->cmd_size)) {
+        // 0x110 for arm64 only.
+        if (cmd->cmd == LC_UNIXTHREAD) { return ldq_le_p((uint8_t*)cmd + 0x110); }
+    }
+
+    return 0;
 }
 
 uint8_t* apple_boot_get_macho_buffer(MachoHeader64* header)

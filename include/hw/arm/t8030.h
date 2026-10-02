@@ -50,6 +50,8 @@ typedef struct
     AppleA13Cluster clusters[A13_MAX_CLUSTER];
     SysBusDevice*   aic;
     MachoHeader64*  kernel;
+    MachoHeader64*  sptm;
+    MachoHeader64*  txm;
     AppleDTNode*    device_tree;
     uint8_t*        trustcache;
     char*           securerom;

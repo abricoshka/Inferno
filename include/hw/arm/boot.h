@@ -377,7 +377,14 @@ MachoHeader64* apple_boot_load_kernel(const char* filename, MachoHeader64** secu
 MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* data, gsize len,
                                            MachoHeader64** secure_monitor);
 
+/// Loads the SPTM or TXM image with IM4P payload `type` or its restore counterpart `restore_type`.
+/// Consumes `data`.
+MachoHeader64* apple_boot_load_monitor_data(const char* filename, uint8_t* data, gsize len, const char* type,
+                                            const char* restore_type);
+
 MachoHeader64* apple_boot_parse_macho(uint8_t* data, uint32_t len);
+
+vaddr apple_boot_get_entry_point(MachoHeader64* header);
 
 uint8_t* apple_boot_get_macho_buffer(MachoHeader64* header);
 
@@ -414,6 +421,9 @@ void apple_boot_setup_bootargs(uint32_t build_version, AddressSpace* as, hwaddr 
                                AppleVideoArgs* video_args, const char* cmdline, hwaddr mem_size_actual);
 
 void apple_boot_allocate_segment_records(AppleDTNode* memory_map, MachoHeader64* header);
+
+/// The `/chosen/memory-map` regions SPTM boots from.
+void apple_boot_allocate_sptm_records(AppleDTNode* memory_map);
 
 vaddr apple_boot_load_macho(MachoHeader64* header, AddressSpace* as, AppleDTNode* memory_map, hwaddr phys_base,
                             vaddr virt_slide);
