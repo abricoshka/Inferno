@@ -76,7 +76,7 @@ static void vh_debug_hexdump(const uint8_t* buf, uint32_t len)
 
 #define VIRTUALHERE_HEARTBEAT_PERIOD_MS 5000
 
-#define VIRTUALHERE_SERVER_BANNER "Support Inferno at https://ko-fi.com/chefkiss"
+#define VIRTUALHERE_SERVER_BANNER "Support Inferno at https://chefkiss.dev/donate/"
 
 #define VIRTUALHERE_MSG_MAX_SIZE  0x3200001
 #define VIRTUALHERE_FRAME_HDR_LEN 8
