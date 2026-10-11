@@ -17,12 +17,17 @@
 #include "crypto/hmac.h"
 #include "hmacpriv.h"
 #include <nettle/hmac.h>
+#include <nettle/version.h>
 
 typedef void (*qcrypto_nettle_hmac_setkey)(void* ctx, size_t key_length, const uint8_t* key);
 
 typedef void (*qcrypto_nettle_hmac_update)(void* ctx, size_t length, const uint8_t* data);
 
-typedef void (*qcrypto_nettle_hmac_digest)(void* ctx, size_t length, uint8_t* digest);
+typedef void (*qcrypto_nettle_hmac_digest)(void* ctx,
+#if NETTLE_VERSION_MAJOR <= 3
+                                           size_t length,
+#endif
+                                           uint8_t* digest);
 
 typedef struct QCryptoHmacNettle QCryptoHmacNettle;
 struct QCryptoHmacNettle
@@ -164,7 +169,11 @@ static int qcrypto_nettle_hmac_bytesv(QCryptoHmac* hmac, const struct iovec* iov
         return -1;
     }
 
-    qcrypto_hmac_alg_map[hmac->alg].digest(&ctx->u, *resultlen, *result);
+    qcrypto_hmac_alg_map[hmac->alg].digest(&ctx->u,
+#if NETTLE_VERSION_MAJOR <= 3
+                                           *resultlen,
+#endif
+                                           *result);
 
     return 0;
 }
