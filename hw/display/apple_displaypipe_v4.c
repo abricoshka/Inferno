@@ -463,9 +463,9 @@ static void adp_v4_vsync_tick(void* opaque)
     uint64_t                 now    = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t                 period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
 
-    if (!REG_FIELD_EX32(qatomic_read(&adp->vftg_control), VFTG_CONTROL, ENABLE)) { return; }
-
     if (adp->direct_scanout || qatomic_xchg(&adp->present_pending, 0)) { dpy_gfx_update_full(adp->console); }
+
+    if (!REG_FIELD_EX32(qatomic_read(&adp->vftg_control), VFTG_CONTROL, ENABLE)) { return; }
 
     qatomic_or(&adp->int_status, R_CONTROL_INT_OUTPUT_READY_MASK);
     adp_v4_update_irqs(adp);
@@ -495,9 +495,6 @@ static void adp_v4_vftg_set_control(AppleDisplayPipeV4State* adp, uint32_t value
     if (REG_FIELD_EX32(value, VFTG_CONTROL, ENABLE) == REG_FIELD_EX32(old, VFTG_CONTROL, ENABLE)) { return; }
 
     if (REG_FIELD_EX32(value, VFTG_CONTROL, ENABLE)) { adp_v4_vsync_start(adp); }
-    else {
-        timer_del(adp->vsync_timer);
-    }
 }
 
 static void adp_v4_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
@@ -832,11 +829,13 @@ static void adp_v4_update_disp_bh(void* opaque)
         }
 
         disp_image = qemu_console_surface(adp->console)->image;
+        memset(pixman_image_get_data(disp_image), 0,
+               (size_t)pixman_image_get_stride(disp_image) * pixman_image_get_height(disp_image));
 
-        for (i = 0; i < ADP_V4_GP_COUNT; ++i) { drawn |= adp_v4_gp_draw(&adp->genpipe[i], &adp->dma_as, disp_image); }
+        for (i = 0; i < ADP_V4_GP_COUNT; ++i) { adp_v4_gp_draw(&adp->genpipe[i], &adp->dma_as, disp_image); }
     }
 
-    if (drawn) { qatomic_set(&adp->present_pending, 1); }
+    qatomic_set(&adp->present_pending, 1);
 
     qatomic_set(&adp->commit_pending, 0);
 
