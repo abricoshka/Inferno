@@ -869,6 +869,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_str(node, "graphics-featureset-class", "GLES2,0");
     apple_dt_set_prop_str(node, "graphics-featureset-fallbacks", "");
     apple_dt_set_prop_str(node, "artwork-display-gamut", "sRGB");
+    apple_dt_set_prop_str(node, "jetsam-properties-product-type", "N104");
     // TODO: PMP
     apple_dt_set_prop_str(t8030->device_tree, "target-type", "n104sim");
 
