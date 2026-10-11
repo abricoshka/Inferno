@@ -18,14 +18,16 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/irq.h"
 #include "hw/misc/a7iop/rtkit.h"
 #include "hw/misc/baseband.h"
 #include "hw/misc/smc.h"
 #include "hw/misc/spmi-baseband.h"
 #include "hw/pci/msi.h"
+#include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_device.h"
+#include "hw/qdev-properties.h"
+#include "qapi/error.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
 #include "qemu/units.h"
@@ -53,9 +55,6 @@
 
 #define TYPE_APPLE_BASEBAND_DEVICE "apple-baseband-device"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleBasebandDeviceState, APPLE_BASEBAND_DEVICE)
-
-#define TYPE_APPLE_BASEBAND "apple-baseband"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleBasebandState, APPLE_BASEBAND)
 
 // s8000: 0x1000/0x1000 (qualcomm)
 // t8015: 0x1000/0x400 (intel)
@@ -197,8 +196,8 @@ struct AppleBasebandState
 
     /*< public >*/
     AppleBasebandDeviceState* device;
-
-    PCIBus* pci_bus;
+    ApplePCIEPort*            port;
+    AppleSMC*                 smc;
 };
 
 static void apple_baseband_set_irq(void* opaque, int irq_num, int level)
@@ -832,50 +831,6 @@ static SMCResult smc_key_gP09_write(SMCKey* key, SMCKeyData* data, const void* i
     }
 }
 
-SysBusDevice* apple_baseband_create(AppleDTNode* node, PCIBus* pci_bus, ApplePCIEPort* port)
-{
-    DeviceState*        dev;
-    AppleBasebandState* s;
-    SysBusDevice*       sbd;
-    AppleDTNode*        child;
-    AppleDTProp*        prop;
-    uint64_t*           reg;
-    MemoryRegion*       alias;
-    PCIDevice*          pci_dev;
-
-    dev = qdev_new(TYPE_APPLE_BASEBAND);
-    s   = APPLE_BASEBAND(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-#if 0
-    prop = apple_dt_find_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t *)prop->data;
-#endif
-
-    s->pci_bus        = pci_bus;
-    pci_dev           = pci_new(-1, TYPE_APPLE_BASEBAND_DEVICE);
-    s->device         = APPLE_BASEBAND_DEVICE(pci_dev);
-    s->device->root   = s;
-    s->device->port   = port;
-    s->device->dma_mr = port->dma_mr;
-    s->device->dma_as = &port->dma_as;
-
-    object_property_add_child(OBJECT(s), "device", OBJECT(s->device));
-
-    // smc-pmu
-    AppleSMC* smc = APPLE_SMC_IOP(object_property_get_link(OBJECT(qdev_get_machine()), "smc", &error_fatal));
-    apple_smc_add_key_func(smc, 'gP07', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE | SMC_ATTR_UNK_0x20, s, smc_key_gP07_read,
-                           smc_key_gP07_write);
-    apple_smc_add_key_func(smc, 'gP09', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE | SMC_ATTR_UNK_0x20, s, smc_key_gP09_read,
-                           smc_key_gP09_write);
-    // TODO: gP09 are 0xf0, so gP07 should be as well.
-    // TODO: missing, according to t8015, gP01/gp05/gp0e/gp0f/gp12/gp13/gp15
-
-    return sbd;
-}
-
 static void apple_baseband_device_pci_realize(PCIDevice* dev, Error** errp)
 {
     AppleBasebandDeviceState* s        = APPLE_BASEBAND_DEVICE(dev);
@@ -1062,13 +1017,36 @@ static void apple_baseband_device_class_init(ObjectClass* class, const void* dat
 
 static void apple_baseband_realize(DeviceState* dev, Error** errp)
 {
-    AppleBasebandState*       s        = APPLE_BASEBAND(dev);
-    AppleBasebandDeviceState* s_device = s->device;
-    PCIDevice*                pci_dev  = PCI_DEVICE(s->device);
-    qdev_realize(DEVICE(s->device), BUS(s->pci_bus), &error_fatal);
+    AppleBasebandState* s = APPLE_BASEBAND(dev);
 
-    qdev_init_gpio_in_named(DEVICE(s), baseband_gpio_coredump, BASEBAND_GPIO_COREDUMP, 1);
-    qdev_init_gpio_out_named(DEVICE(s), &s_device->gpio_reset_det_irq, BASEBAND_GPIO_RESET_DET_OUT, 1);
+    s->device         = APPLE_BASEBAND_DEVICE(pci_new(-1, TYPE_APPLE_BASEBAND_DEVICE));
+    s->device->root   = s;
+    s->device->port   = s->port;
+    s->device->dma_mr = s->port->dma_mr;
+    s->device->dma_as = &s->port->dma_as;
+    object_property_add_child(OBJECT(s), "device", OBJECT(s->device));
+    if (!pci_realize_and_unref(PCI_DEVICE(s->device), pci_bridge_get_sec_bus(PCI_BRIDGE(s->port)), errp)) { return; }
+
+    // smc-pmu
+    apple_smc_add_key_func(s->smc, 'gP07', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE | SMC_ATTR_UNK_0x20, s,
+                           smc_key_gP07_read, smc_key_gP07_write);
+    apple_smc_add_key_func(s->smc, 'gP09', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE | SMC_ATTR_UNK_0x20, s,
+                           smc_key_gP09_read, smc_key_gP09_write);
+    // TODO: gP09 are 0xf0, so gP07 should be as well.
+    // TODO: missing, according to t8015, gP01/gp05/gp0e/gp0f/gp12/gp13/gp15
+
+    qdev_init_gpio_in_named(dev, baseband_gpio_coredump, BASEBAND_GPIO_COREDUMP, 1);
+    qdev_init_gpio_out_named(dev, &s->device->gpio_reset_det_irq, BASEBAND_GPIO_RESET_DET_OUT, 1);
+}
+
+static void apple_baseband_init(Object* obj)
+{
+    AppleBasebandState* s = APPLE_BASEBAND(obj);
+
+    object_property_add_link(obj, "port", TYPE_APPLE_PCIE_PORT, (Object**)&s->port,
+                             qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
+    object_property_add_link(obj, "smc", TYPE_APPLE_SMC_IOP, (Object**)&s->smc, qdev_prop_allow_set_link_before_realize,
+                             OBJ_PROP_LINK_STRONG);
 }
 
 static void apple_baseband_unrealize(DeviceState* dev) { AppleBasebandState* s = APPLE_BASEBAND(dev); }
@@ -1095,7 +1073,8 @@ static const TypeInfo apple_baseband_types[] = {
         .name   = TYPE_APPLE_BASEBAND,
         .parent = TYPE_SYS_BUS_DEVICE,
         OBJECT_TYPE_INSTANCE(AppleBasebandState),
-        .class_init = apple_baseband_class_init,
+        .instance_init = apple_baseband_init,
+        .class_init    = apple_baseband_class_init,
     },
 };
 

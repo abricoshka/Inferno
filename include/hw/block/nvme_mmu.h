@@ -19,7 +19,8 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
+#include "hw/pci-host/apcie.h"
 #include "hw/nvme/nvme.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_bus.h"
@@ -47,20 +48,16 @@ struct AppleNVMeMMUState
     SysBusDevice parent_obj;
 
     /*< public >*/
-    MemoryRegion  iomems[4];
-    MemoryRegion  io_mmio;
-    MemoryRegion  io_ioport;
-    MemoryRegion  io_ioport_for_alias;
-    MemoryRegion  bar0;
-    qemu_irq      irq;
-    NvmeCtrl*     nvme;
-    MemoryRegion* dma_mr;
-    AddressSpace  dma_as;
-    PCIBus*       pci_bus;
-    uint32_t      vendor_reg[NVME_APPLE_VENDOR_REG_SIZE / sizeof(uint32_t)];
+    MemoryRegion   iomems[4];
+    MemoryRegion   io_mmio;
+    MemoryRegion   io_ioport;
+    MemoryRegion   io_ioport_for_alias;
+    MemoryRegion   bar0;
+    qemu_irq       irq;
+    NvmeCtrl*      nvme;
+    ApplePCIEPort* port;
+    uint32_t       vendor_reg[NVME_APPLE_VENDOR_REG_SIZE / sizeof(uint32_t)];
 
     MemoryRegion common;
     uint32_t     common_reg[0x4000 / sizeof(uint32_t)];
 };
-
-SysBusDevice* apple_nvme_mmu_from_node(AppleDTNode* node, PCIBus* pci_bus);

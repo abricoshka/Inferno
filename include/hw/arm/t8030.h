@@ -43,9 +43,6 @@ typedef struct
 {
     MachineState parent;
 
-    hwaddr          armio_base;
-    hwaddr          armio_size;
-    unsigned long   dram_size;
     AppleA13State*  cpus[A13_MAX_CPU];
     AppleA13Cluster clusters[A13_MAX_CLUSTER];
     SysBusDevice*   aic;
@@ -85,4 +82,5 @@ typedef struct
     uint32_t        disp_width;
     uint32_t        disp_height;
     bool            enable_pac;
+    QEMUTimer*      boot_splash_timer;
 } AppleT8030MachineState;

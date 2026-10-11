@@ -1,8 +1,7 @@
 #pragma once
 
-#include "hw/arm/dt.h"
-#include "hw/misc/a7iop/base.h"
-#include "hw/pci/pci.h"
-#include "hw/sysbus.h"
+#include "qemu/osdep.h"
+#include "qom/object.h"
 
-SysBusDevice* apple_ans_from_node(AppleDTNode* node, AppleA7IOPVersion version, PCIBus* pci_bus);
+#define TYPE_APPLE_ANS "apple-ans"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleANSState, APPLE_ANS)

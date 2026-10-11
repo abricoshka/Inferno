@@ -21,7 +21,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "system/memory.h"
 #include "cpu.h"
 
@@ -85,7 +84,6 @@ typedef struct AppleA9
 } AppleA9;
 
 AppleA9* apple_a9_create(const char* name, uint32_t cpu_id, uint32_t phys_id);
-AppleA9* apple_a9_from_node(AppleDTNode* node);
 bool     apple_a9_cpu_is_asleep(AppleA9* acpu);
 bool     apple_a9_cpu_is_off(AppleA9* acpu);
 void     apple_a9_cpu_set_on(AppleA9* acpu);

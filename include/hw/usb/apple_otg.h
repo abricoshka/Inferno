@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/usb/hcd-dwc2.h"
 #include "qom/object.h"
@@ -46,5 +46,3 @@ struct AppleOTGState
     char*         fuzz_input;
     bool          dart;
 };
-
-DeviceState* apple_otg_from_node(AppleDTNode* node);

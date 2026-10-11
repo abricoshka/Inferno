@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "hw/dma/apple_sio.h"
 #include "hw/sysbus.h"
 #include "qom/object.h"
 
@@ -29,5 +29,6 @@
 #define TYPE_APPLE_SPI "apple-spi"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleSPIState, APPLE_SPI)
 
-SysBusDevice* apple_spi_from_node(AppleDTNode* node);
-SSIBus*       apple_spi_get_bus(AppleSPIState* s);
+SSIBus* apple_spi_get_bus(AppleSPIState* s);
+
+AppleSPIState* apple_spi_create(hwaddr addr, qemu_irq irq, AppleSIO* sio, uint32_t tx_chan_id, uint32_t rx_chan_id);

@@ -69,6 +69,11 @@ static void apple_dt_destroy_node(AppleDTNode* node)
     g_free(node);
 }
 
+void apple_dt_destroy(AppleDTNode* root)
+{
+    if (root != NULL) { apple_dt_destroy_node(root); }
+}
+
 AppleDTNode* apple_dt_node_new(AppleDTNode* parent, const char* name)
 {
     AppleDTNode* node;
@@ -370,50 +375,6 @@ AppleDTNode* apple_dt_get_node(AppleDTNode* node, const char* path)
 
     g_free(string);
     return node;
-}
-
-void apple_dt_connect_function_prop_out_in(DeviceState* target_device, DeviceState* src_device,
-                                           AppleDTProp* function_prop, const char* name)
-{
-    uint32_t* ints;
-    uint32_t  pin;
-
-    assert_nonnull(function_prop);
-
-    ints = (uint32_t*)function_prop->data;
-    pin  = ints[2];
-    qdev_connect_gpio_out(target_device, pin, qdev_get_gpio_in_named(src_device, name, 0));
-}
-
-void apple_dt_connect_function_prop_out_in_gpio(DeviceState* src_device, AppleDTProp* function_prop,
-                                                const char* gpio_name)
-{
-    DeviceState* gpio;
-
-    gpio = DEVICE(object_property_get_link(OBJECT(qdev_get_machine()), "gpio", &error_fatal));
-    apple_dt_connect_function_prop_out_in(gpio, src_device, function_prop, gpio_name);
-}
-
-void apple_dt_connect_function_prop_in_out(DeviceState* target_device, DeviceState* src_device,
-                                           AppleDTProp* function_prop, const char* name)
-{
-    uint32_t* ints;
-    uint32_t  pin;
-
-    assert_nonnull(function_prop);
-
-    ints = (uint32_t*)function_prop->data;
-    pin  = ints[2];
-    qdev_connect_gpio_out_named(src_device, name, 0, qdev_get_gpio_in(target_device, pin));
-}
-
-void apple_dt_connect_function_prop_in_out_gpio(DeviceState* src_device, AppleDTProp* function_prop,
-                                                const char* gpio_name)
-{
-    DeviceState* gpio;
-
-    gpio = DEVICE(object_property_get_link(OBJECT(qdev_get_machine()), "gpio", &error_fatal));
-    apple_dt_connect_function_prop_in_out(gpio, src_device, function_prop, gpio_name);
 }
 
 static uint32_t apple_dt_prop_placeholder_len(AppleDTProp* prop)

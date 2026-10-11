@@ -19,17 +19,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/dma/apple_sio.h"
 #include "hw/irq.h"
 #include "hw/ssi/apple_spi.h"
 #include "hw/ssi/ssi.h"
 #include "qapi/error.h"
-#include "qemu/error-report.h"
+#include "hw/qdev-properties.h"
 #include "qemu/fifo32.h"
 #include "qemu/lockable.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 /* XXX: Based on linux/drivers/spi/spi-apple.c */
 
@@ -100,9 +98,8 @@ struct AppleSPIState
     Fifo32   tx_fifo;
     uint32_t regs[APPLE_SPI_MMIO_SIZE >> 2];
 
-    int  tx_chan_id;
-    int  rx_chan_id;
-    bool dma_capable;
+    uint32_t tx_chan_id;
+    uint32_t rx_chan_id;
 };
 
 static uint32_t apple_spi_word_size(AppleSPIState* spi)
@@ -248,7 +245,7 @@ static void apple_spi_run(AppleSPIState* spi)
     uint32_t rx;
     int      word_size = apple_spi_word_size(spi);
 
-    if ((REG_CFG_MODE(REG(spi, REG_CFG))) == REG_CFG_MODE_DMA && !spi->dma_capable) {
+    if ((REG_CFG_MODE(REG(spi, REG_CFG))) == REG_CFG_MODE_DMA && (spi->tx_chan == NULL || spi->rx_chan == NULL)) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: DMA mode is not supported on this device\n", __func__);
         return;
     }
@@ -458,55 +455,12 @@ SSIBus* apple_spi_get_bus(AppleSPIState* spi) { return spi->ssi_bus; }
 static void apple_spi_realize(DeviceState* dev, struct Error** errp)
 {
     AppleSPIState* spi = APPLE_SPI(dev);
-    char           name[32];
-    AppleSIO*      sio;
+    AppleSIO*      sio = APPLE_SIO(object_property_get_link(OBJECT(dev), "sio", NULL));
 
-    snprintf(name, sizeof(name), "%s.bus", dev->id);
-    spi->ssi_bus = ssi_create_bus(dev, name);
-
-    if (spi->iomem.size == 0) {
-        snprintf(name, sizeof(name), "%s.mmio", dev->id);
-        memory_region_init_io(&spi->iomem, OBJECT(dev), &apple_spi_reg_ops, spi, name, APPLE_SPI_MMIO_SIZE);
-    }
-
-    memory_region_enable_lockless_io(&spi->iomem);
-
-    sio = APPLE_SIO(object_property_get_link(OBJECT(dev), "sio", NULL));
-
-    if (sio == NULL) {
-        if (spi->dma_capable) {
-            warn_report("%s: SPI bus is DMA capable, but no SIO is attached. "
-                        "This is a bug.",
-                        __func__);
-            spi->dma_capable = false;
-        }
-    }
-    else if (spi->dma_capable) {
+    if (sio != NULL) {
         spi->tx_chan = apple_sio_get_endpoint(sio, spi->tx_chan_id);
         spi->rx_chan = apple_sio_get_endpoint(sio, spi->rx_chan_id);
     }
-}
-
-SysBusDevice* apple_spi_from_node(AppleDTNode* node)
-{
-    DeviceState*   dev = qdev_new(TYPE_APPLE_SPI);
-    SysBusDevice*  sbd = SYS_BUS_DEVICE(dev);
-    AppleSPIState* spi = APPLE_SPI(dev);
-    char           name[32];
-    AppleDTProp*   prop = apple_dt_get_prop(node, "reg");
-
-    dev->id = apple_dt_get_prop_strdup(node, "name", &error_fatal);
-
-    snprintf(name, sizeof(name), "%s.mmio", dev->id);
-    memory_region_init_io(&spi->iomem, OBJECT(dev), &apple_spi_reg_ops, spi, name, ldq_le_p(prop->data + 8));
-
-    if ((prop = apple_dt_get_prop(node, "dma-channels")) != NULL) {
-        spi->dma_capable = true;
-        spi->tx_chan_id  = ldl_le_p(prop->data);
-        spi->rx_chan_id  = ldl_le_p(prop->data + 0x20);
-    }
-
-    return sbd;
 }
 
 static void apple_spi_init(Object* obj)
@@ -515,6 +469,9 @@ static void apple_spi_init(Object* obj)
     DeviceState*   dev = DEVICE(spi);
     SysBusDevice*  sbd = SYS_BUS_DEVICE(spi);
 
+    memory_region_init_io(&spi->iomem, OBJECT(dev), &apple_spi_reg_ops, spi, TYPE_APPLE_SPI ".regs",
+                          APPLE_SPI_MMIO_SIZE);
+    memory_region_enable_lockless_io(&spi->iomem);
     sysbus_init_mmio(sbd, &spi->iomem);
     sysbus_init_irq(sbd, &spi->irq);
     sysbus_init_irq(sbd, &spi->cs_line);
@@ -524,7 +481,14 @@ static void apple_spi_init(Object* obj)
     fifo32_create(&spi->rx_fifo, REG_FIFO_DEPTH);
 
     qemu_mutex_init(&spi->lock);
+
+    spi->ssi_bus = ssi_create_bus(dev, "ssi");
 }
+
+static const Property apple_spi_properties[] = {
+    DEFINE_PROP_UINT32("tx-chan-id", AppleSPIState, tx_chan_id, 0),
+    DEFINE_PROP_UINT32("rx-chan-id", AppleSPIState, rx_chan_id, 0),
+};
 
 static void apple_spi_class_init(ObjectClass* klass, const void* data)
 {
@@ -536,6 +500,25 @@ static void apple_spi_class_init(ObjectClass* klass, const void* data)
 
     dc->desc    = "Apple Samsung SPI Controller";
     dc->realize = apple_spi_realize;
+    device_class_set_props(dc, apple_spi_properties);
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleSPIState, apple_spi, APPLE_SPI, SYS_BUS_DEVICE)
+
+AppleSPIState* apple_spi_create(hwaddr addr, qemu_irq irq, AppleSIO* sio, uint32_t tx_chan_id, uint32_t rx_chan_id)
+{
+    DeviceState*  dev;
+    SysBusDevice* sbd;
+
+    dev = qdev_new(TYPE_APPLE_SPI);
+    sbd = SYS_BUS_DEVICE(dev);
+
+    object_property_add_const_link(OBJECT(dev), "sio", OBJECT(sio));
+    qdev_prop_set_uint32(dev, "tx-chan-id", tx_chan_id);
+    qdev_prop_set_uint32(dev, "rx-chan-id", rx_chan_id);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, addr);
+    sysbus_connect_irq(sbd, 0, irq);
+
+    return APPLE_SPI(dev);
+}

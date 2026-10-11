@@ -19,17 +19,11 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
-#include "hw/sysbus.h"
 #include "qom/object.h"
 
 #define TYPE_APPLE_DISPLAY_PIPE_V4 "apple-display-pipe-v4"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleDisplayPipeV4State, APPLE_DISPLAY_PIPE_V4);
 
-SysBusDevice* adp_v4_from_node(AppleDTNode* node, MemoryRegion* dma_mr);
-
-void     adp_v4_update_vram_mapping(AppleDisplayPipeV4State* s, MemoryRegion* mr, hwaddr off, uint64_t size);
-uint64_t adp_v4_get_fb_off(AppleDisplayPipeV4State* s);
 /* Leave the display running and scanning out the framebuffer at @fb_iova, as iBoot does, also after reset. */
 void adp_v4_set_boot_fb(AppleDisplayPipeV4State* s, uint32_t fb_iova);
 /* Leave the display off from the next reset on. */

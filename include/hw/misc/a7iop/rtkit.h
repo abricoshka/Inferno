@@ -56,7 +56,7 @@ typedef struct
 struct AppleRTKitClass
 {
     /*< private >*/
-    SysBusDevice base_class;
+    SysBusDeviceClass base_class;
 
     /*< public >*/
     ResettablePhases parent_phases;
@@ -71,6 +71,7 @@ struct AppleRTKit
     AppleA7IOP parent_obj;
 
     /*< public >*/
+    /* Set by subclasses or the owner in instance_init; `opaque` defaults to the RTKit itself. */
     const AppleRTKitOps* ops;
     QemuMutex            lock;
     void*                opaque;
@@ -88,7 +89,3 @@ void apple_rtkit_register_control_ep(AppleRTKit* s, uint8_t ep, void* opaque, Ap
 void apple_rtkit_register_user_ep(AppleRTKit* s, uint8_t ep, void* opaque, AppleRTKitEPHandler* handler);
 void apple_rtkit_unregister_control_ep(AppleRTKit* s, uint8_t ep);
 void apple_rtkit_unregister_user_ep(AppleRTKit* s, uint8_t ep);
-void apple_rtkit_init(AppleRTKit* s, void* opaque, const char* role, uint64_t mmio_size, AppleA7IOPVersion version,
-                      const AppleRTKitOps* ops);
-AppleRTKit* apple_rtkit_new(void* opaque, const char* role, uint64_t mmio_size, AppleA7IOPVersion version,
-                            const AppleRTKitOps* ops);

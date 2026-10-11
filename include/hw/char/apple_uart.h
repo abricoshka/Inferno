@@ -19,9 +19,11 @@
 
 #pragma once
 
-#include "hw/or-irq.h"
-#include "hw/sysbus.h"
+#include "qemu/osdep.h"
+#include "exec/hwaddr.h"
 #include "qom/object.h"
-#include "target/arm/cpu-qom.h"
 
-DeviceState* apple_uart_create(hwaddr addr, int fifo_size, int channel, Chardev* chr, qemu_irq irq);
+#define TYPE_APPLE_UART "apple-uart"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleUartState, APPLE_UART)
+
+DeviceState* apple_uart_create(hwaddr addr, qemu_irq irq, Chardev* chr);

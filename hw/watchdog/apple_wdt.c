@@ -27,9 +27,6 @@
 #include "system/watchdog.h"
 #include "trace.h"
 
-#define TYPE_APPLE_WDT "apple-wdt"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleWDTState, APPLE_WDT)
-
 #define REG_CHIP_WDOG_TMR      (0x0)
 #define REG_CHIP_WDOG_RST_CNT  (0x4)
 #define REG_CHIP_WDOG_INTR_CNT (0x8)
@@ -213,14 +210,6 @@ static const MemoryRegionOps wdt_reg_ops = {
     .valid.unaligned       = false,
 };
 
-static void apple_wdt_realize(DeviceState* dev, Error** errp)
-{
-    AppleWDTState* s = APPLE_WDT(dev);
-    s->cntfrq_hz     = WDOG_CNTFRQ_HZ;
-    s->cnt_period_ns = wdog_cntfrq_period_ns(s);
-    s->timer         = timer_new_ns(QEMU_CLOCK_VIRTUAL, wdt_update, s);
-}
-
 static void apple_wdt_unrealize(DeviceState* dev)
 {
     AppleWDTState* s = APPLE_WDT(dev);
@@ -229,47 +218,30 @@ static void apple_wdt_unrealize(DeviceState* dev)
     s->timer = NULL;
 }
 
-SysBusDevice* apple_wdt_from_node(AppleDTNode* node)
+static void apple_wdt_reset_enter(Object* obj, ResetType type)
 {
-    DeviceState*   dev;
-    AppleWDTState* s;
-    SysBusDevice*  sbd;
-    AppleDTProp*   prop;
-    uint64_t*      reg;
+    AppleWDTState* s = APPLE_WDT(obj);
+    memset(s->reg.raw, 0, REG_SIZE);
+}
 
-    dev = qdev_new(TYPE_APPLE_WDT);
-    s   = APPLE_WDT(dev);
-    sbd = SYS_BUS_DEVICE(dev);
+static void apple_wdt_init(Object* obj)
+{
+    AppleWDTState* s   = APPLE_WDT(obj);
+    SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
 
-    apple_dt_set_prop_u32(node, "wdt-version", 1);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    /*
-     * 0: reg
-     * 1: scratch reg
-     */
-    memory_region_init_io(&s->iomems[0], OBJECT(dev), &wdt_reg_ops, s, TYPE_APPLE_WDT ".reg", reg[1]);
+    memory_region_init_io(&s->iomems[0], obj, &wdt_reg_ops, s, TYPE_APPLE_WDT ".reg", 0x4000);
 
     sysbus_init_mmio(sbd, &s->iomems[0]);
 
-    memory_region_init_ram_device_ptr(&s->iomems[1], OBJECT(dev), TYPE_APPLE_WDT ".scratch", sizeof(s->scratch),
-                                      &s->scratch);
+    memory_region_init_ram_device_ptr(&s->iomems[1], obj, TYPE_APPLE_WDT ".scratch", sizeof(s->scratch), &s->scratch);
     sysbus_init_mmio(sbd, &s->iomems[1]);
 
     sysbus_init_irq(sbd, &s->irqs[0]);
     sysbus_init_irq(sbd, &s->irqs[1]);
 
-    return sbd;
-}
-
-static void apple_wdt_reset_enter(Object* obj, ResetType type)
-{
-    AppleWDTState* s = APPLE_WDT(obj);
-    memset(s->reg.raw, 0, REG_SIZE);
+    s->cntfrq_hz     = WDOG_CNTFRQ_HZ;
+    s->cnt_period_ns = wdog_cntfrq_period_ns(s);
+    s->timer         = timer_new_ns(QEMU_CLOCK_VIRTUAL, wdt_update, s);
 }
 
 static void apple_wdt_class_init(ObjectClass* klass, const void* data)
@@ -279,10 +251,9 @@ static void apple_wdt_class_init(ObjectClass* klass, const void* data)
 
     rc->phases.enter = apple_wdt_reset_enter;
 
-    dc->realize   = apple_wdt_realize;
     dc->unrealize = apple_wdt_unrealize;
     dc->desc      = "Apple Watch Dog Timer";
     set_bit(DEVICE_CATEGORY_WATCHDOG, dc->categories);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleWDTState, apple_wdt, APPLE_WDT, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleWDTState, apple_wdt, APPLE_WDT, SYS_BUS_DEVICE)

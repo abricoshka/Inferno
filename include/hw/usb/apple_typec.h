@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/usb/hcd-dwc2.h"
 #include "hw/usb/hcd-dwc3.h"
@@ -46,5 +46,3 @@ typedef struct AppleTypeCState
     DWC3State     dwc3;
     SysBusDevice* host;
 } AppleTypeCState;
-
-DeviceState* apple_typec_create(AppleDTNode* node);

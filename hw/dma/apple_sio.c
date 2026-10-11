@@ -20,6 +20,7 @@
 #include "qemu/osdep.h"
 #include "hw/dma/apple_sio.h"
 #include "hw/misc/a7iop/rtkit.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/iov.h"
 #include "qemu/log.h"
@@ -555,23 +556,6 @@ AppleSIODMAEndpoint* apple_sio_get_endpoint(AppleSIO* s, int ep)
     return &s->eps[ep];
 }
 
-AppleSIODMAEndpoint* apple_sio_get_endpoint_from_node(AppleSIO* s, AppleDTNode* node, int idx)
-{
-    AppleDTProp* prop;
-    uint32_t*    data;
-    int          count;
-
-    prop = apple_dt_get_prop(node, "dma-channels");
-    if (prop == NULL) { return NULL; }
-
-    count = prop->len / 32;
-    if (idx >= count) { return NULL; }
-
-    data = (uint32_t*)prop->data;
-
-    return apple_sio_get_endpoint(s, data[8 * idx]);
-}
-
 static void ascv2_core_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size) { }
 
 static uint64_t ascv2_core_reg_read(void* opaque, hwaddr addr, unsigned size) { return 0; }
@@ -597,6 +581,10 @@ static void apple_sio_realize(DeviceState* dev, Error** errp)
     sioc = APPLE_SIO_GET_CLASS(dev);
 
     if (sioc->parent_realize != NULL) { sioc->parent_realize(dev, errp); }
+
+    memory_region_init_io(&s->ascv2_iomem, OBJECT(dev), &ascv2_core_reg_ops, s, TYPE_APPLE_SIO ".ascv2-core-reg",
+                          0x4000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->ascv2_iomem);
 
     obj = object_property_get_link(OBJECT(dev), "dma-mr", &error_abort);
 
@@ -632,6 +620,11 @@ static void apple_sio_reset_hold(Object* obj, ResetType type)
     }
 }
 
+static const Property apple_sio_properties[] = {
+    DEFINE_PROP_UINT32("protocol-version", AppleSIO, protocol_version, 0),
+    DEFINE_PROP_UINT64("gtimer-freq", AppleSIO, gtimer_freq, 0),
+};
+
 static void apple_sio_class_init(ObjectClass* klass, const void* data)
 {
     ResettableClass* rc;
@@ -643,55 +636,21 @@ static void apple_sio_class_init(ObjectClass* klass, const void* data)
     sioc = APPLE_SIO_CLASS(klass);
 
     device_class_set_parent_realize(dc, apple_sio_realize, &sioc->parent_realize);
+    device_class_set_props(dc, apple_sio_properties);
     resettable_class_set_parent_phases(rc, NULL, apple_sio_reset_hold, NULL, &sioc->parent_reset);
     dc->desc           = "Apple Smart IO DMA Controller";
     dc->user_creatable = false;
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSIO, apple_sio, APPLE_SIO, APPLE_RTKIT)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleSIO, apple_sio, APPLE_SIO, APPLE_RTKIT)
 
 void apple_sio_set_protocol_version(AppleSIO* s, uint32_t protocol_version) { s->protocol_version = protocol_version; }
 
-SysBusDevice* apple_sio_from_node(AppleDTNode* node, AppleA7IOPVersion version, uint32_t protocol_version,
-                                  uint64_t gtimer_freq)
+static void apple_sio_init(Object* obj)
 {
-    DeviceState*  dev;
-    AppleSIO*     s;
-    SysBusDevice* sbd;
-    AppleRTKit*   rtk;
-    AppleDTNode*  child;
-    AppleDTProp*  prop;
-    uint64_t*     reg;
+    AppleA7IOP* a7iop = APPLE_A7IOP(obj);
 
-    assert_false(gtimer_freq == 0);
-
-    dev = qdev_new(TYPE_APPLE_SIO);
-    s   = APPLE_SIO(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-    rtk = APPLE_RTKIT(dev);
-
-    dev->id = g_strdup("sio");
-
-    s->protocol_version = protocol_version;
-    s->gtimer_freq      = gtimer_freq;
-
-    child = apple_dt_get_node(node, "iop-sio-nub");
-    assert_nonnull(child);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    apple_rtkit_init(rtk, NULL, "SIO", reg[1], version, NULL);
-    apple_rtkit_register_user_ep(rtk, 0, s, apple_sio_handle_endpoint);
-
-    memory_region_init_io(&s->ascv2_iomem, OBJECT(dev), &ascv2_core_reg_ops, s, TYPE_APPLE_SIO ".ascv2-core-reg",
-                          reg[3]);
-    sysbus_init_mmio(sbd, &s->ascv2_iomem);
-
-    apple_dt_set_prop_u32(child, "pre-loaded", 1);
-    apple_dt_set_prop_u32(child, "running", 1);
-
-    return sbd;
+    a7iop->role      = "SIO";
+    a7iop->mmio_size = 0x20000;
+    apple_rtkit_register_user_ep(APPLE_RTKIT(obj), 0, APPLE_SIO(obj), apple_sio_handle_endpoint);
 }

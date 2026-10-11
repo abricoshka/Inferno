@@ -21,7 +21,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/arm/patcher.h"
 #include "cpu-qom.h"
 #include "qom/object.h"
@@ -62,10 +61,8 @@ typedef enum AppleSEPMMIOIndex
     SEP_MMIO_INDEX_BOOT_MONITOR,
 } AppleSEPMMIOIndex;
 
-void      ck_sep_seprom_patches(CKPatcherRange* range);
-AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr base, uint32_t cpu_id, bool modern,
-                              uint32_t chip_id);
-bool      apple_sep_get_fuse_changer_bit(AppleSEP* s, uint8_t bit);
-void      apple_sep_map_mmio(AppleSEP* s, AppleSEPMMIOIndex mmio_index, hwaddr addr);
-void      apple_sep_setup_tz0(AppleSEP* s, MemoryRegion* dram, hwaddr tz0_off, hwaddr tz0_size);
-ARMCPU*   apple_sep_get_cpu(AppleSEP* s);    // FIXME: remove
+void    ck_sep_seprom_patches(CKPatcherRange* range);
+bool    apple_sep_get_fuse_changer_bit(AppleSEP* s, uint8_t bit);
+void    apple_sep_map_mmio(AppleSEP* s, AppleSEPMMIOIndex mmio_index, hwaddr addr);
+void    apple_sep_setup_tz0(AppleSEP* s, MemoryRegion* dram, hwaddr tz0_off, hwaddr tz0_size);
+ARMCPU* apple_sep_get_cpu(AppleSEP* s);    // FIXME: remove

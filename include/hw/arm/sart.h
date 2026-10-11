@@ -21,7 +21,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/sysbus.h"
 #include "qom/object.h"
 
@@ -32,5 +31,3 @@ OBJECT_DECLARE_SIMPLE_TYPE(AppleSARTState, APPLE_SART)
 
 #define TYPE_APPLE_SART_IOMMU_MEMORY_REGION "apple-sart-iommu"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleSARTIOMMUMemoryRegion, APPLE_SART_IOMMU_MEMORY_REGION)
-
-SysBusDevice* apple_sart_from_node(AppleDTNode* node);

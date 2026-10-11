@@ -218,6 +218,8 @@ static const char* REM_PROPS[] = {
     "nvme-coastguard",    // FIXME: panic: "pmap_iommu_map failed\n"
     "pmp",
     "soc-tuning",
+    "invokes-sochot",
+    "has-dapf",
 #ifndef ENABLE_BASEBAND
     "baseband-chipset",
     "has-baseband",
@@ -496,8 +498,10 @@ AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize 
 
     extract_im4p_payload(filename, data, len, payload_type, &file_data, &fsize, NULL);
 
-    if (memcmp(payload_type, "dtre", 4) != 0 && memcmp(payload_type, "raw", 4) != 0) {
-        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `dtre`)", filename, payload_type);
+    if (memcmp(payload_type, "dtre", 4) != 0 && memcmp(payload_type, "rdtr", 4) != 0
+        && memcmp(payload_type, "raw", 4) != 0)
+    {
+        error_setg(&error_fatal, "`%s` is a `%.4s` object (expected `dtre`/`rdtr`)", filename, payload_type);
         return NULL;
     }
 
@@ -577,16 +581,11 @@ void apple_boot_setup_boot_nonce(AppleNvram* nvram, AppleBootInfo* info)
     }
 }
 
-void apple_boot_compute_ap_nonce(AppleDTNode* root, uint64_t generator, uint8_t** nonce, size_t* nonce_len)
+void apple_boot_compute_ap_nonce(QCryptoHashAlgo alg, uint64_t generator, uint8_t** nonce, size_t* nonce_len)
 {
-    AppleDTNode*    chosen = apple_dt_get_node(root, "chosen");
-    QCryptoHashAlgo alg;
-    uint8_t         data[sizeof(generator)];
-    size_t          hash_len = 0;
+    uint8_t data[sizeof(generator)];
+    size_t  hash_len = 0;
 
-    assert_nonnull(chosen);
-
-    alg = apple_boot_get_crypto_hash_alg(chosen);
     stq_le_p(data, generator);
     qcrypto_hash_bytes(alg, (const char*)data, sizeof(data), nonce, &hash_len, &error_fatal);
 
@@ -661,7 +660,8 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 
     child = apple_dt_get_node(root, "chosen/manifest-properties");
     assert_nonnull(child);
-    apple_boot_compute_ap_nonce(root, info->boot_nonce_generator, &nonce, &nonce_len);
+    apple_boot_compute_ap_nonce(apple_boot_get_crypto_hash_alg(apple_dt_get_node(root, "chosen")),
+                                info->boot_nonce_generator, &nonce, &nonce_len);
     apple_dt_set_prop(child, "BNCH", nonce_len, nonce);
     g_free(nonce);
 

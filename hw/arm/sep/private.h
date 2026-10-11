@@ -155,7 +155,8 @@ struct AppleSEP
     AppleA7IOP parent_obj;
 
     /*< public >*/
-    vaddr                     base;
+    uint64_t                  base;
+    uint32_t                  cpu_id;
     ARMCPU*                   cpu;
     bool                      modern;
     MemoryRegion*             ool_mr;

@@ -1,5 +1,7 @@
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
+#include "hw/sysbus.h"
 
-DeviceState* apple_spmi_pmu_from_node(AppleDTNode* node);
+#define TYPE_APPLE_SPMI_PMU "apple-spmi-pmu"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleSPMIPMUState, APPLE_SPMI_PMU)

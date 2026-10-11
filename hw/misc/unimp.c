@@ -26,7 +26,7 @@ static uint64_t unimp_read(void* opaque, hwaddr offset, unsigned size)
                   "%s: unimplemented device read  "
                   "(size %d, offset 0x%0*" HWADDR_PRIx ")\n",
                   s->name, size, s->offset_fmt_width, offset);
-    return 0;
+    return s->stub_val;
 }
 
 static void unimp_write(void* opaque, hwaddr offset, uint64_t value, unsigned size)
@@ -70,6 +70,7 @@ static void unimp_realize(DeviceState* dev, Error** errp)
 }
 
 static const Property unimp_properties[] = {
+    DEFINE_PROP_UINT64("stub-val", UnimplementedDeviceState, stub_val, 0),
     DEFINE_PROP_UINT64("size", UnimplementedDeviceState, size, 0),
     DEFINE_PROP_STRING("name", UnimplementedDeviceState, name),
 };

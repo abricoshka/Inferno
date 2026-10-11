@@ -20,22 +20,18 @@
 
 #include "qemu/osdep.h"
 #include "crypto/cipher.h"
-#include "hw/arm/dt.h"
 #include "hw/irq.h"
 #include "hw/misc/aes.h"
 #include "hw/misc/aes_reg.h"
 #include "qapi/error.h"
+#include "hw/qdev-properties.h"
 #include "qemu/bitops.h"
-#include "qemu/cutils.h"
 #include "qemu/lockable.h"
 #include "qemu/log.h"
 #include "qemu/main-loop.h"
-#include "qemu/module.h"
 #include "qemu/rcu.h"
 #include "system/dma.h"
 #include "trace.h"
-
-OBJECT_DECLARE_SIMPLE_TYPE(AppleAESState, APPLE_AES)
 
 typedef struct AESCommand
 {
@@ -607,15 +603,10 @@ static void apple_aes_reset_hold(Object* obj, ResetType type)
 static void apple_aes_realize(DeviceState* dev, Error** errp)
 {
     AppleAESState* s = APPLE_AES(dev);
-    Object*        obj;
 
-    obj = object_property_get_link(OBJECT(dev), "dma-mr", &error_abort);
-
-    s->dma_mr = MEMORY_REGION(obj);
+    s->dma_mr = MEMORY_REGION(object_property_get_link(OBJECT(dev), "dma-mr", errp));
+    assert_nonnull(s->dma_mr);
     address_space_init(&s->dma_as, s->dma_mr, TYPE_APPLE_AES);
-
-    qemu_cond_init(&s->thread_cond);
-    qemu_mutex_init(&s->queue_mutex);
 }
 
 static void apple_aes_unrealize(DeviceState* dev)
@@ -626,41 +617,9 @@ static void apple_aes_unrealize(DeviceState* dev)
     qemu_mutex_destroy(&s->queue_mutex);
 }
 
-SysBusDevice* apple_aes_create(AppleDTNode* node, uint32_t board_id)
-{
-    DeviceState*   dev;
-    AppleAESState* s;
-    SysBusDevice*  sbd;
-    AppleDTProp*   prop;
-    uint64_t*      reg;
-
-    dev = qdev_new(TYPE_APPLE_AES);
-    s   = APPLE_AES(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    s->board_id = board_id;
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    memory_region_init_io(&s->iomems[0], OBJECT(dev), &aes_reg_ops, s, TYPE_APPLE_AES ".mmio", reg[1]);
-
-    sysbus_init_mmio(sbd, &s->iomems[0]);
-
-    // also called PKA_SECU, but with size 0x8000 instead of 0x4000
-    memory_region_init_io(&s->iomems[1], OBJECT(dev), &aes_security_reg_ops, s, TYPE_APPLE_AES ".security.mmio",
-                          reg[3]);
-    sysbus_init_mmio(sbd, &s->iomems[1]);
-
-    s->last_level = 0;
-    sysbus_init_irq(sbd, &s->irq);
-
-    QTAILQ_INIT(&s->queue);
-
-    return sbd;
-}
+static const Property apple_aes_props[] = {
+    DEFINE_PROP_UINT32("board-id", AppleAESState, board_id, 0),
+};
 
 static void apple_aes_class_init(ObjectClass* klass, const void* data)
 {
@@ -674,6 +633,29 @@ static void apple_aes_class_init(ObjectClass* klass, const void* data)
     dc->unrealize = apple_aes_unrealize;
     dc->desc      = "Apple AES Accelerator";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    device_class_set_props(dc, apple_aes_props);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleAESState, apple_aes, APPLE_AES, SYS_BUS_DEVICE)
+static void apple_aes_init(Object* obj)
+{
+    AppleAESState* s   = APPLE_AES(obj);
+    SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
+
+    memory_region_init_io(&s->iomems[0], obj, &aes_reg_ops, s, TYPE_APPLE_AES ".mmio", 0x4000);
+
+    sysbus_init_mmio(sbd, &s->iomems[0]);
+
+    // also called PKA_SECU, but with size 0x8000 instead of 0x4000
+    memory_region_init_io(&s->iomems[1], obj, &aes_security_reg_ops, s, TYPE_APPLE_AES ".security.mmio", 0x4000);
+    sysbus_init_mmio(sbd, &s->iomems[1]);
+
+    sysbus_init_irq(sbd, &s->irq);
+
+    qemu_cond_init(&s->thread_cond);
+    qemu_mutex_init(&s->queue_mutex);
+
+    s->last_level = 0;
+    QTAILQ_INIT(&s->queue);
+}
+
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleAESState, apple_aes, APPLE_AES, SYS_BUS_DEVICE)

@@ -18,13 +18,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/gpio/apple_gpio.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 
 #if 0
     #define DPRINTF(fmt, ...) fprintf(stderr, fmt "\n", __VA_ARGS__)
@@ -151,8 +150,8 @@ static void apple_gpio_update_pincfg(AppleGPIOState* s, int pin, uint32_t value)
 static void apple_gpio_set(void* opaque, int pin, int level)
 {
     AppleGPIOState* s = opaque;
-    int             grp;
-    int             irqgrp = -1;
+    uint32_t        grp;
+    uint32_t        irqgrp = -1;
 
     if (pin >= s->pin_count) { return; }
 
@@ -340,29 +339,22 @@ static const MemoryRegionOps gpio_reg_ops = {
     .valid.unaligned       = false,
 };
 
-DeviceState* apple_gpio_new(const char* name, uint64_t mmio_size, uint32_t pin_count, uint32_t irq_group_count)
+static void apple_gpio_realize(DeviceState* dev, Error** errp)
 {
-    int             i;
-    DeviceState*    dev;
+    uint32_t        i;
     SysBusDevice*   sbd;
     AppleGPIOState* s;
 
-    assert_nonnull(name);
-    assert_cmpuint(pin_count, <, GPIO_MAX_PIN_NR);
-
-    dev = qdev_new(TYPE_APPLE_GPIO);
     sbd = SYS_BUS_DEVICE(dev);
     s   = APPLE_GPIO(dev);
 
-    dev->id            = g_strdup(name);
-    s->pin_count       = pin_count;
-    s->irq_group_count = irq_group_count;
-    s->int_config_len  = irq_group_count * pin_count;
-    s->in_len          = (s->pin_count + 31) / 32;
+    assert_cmpuint(s->pin_count, <, GPIO_MAX_PIN_NR);
 
-    s->iomem = g_new(MemoryRegion, 1);
-    memory_region_init_io(s->iomem, OBJECT(dev), &gpio_reg_ops, s, name, mmio_size);
-    sysbus_init_mmio(sbd, s->iomem);
+    s->int_config_len = s->irq_group_count * s->pin_count;
+    s->in_len         = (s->pin_count + 31) / 32;
+
+    memory_region_init_io(&s->iomem, OBJECT(dev), &gpio_reg_ops, s, TYPE_APPLE_GPIO ".regs", 0x4000);
+    sysbus_init_mmio(sbd, &s->iomem);
 
     qdev_init_gpio_in(dev, apple_gpio_set, s->pin_count);
 
@@ -376,25 +368,11 @@ DeviceState* apple_gpio_new(const char* name, uint64_t mmio_size, uint32_t pin_c
     s->int_config = g_new0(uint32_t, s->int_config_len);
     s->in_old     = g_new0(uint32_t, s->in_len);
     s->in         = g_new0(uint32_t, s->in_len);
-
-    return dev;
-}
-
-DeviceState* apple_gpio_from_node(AppleDTNode* node)
-{
-    AppleDTProp* reg;
-
-    reg = apple_dt_get_prop(node, "reg");
-    assert_nonnull(reg);
-
-    return apple_gpio_new(apple_dt_get_prop_str(node, "name", &error_fatal), ldq_le_p(reg->data + sizeof(uint64_t)),
-                          apple_dt_get_prop_u32(node, "#gpio-pins", &error_fatal),
-                          apple_dt_get_prop_u32(node, "#gpio-int-groups", &error_fatal));
 }
 
 static void apple_gpio_reset_enter(Object* obj, ResetType type)
 {
-    int             i;
+    uint32_t        i;
     AppleGPIOState* s = APPLE_GPIO(obj);
 
     for (i = 0; i < s->pin_count; i++) { s->gpio_cfg[i] = CFG_DISABLED; }
@@ -404,7 +382,10 @@ static void apple_gpio_reset_enter(Object* obj, ResetType type)
     memset(s->in, 0, sizeof(*s->in_old) * s->in_len);
 }
 
-static void apple_gpio_realize(DeviceState* dev, Error** errp) { }
+static const Property apple_gpio_properties[] = {
+    DEFINE_PROP_UINT32("pin-count", AppleGPIOState, pin_count, 0),
+    DEFINE_PROP_UINT32("irq-group-count", AppleGPIOState, irq_group_count, 0),
+};
 
 static void apple_gpio_class_init(ObjectClass* klass, const void* data)
 {
@@ -415,6 +396,26 @@ static void apple_gpio_class_init(ObjectClass* klass, const void* data)
 
     dc->desc    = "Apple General Purpose Input/Output Controller";
     dc->realize = apple_gpio_realize;
+    device_class_set_props(dc, apple_gpio_properties);
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleGPIOState, apple_gpio, APPLE_GPIO, SYS_BUS_DEVICE)
+
+DeviceState* apple_gpio_create(hwaddr addr, uint32_t pin_count, uint32_t irq_group_count, DeviceState* intc,
+                               uint32_t irq)
+{
+    DeviceState*  dev;
+    SysBusDevice* sbd;
+    uint32_t      i;
+
+    dev = qdev_new(TYPE_APPLE_GPIO);
+    sbd = SYS_BUS_DEVICE(dev);
+
+    qdev_prop_set_uint32(dev, "pin-count", pin_count);
+    qdev_prop_set_uint32(dev, "irq-group-count", irq_group_count);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, addr);
+    for (i = 0; i < irq_group_count; ++i) { sysbus_connect_irq(sbd, i, qdev_get_gpio_in(intc, irq + i)); }
+
+    return dev;
+}

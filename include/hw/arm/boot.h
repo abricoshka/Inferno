@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "exec/vaddr.h"
+#include "crypto/hash.h"
 #include "hw/arm/dt.h"
 
 #define LC_SYMTAB              (0x2)
@@ -442,7 +443,7 @@ struct AppleNvram;
 
 void apple_boot_setup_boot_nonce(struct AppleNvram* nvram, AppleBootInfo* info);
 
-void apple_boot_compute_ap_nonce(AppleDTNode* root, uint64_t generator, uint8_t** nonce, size_t* nonce_len);
+void apple_boot_compute_ap_nonce(QCryptoHashAlgo alg, uint64_t generator, uint8_t** nonce, size_t* nonce_len);
 
 void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot);
 

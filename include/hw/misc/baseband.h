@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/pci-host/apcie.h"
 #include "hw/pci/pci.h"
 #include "hw/sysbus.h"
@@ -27,4 +27,5 @@
 #define BASEBAND_GPIO_COREDUMP      "baseband-gpio-coredump"
 #define BASEBAND_GPIO_RESET_DET_OUT "baseband-gpio-reset_det-out"
 
-SysBusDevice* apple_baseband_create(AppleDTNode* node, PCIBus* pci_bus, ApplePCIEPort* port);
+#define TYPE_APPLE_BASEBAND "apple-baseband"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleBasebandState, APPLE_BASEBAND)

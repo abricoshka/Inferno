@@ -27,8 +27,6 @@
 
 // #define DEBUG_APPLE_I2C
 
-#define MMIO_SIZE (0x10000)
-
 #define REG_MTXFIFO 0x00
 #define REG_MRXFIFO 0x04
 #define REG_MCNT    0x08
@@ -268,27 +266,21 @@ static void apple_i2c_reset_exit(Object* obj, ResetType type)
     qemu_set_irq(s->scl, 1);
 }
 
-SysBusDevice* apple_i2c_create(const char* name)
+static void apple_i2c_init(Object* obj)
 {
-    DeviceState*   dev          = qdev_new(TYPE_APPLE_I2C);
-    SysBusDevice*  sbd          = SYS_BUS_DEVICE(dev);
-    AppleI2CState* s            = APPLE_I2C(dev);
-    char           bus_name[32] = {0};
+    SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
+    AppleI2CState* s   = APPLE_I2C(obj);
 
-    dev->id = g_strdup(name);
-    snprintf(bus_name, sizeof(bus_name), "%s.bus", name);
-    s->bus = i2c_init_bus(dev, bus_name);
-    memory_region_init_io(&s->iomem, OBJECT(dev), &i2c_reg_ops, s, dev->id, MMIO_SIZE);
+    s->bus = i2c_init_bus(DEVICE(obj), "i2c");
+    memory_region_init_io(&s->iomem, obj, &i2c_reg_ops, s, TYPE_APPLE_I2C ".regs", APPLE_I2C_MMIO_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
-    qdev_init_gpio_out_named(DEVICE(dev), &s->sda, APPLE_I2C_SDA, 1);
-    qdev_init_gpio_out_named(DEVICE(dev), &s->scl, APPLE_I2C_SCL, 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->sda, APPLE_I2C_SDA, 1);
+    qdev_init_gpio_out_named(DEVICE(obj), &s->scl, APPLE_I2C_SCL, 1);
 
     s->last_irq = 0;
     fifo8_create(&s->rx_fifo, 0x100);
-
-    return sbd;
 }
 
 static void apple_i2c_class_init(ObjectClass* klass, const void* data)
@@ -303,4 +295,7 @@ static void apple_i2c_class_init(ObjectClass* klass, const void* data)
     dc->desc = "Apple I2C Controller";
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleI2CState, apple_i2c, APPLE_I2C, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleI2CState, apple_i2c, APPLE_I2C, SYS_BUS_DEVICE)
+
+AppleI2CState* apple_i2c_create(hwaddr addr, qemu_irq irq)
+{ return APPLE_I2C(sysbus_create_simple(TYPE_APPLE_I2C, addr, irq)); }

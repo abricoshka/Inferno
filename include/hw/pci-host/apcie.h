@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/pci/pcie_host.h"
 #include "hw/pci/pcie_port.h"
 #include "hw/sysbus.h"
@@ -149,14 +149,15 @@ struct ApplePCIEState
     SysBusDevice parent_obj;
 
     /*< public >*/
-    AppleDTNode* node;
-
     ApplePCIEHost* host;
     ApplePCIEPort* ports[APCIE_MAX_PORTS];
     uint32_t       chip_id;
     uint32_t       msi_vector_offset;
+    /* A port with link speed 0 is absent and stays powered off. */
+    uint32_t      port_link_speed[APCIE_MAX_PORTS];
+    bool          port_manual_enable[APCIE_MAX_PORTS];
+    MemoryRegion* port_dma_mr[APCIE_MAX_PORTS];
 };
 
-void          port_devices_set_power(ApplePCIEPort* port, bool power);
-void          apple_pcie_port_temp_lower_msi_irq(ApplePCIEPort* port, int msi_intr_index);
-SysBusDevice* apple_pcie_from_node(AppleDTNode* node, uint32_t chip_id);
+void port_devices_set_power(ApplePCIEPort* port, bool power);
+void apple_pcie_port_temp_lower_msi_irq(ApplePCIEPort* port, int msi_intr_index);

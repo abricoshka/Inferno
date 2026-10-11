@@ -28,7 +28,7 @@
 #define TYPE_APPLE_I2C "apple-i2c"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleI2CState, APPLE_I2C)
 
-#define APPLE_I2C_MMIO_SIZE (0x10000)
+#define APPLE_I2C_MMIO_SIZE (0x1000)
 #define APPLE_I2C_SDA       "i2c.sda"
 #define APPLE_I2C_SCL       "i2c.scl"
 
@@ -50,4 +50,4 @@ struct AppleI2CState
     bool         is_recv;
 };
 
-SysBusDevice* apple_i2c_create(const char* name);
+AppleI2CState* apple_i2c_create(hwaddr addr, qemu_irq irq);

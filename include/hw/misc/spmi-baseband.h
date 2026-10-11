@@ -1,6 +1,6 @@
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/spmi/spmi.h"
 #include "qom/object.h"
 
@@ -18,5 +18,4 @@ struct AppleSPMIBasebandState
     uint16_t addr;
 };
 
-void         apple_spmi_baseband_set_irq(AppleSPMIBasebandState* s, int value);
-DeviceState* apple_spmi_baseband_create(AppleDTNode* node);
+void apple_spmi_baseband_set_irq(AppleSPMIBasebandState* s, int value);

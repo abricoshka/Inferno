@@ -19,7 +19,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/qdev-properties.h"
 #include "hw/usb/apple_otg.h"
 #include "hw/usb/hcd-dwc2.h"
@@ -170,17 +169,11 @@ static const MemoryRegionOps widget_reg_ops = {
     .read  = widget_reg_read,
 };
 
-DeviceState* apple_otg_from_node(AppleDTNode* node)
+static void apple_otg_init(Object* obj)
 {
-    DeviceState*   dev;
-    SysBusDevice*  sbd;
-    AppleOTGState* s;
-    AppleDTNode*   child;
-    AppleDTProp*   prop;
-
-    dev = qdev_new(TYPE_APPLE_OTG);
-    sbd = SYS_BUS_DEVICE(dev);
-    s   = APPLE_OTG(dev);
+    DeviceState*   dev = DEVICE(obj);
+    SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
+    AppleOTGState* s   = APPLE_OTG(obj);
 
     object_property_add_link(OBJECT(dev), "host", TYPE_SYS_BUS_DEVICE, (Object**)&s->host,
                              qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
@@ -191,20 +184,13 @@ DeviceState* apple_otg_from_node(AppleDTNode* node)
     memory_region_init_io(&s->usbctl, OBJECT(dev), &usbctl_reg_ops, s, TYPE_APPLE_OTG ".usbctl", sizeof(s->usbctl_reg));
     sysbus_init_mmio(sbd, &s->usbctl);
 
-    child = apple_dt_get_node(node, "usb-device");
-    assert_nonnull(child);
-    prop = apple_dt_get_prop(child, "reg");
-    assert_nonnull(prop);
-
     object_initialize_child(OBJECT(dev), "dwc2", &s->dwc2, TYPE_DWC2_USB);
     memory_region_init_alias(&s->dwc2_mr, OBJECT(dev), TYPE_APPLE_OTG ".dwc2",
-                             sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->dwc2), 0), 0, ((uint64_t*)prop->data)[1]);
+                             sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->dwc2), 0), 0, 0x10000);
     sysbus_init_mmio(sbd, &s->dwc2_mr);
 
     memory_region_init_io(&s->widget, OBJECT(dev), &widget_reg_ops, s, TYPE_APPLE_OTG ".widget", sizeof(s->widget_reg));
     sysbus_init_mmio(sbd, &s->widget);
-
-    return dev;
 }
 
 static void apple_otg_class_init(ObjectClass* klass, const void* data)
@@ -214,4 +200,4 @@ static void apple_otg_class_init(ObjectClass* klass, const void* data)
     dc->desc        = "Apple Synopsys USB OTG Controller";
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleOTGState, apple_otg, APPLE_OTG, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleOTGState, apple_otg, APPLE_OTG, SYS_BUS_DEVICE)

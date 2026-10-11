@@ -19,23 +19,16 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/sysbus.h"
 #include "block/aio.h"
 #include "hw/display/apple_displaypipe_v4.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/registerfields.h"
-#include "qemu/cutils.h"
 #include "qemu/log.h"
-#include "qemu/units.h"
 #include "system/dma.h"
 #include "ui/console.h"
 #include "pixman.h"
-
-#ifdef CONFIG_PNG
-    #include <png.h>
-#else
-    #error "PNG support is required"
-#endif
 
 #if 0
     #define ADP_INFO(fmt, ...) fprintf(stderr, fmt "\n", ##__VA_ARGS__)
@@ -131,10 +124,6 @@ struct AppleDisplayPipeV4State
     MemoryRegion        up_regs;
     uint32_t            width;
     uint32_t            height;
-    MemoryRegion*       vram_mr;
-    uint64_t            vram_off;
-    uint64_t            vram_size;
-    uint64_t            fb_off;
     MemoryRegion*       dma_mr;
     AddressSpace        dma_as;
     qemu_irq            irqs[9];
@@ -153,7 +142,6 @@ struct AppleDisplayPipeV4State
     ADPV4BlendUnitState blend_unit;
     QemuConsole*        console;
     QEMUBH*             update_disp_image_bh;
-    QEMUTimer*          boot_splash_timer;
 };
 
 // clang-format off
@@ -655,143 +643,6 @@ static const GraphicHwOps adp_v4_ops = {
     .invalidate = adp_v4_invalidate,
 };
 
-static void* adp_v4_get_fb_ptr(AppleDisplayPipeV4State* adp)
-{ return memory_region_get_ram_ptr(adp->vram_mr) + adp->vram_off + adp->fb_off; }
-
-static void adp_v4_update_disp_image_ptr(AppleDisplayPipeV4State* adp)
-{
-    pixman_image_t* image;
-
-    image = pixman_image_create_bits(PIXMAN_a8r8g8b8, adp->width, adp->height, adp_v4_get_fb_ptr(adp),
-                                     adp->width * sizeof(uint32_t));
-
-    dpy_gfx_replace_surface(adp->console, qemu_create_displaysurface_pixman(image));
-    qemu_pixman_image_unref(image);
-}
-
-typedef struct
-{
-    AppleDisplayPipeV4State* adp;
-    uint32_t                 width;
-    uint32_t                 height;
-    pixman_transform_t       transform;
-    double                   dest_width;
-    int16_t                  dest_x;
-    int16_t                  dest_y;
-    pixman_image_t*          image;
-    pixman_image_t*          disp_image;
-} ADPV4DrawBootSplashContext;
-
-static void adp_v4_draw_boot_splash(void* opaque)
-{
-    ADPV4DrawBootSplashContext* ctx = opaque;
-
-    pixman_image_composite(PIXMAN_OP_SRC, ctx->image, NULL, ctx->disp_image, 0, 0, 0, 0, ctx->dest_x, ctx->dest_y,
-                           ctx->dest_width, ctx->dest_width);
-
-    dpy_gfx_update_full(ctx->adp->console);
-}
-
-static void adp_v4_draw_boot_splash_timer(void* opaque)
-{
-    ADPV4DrawBootSplashContext* ctx = opaque;
-
-    adp_v4_draw_boot_splash(ctx);
-
-    pixman_image_unref(ctx->image);
-    pixman_image_unref(ctx->disp_image);
-    timer_free(ctx->adp->boot_splash_timer);
-    ctx->adp->boot_splash_timer = NULL;
-    g_free(ctx);
-}
-
-// Please see `ui/icons/CKBrandingNotice.md`
-static void adp_v4_read_and_draw_boot_splash(AppleDisplayPipeV4State* adp)
-{
-    char*                       path;
-    FILE*                       fp;
-    uint8_t                     sig[8] = {0};
-    png_structp                 png_ptr;
-    png_infop                   info_ptr;
-    ADPV4DrawBootSplashContext* ctx;
-    uint32_t*                   data;
-    png_bytep*                  row_ptrs;
-    uint32_t                    disp_width;
-    uint32_t                    disp_height;
-
-    path = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno/bootsplash@2x.png");
-    assert_nonnull(path);
-    fp = fopen(path, "rb");
-    if (fp == NULL) {
-        error_setg(&error_abort, "Missing emulator branding: %s.", path);
-        return;
-    }
-    fread(sig, sizeof(sig), 1, fp);
-    if (png_sig_cmp(sig, 0, sizeof(sig)) != 0) {
-        error_setg(&error_abort, "Invalid emulator branding: %s.", path);
-        return;
-    }
-    g_free(path);
-    png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    assert_nonnull(png_ptr);
-    info_ptr = png_create_info_struct(png_ptr);
-    assert_nonnull(info_ptr);
-    png_init_io(png_ptr, fp);
-    png_set_sig_bytes(png_ptr, sizeof(sig));
-
-    png_read_info(png_ptr, info_ptr);
-
-    ctx         = g_new(ADPV4DrawBootSplashContext, 1);
-    ctx->width  = png_get_image_width(png_ptr, info_ptr);
-    ctx->height = png_get_image_height(png_ptr, info_ptr);
-    ctx->image =
-        pixman_image_create_bits(PIXMAN_a8b8g8r8, ctx->width, ctx->height, NULL, ctx->width * sizeof(uint32_t));
-    data = pixman_image_get_data(ctx->image);
-
-    png_read_update_info(png_ptr, info_ptr);
-
-    row_ptrs = g_new(png_bytep, ctx->height);
-    for (size_t y = 0; y < ctx->height; y++) { row_ptrs[y] = (png_bytep)(data + (y * ctx->width)); }
-
-    png_read_image(png_ptr, row_ptrs);
-
-    g_free(row_ptrs);
-    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
-    fclose(fp);
-
-    disp_width  = qemu_console_get_width(adp->console, 0);
-    disp_height = qemu_console_get_height(adp->console, 0);
-
-    ctx->adp        = adp;
-    ctx->dest_width = (double)disp_width / 1.5;
-    ctx->dest_x     = (disp_width / 2) - (ctx->dest_width / 2);
-    ctx->dest_y     = (disp_height / 2) - (ctx->dest_width / 2);
-    ctx->disp_image = pixman_image_ref(qemu_console_surface(adp->console)->image);
-
-    pixman_image_set_filter(ctx->image, PIXMAN_FILTER_BEST, NULL, 0);
-    pixman_transform_init_identity(&ctx->transform);
-    pixman_transform_scale(&ctx->transform, NULL, pixman_double_to_fixed((double)ctx->width / ctx->dest_width),
-                           pixman_double_to_fixed((double)ctx->height / ctx->dest_width));
-    pixman_image_set_transform(ctx->image, &ctx->transform);
-
-    pixman_rectangle16_t rect = {
-        .x      = 0,
-        .y      = 0,
-        .width  = disp_width,
-        .height = disp_height,
-    };
-    pixman_color_t color = QEMU_PIXMAN_COLOR_BLACK;
-
-    pixman_image_fill_rectangles(PIXMAN_OP_SRC, ctx->disp_image, &color, 1, &rect);
-
-    adp_v4_draw_boot_splash(ctx);
-
-    adp->boot_splash_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adp_v4_draw_boot_splash_timer, ctx);
-
-    // Workaround for `-v` removing the boot splash.
-    timer_mod(adp->boot_splash_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (NANOSECONDS_PER_SECOND / 2));
-}
-
 static void adp_v4_boot_display(AppleDisplayPipeV4State* adp);
 
 static void adp_v4_reset_hold(Object* obj, ResetType type)
@@ -809,44 +660,13 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
 
     adp_v4_update_irqs(adp);
 
-    adp_v4_update_disp_image_ptr(adp);
     adp->direct_scanout = true;
 
     for (i = 0; i < ARRAY_SIZE(adp->genpipe); ++i) { adp_v4_gp_reset(&adp->genpipe[i], i); }
     adp_v4_blend_reset(&adp->blend_unit);
 
-    adp_v4_read_and_draw_boot_splash(adp);
-
     if (adp->boot_fb_valid) { adp_v4_boot_display(adp); }
 }
-
-static void adp_v4_realize(DeviceState* dev, Error** errp)
-{
-    AppleDisplayPipeV4State* adp = APPLE_DISPLAY_PIPE_V4(dev);
-
-    adp->console     = graphic_console_init(dev, 0, &adp_v4_ops, adp);
-    adp->vsync_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adp_v4_vsync_tick, adp);
-}
-
-static const Property adp_v4_props[] = {
-    DEFINE_PROP_UINT32("width", AppleDisplayPipeV4State, width, 0),
-    DEFINE_PROP_UINT32("height", AppleDisplayPipeV4State, height, 0),
-};
-
-static void adp_v4_class_init(ObjectClass* klass, const void* data)
-{
-    ResettableClass* rc = RESETTABLE_CLASS(klass);
-    DeviceClass*     dc = DEVICE_CLASS(klass);
-
-    rc->phases.hold = adp_v4_reset_hold;
-
-    dc->desc = "Apple Display Pipe V4";
-    device_class_set_props(dc, adp_v4_props);
-    dc->realize = adp_v4_realize;
-    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
-}
-
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleDisplayPipeV4State, adp_v4, APPLE_DISPLAY_PIPE_V4, SYS_BUS_DEVICE)
 
 // TODO: handle source/dest position, etc.
 static bool adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_image_t* disp_image)
@@ -1024,66 +844,62 @@ static void adp_v4_update_disp_bh(void* opaque)
     adp_v4_update_irqs(adp);
 }
 
-// `display-timing-info`
-// h_active, h_back_porch, h_front_porch, h_sync_pulse, v_active, v_back_porch,
-// v_front_porch, v_sync_pulse
-// FIXME: Unhardcode.
-static const uint32_t adp_v4_timing_info[] = {828, 144, 1, 1, 1792, 1, 1, 1};
-
-SysBusDevice* adp_v4_from_node(AppleDTNode* node, MemoryRegion* dma_mr)
+static void adp_v4_init(Object* obj)
 {
-    DeviceState*             dev;
     SysBusDevice*            sbd;
     AppleDisplayPipeV4State* adp;
-    AppleDTProp*             prop;
-    uint64_t*                reg;
     int                      i;
 
-    assert_nonnull(node);
-    assert_nonnull(dma_mr);
-
-    dev = qdev_new(TYPE_APPLE_DISPLAY_PIPE_V4);
-    sbd = SYS_BUS_DEVICE(dev);
+    sbd = SYS_BUS_DEVICE(obj);
     adp = APPLE_DISPLAY_PIPE_V4(sbd);
 
     adp->update_disp_image_bh = aio_bh_new(qemu_get_aio_context(), adp_v4_update_disp_bh, adp);
 
-    apple_dt_set_prop_str(node, "display-target", "DisplayTarget5");
-    apple_dt_set_prop(node, "display-timing-info", sizeof(adp_v4_timing_info), adp_v4_timing_info);
-    apple_dt_set_prop_u32(node, "bics-param-set", 0xD);
-    apple_dt_set_prop_u32(node, "dot-pitch", 326);
-    apple_dt_set_prop_null(node, "function-brightness_update");
-
-    adp->dma_mr = dma_mr;
-    object_property_add_const_link(OBJECT(sbd), "dma_mr", OBJECT(adp->dma_mr));
-    address_space_init(&adp->dma_as, adp->dma_mr, "disp0.dma");
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg = (uint64_t*)prop->data;
-    memory_region_init_io(&adp->up_regs, OBJECT(sbd), &adp_v4_reg_ops, sbd, "up.regs", reg[1]);
+    memory_region_init_io(&adp->up_regs, OBJECT(sbd), &adp_v4_reg_ops, sbd, TYPE_APPLE_DISPLAY_PIPE_V4 ".regs",
+                          0x2FC000);
     memory_region_enable_lockless_io(&adp->up_regs);
     sysbus_init_mmio(sbd, &adp->up_regs);
-    object_property_add_const_link(OBJECT(sbd), "up.regs", OBJECT(&adp->up_regs));
 
     qemu_mutex_init(&adp->genpipe[0].lock);
     qemu_mutex_init(&adp->genpipe[1].lock);
 
     for (i = 0; i < ARRAY_SIZE(adp->irqs); i++) { sysbus_init_irq(sbd, &adp->irqs[i]); }
-
-    return sbd;
 }
 
-void adp_v4_update_vram_mapping(AppleDisplayPipeV4State* adp, MemoryRegion* mr, hwaddr base, uint64_t size)
+static void adp_v4_realize(DeviceState* dev, Error** errp)
 {
-    adp->vram_mr   = mr;
-    adp->vram_off  = base;
-    adp->vram_size = size;
-    // Put framebuffer at the end of VRAM (the start is used for GP stuff), on a DART page boundary.
-    adp->fb_off = QEMU_ALIGN_DOWN(adp->vram_size - ((hwaddr)adp->height * adp->width * sizeof(uint32_t)), 16 * KiB);
+    AppleDisplayPipeV4State* adp = APPLE_DISPLAY_PIPE_V4(dev);
+
+    address_space_init(&adp->dma_as, MEMORY_REGION(object_property_get_link(OBJECT(dev), "dma-mr", errp)), "disp0.dma");
+    adp->console     = graphic_console_init(dev, 0, &adp_v4_ops, adp);
+    adp->vsync_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, adp_v4_vsync_tick, adp);
 }
 
-uint64_t adp_v4_get_fb_off(AppleDisplayPipeV4State* adp) { return adp->fb_off; }
+static const Property adp_v4_props[] = {
+    DEFINE_PROP_UINT32("width", AppleDisplayPipeV4State, width, 0),
+    DEFINE_PROP_UINT32("height", AppleDisplayPipeV4State, height, 0),
+};
+
+static void adp_v4_class_init(ObjectClass* klass, const void* data)
+{
+    ResettableClass* rc = RESETTABLE_CLASS(klass);
+    DeviceClass*     dc = DEVICE_CLASS(klass);
+
+    rc->phases.hold = adp_v4_reset_hold;
+
+    dc->desc = "Apple Display Pipe V4";
+    device_class_set_props(dc, adp_v4_props);
+    dc->realize = adp_v4_realize;
+    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+}
+
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleDisplayPipeV4State, adp_v4, APPLE_DISPLAY_PIPE_V4, SYS_BUS_DEVICE)
+
+// `display-timing-info`
+// h_active, h_back_porch, h_front_porch, h_sync_pulse, v_active, v_back_porch,
+// v_front_porch, v_sync_pulse
+// FIXME: Unhardcode.
+static const uint32_t adp_v4_timing_info[] = {828, 144, 1, 1, 1792, 1, 1, 1};
 
 static void adp_v4_boot_display(AppleDisplayPipeV4State* adp)
 {

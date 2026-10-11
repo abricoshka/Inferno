@@ -22,6 +22,8 @@
 #include "hw/block/nvme_mmu.h"
 #include "hw/pci-host/apcie.h"
 #include "hw/pci/msi.h"
+#include "hw/qdev-properties.h"
+#include "qapi/error.h"
 
 #if 0
     #include "qemu/log.h"
@@ -167,22 +169,16 @@ static void apple_nvme_mmu_start(AppleNVMeMMUState* s)
     assert_true(pci_dev->bus_master_enable_region.enabled);
 }
 
-SysBusDevice* apple_nvme_mmu_from_node(AppleDTNode* node, PCIBus* pci_bus)
+static void apple_nvme_mmu_init(Object* obj)
 {
-    DeviceState*       dev;
-    AppleNVMeMMUState* s;
-    SysBusDevice*      sbd;
-    AppleDTProp*       prop;
-    uint64_t*          reg;
-    PCIDevice*         pci_dev;
+    DeviceState*       dev = DEVICE(obj);
+    AppleNVMeMMUState* s   = APPLE_NVME_MMU(obj);
+    SysBusDevice*      sbd = SYS_BUS_DEVICE(obj);
 
-    dev = qdev_new(TYPE_APPLE_NVME_MMU);
-    s   = APPLE_NVME_MMU(dev);
-    sbd = SYS_BUS_DEVICE(dev);
+    object_property_add_link(obj, "port", TYPE_APPLE_PCIE_PORT, (Object**)&s->port,
+                             qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
 
-    s->pci_bus = pci_bus;
-    pci_dev    = pci_new(-1, TYPE_NVME);
-    s->nvme    = NVME(pci_dev);
+    s->nvme = NVME(pci_new(-1, TYPE_NVME));
 
     object_property_set_str(OBJECT(s->nvme), "serial", "ChefKiss-NVMeMMU", &error_fatal);
     object_property_set_uint(OBJECT(s->nvme), "max_ioqpairs", 7, &error_fatal);
@@ -191,28 +187,25 @@ SysBusDevice* apple_nvme_mmu_from_node(AppleDTNode* node, PCIBus* pci_bus)
     object_property_set_uint(OBJECT(s->nvme), "physical_block_size", 4096, &error_fatal);
     object_property_add_child(OBJECT(dev), "nvme", OBJECT(s->nvme));
 
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
     sysbus_init_irq(sbd, &s->irq);
     qdev_init_gpio_in_named(dev, apple_nvme_mmu_set_irq, "interrupt_pci", 1);
     memory_region_init_io(&s->common, OBJECT(dev), &apple_nvme_mmu_common_reg_ops, s, TYPE_APPLE_NVME_MMU ".common-reg",
-                          reg[1]);
+                          sizeof(s->common_reg));
     sysbus_init_mmio(sbd, &s->common);
-
-    return sbd;
 }
 
 static void apple_nvme_mmu_realize(DeviceState* dev, Error** errp)
 {
-    AppleNVMeMMUState* s = APPLE_NVME_MMU(dev);
-    ApplePCIEPort*     port =
-        APPLE_PCIE_PORT(object_property_get_link(OBJECT(qdev_get_machine()), "pcie.bridge0", &error_fatal));
+    AppleNVMeMMUState* s       = APPLE_NVME_MMU(dev);
+    ApplePCIEPort*     port    = s->port;
+    PCIDevice*         pci_dev = PCI_DEVICE(s->nvme);
 
-    PCIDevice* pci_dev = PCI_DEVICE(s->nvme);
-    qdev_realize(DEVICE(s->nvme), BUS(s->pci_bus), &error_fatal);
+    if (port == NULL) {
+        error_setg(errp, "port is not set");
+        return;
+    }
+
+    qdev_realize(DEVICE(s->nvme), BUS(pci_bridge_get_sec_bus(PCI_BRIDGE(port))), &error_fatal);
     assert_true(pci_is_express(pci_dev));
     pcie_endpoint_cap_init(pci_dev, 0);
     pcie_cap_deverr_init(pci_dev);
@@ -265,4 +258,4 @@ static void apple_nvme_mmu_class_init(ObjectClass* klass, const void* data)
     dc->fw_name = "pci";
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleNVMeMMUState, apple_nvme_mmu, APPLE_NVME_MMU, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleNVMeMMUState, apple_nvme_mmu, APPLE_NVME_MMU, SYS_BUS_DEVICE)

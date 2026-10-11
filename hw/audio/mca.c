@@ -20,6 +20,8 @@
 #include "qemu/osdep.h"
 #include "audio/audio.h"
 #include "hw/audio/mca.h"
+#include "hw/qdev-properties.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/fifo32.h"
 #include "qemu/timer.h"
@@ -167,6 +169,8 @@ struct AppleMCAState
     uint32_t*            mclk_clusters;
     AppleSIODMAEndpoint* tx_ep;
     AppleSIODMAEndpoint* rx_ep;
+    uint32_t             tx_chan_id;
+    uint32_t             rx_chan_id;
     QEMUSoundCard        card;
     SWVoiceOut*          voice;
     QEMUTimer*           timer;
@@ -177,6 +181,13 @@ struct AppleMCAState
     uint32_t             ring_used;
 };
 
+static void apple_mca_realize(DeviceState* dev, Error** errp);
+
+static const Property apple_mca_properties[] = {
+    DEFINE_PROP_UINT32("tx-chan-id", AppleMCAState, tx_chan_id, 0),
+    DEFINE_PROP_UINT32("rx-chan-id", AppleMCAState, rx_chan_id, 0),
+};
+
 static void apple_mca_class_init(ObjectClass* klass, const void* data)
 {
     DeviceClass* dc;
@@ -185,11 +196,12 @@ static void apple_mca_class_init(ObjectClass* klass, const void* data)
 
     dc->desc           = "Apple Multi-Channel Audio";
     dc->user_creatable = false;
-    // dc->realize = apple_mca_realize;
+    dc->realize        = apple_mca_realize;
+    device_class_set_props(dc, apple_mca_properties);
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleMCAState, apple_mca, APPLE_MCA, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleMCAState, apple_mca, APPLE_MCA, SYS_BUS_DEVICE)
 
 static uint32_t apple_mca_dma_into_ring(AppleMCAState* s, uint32_t want)
 {
@@ -444,29 +456,20 @@ static void apple_mca_out_callback(void* opaque, int avail)
     }
 }
 
-SysBusDevice* apple_mca_create(AppleDTNode* node, AppleSIODMAEndpoint* tx_ep, AppleSIODMAEndpoint* rx_ep)
+static void apple_mca_init(Object* obj)
 {
-    DeviceState*   dev;
-    SysBusDevice*  sbd;
-    AppleMCAState* s;
-    AppleDTProp*   prop;
+    AppleMCAState* s   = APPLE_MCA(obj);
+    SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
     size_t         i;
 
-    dev = qdev_new(TYPE_APPLE_MCA);
-    sbd = SYS_BUS_DEVICE(dev);
-    s   = APPLE_MCA(sbd);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    s->sio_cluster_count = ldq_le_p(prop->data + sizeof(uint64_t)) / MCA_SIO_REG_STRIDE;
+    s->sio_cluster_count = 6;
     s->sio_clusters      = g_new0(AppleMCACluster, s->sio_cluster_count);
 
     memory_region_init_io(&s->mmio[APPLE_MCA_MMIO_SIO], OBJECT(s), &apple_mca_sio_ops, s, "sio",
                           s->sio_cluster_count * MCA_SIO_REG_STRIDE);
     sysbus_init_mmio(sbd, &s->mmio[APPLE_MCA_MMIO_SIO]);
 
-    s->dma_cluster_count = ldq_le_p(prop->data + sizeof(uint64_t) * 3) / MCA_DMA_REG_STRIDE;
+    s->dma_cluster_count = 12;
     s->dma_clusters      = g_new0(AppleMCADMA, s->dma_cluster_count);
 
     for (i = 0; i < s->dma_cluster_count; ++i) { fifo32_create(&s->dma_clusters[i].fifo, 0x40); }
@@ -475,17 +478,23 @@ SysBusDevice* apple_mca_create(AppleDTNode* node, AppleSIODMAEndpoint* tx_ep, Ap
                           s->dma_cluster_count * MCA_DMA_REG_STRIDE);
     sysbus_init_mmio(sbd, &s->mmio[APPLE_MCA_MMIO_DMA]);
 
-    s->mclk_cluster_count = ldq_le_p(prop->data + sizeof(uint64_t) * 5) / MCLK_CFG_REG_STRIDE;
+    s->mclk_cluster_count = 6;
     s->mclk_clusters      = g_new0(uint32_t, s->mclk_cluster_count);
 
     memory_region_init_io(&s->mmio[APPLE_MCA_MMIO_MCLK_CFG], OBJECT(s), &apple_mca_mclk_ops, s, "mclk",
                           s->mclk_cluster_count * MCLK_CFG_REG_STRIDE);
     sysbus_init_mmio(sbd, &s->mmio[APPLE_MCA_MMIO_MCLK_CFG]);
 
-    s->tx_ep = tx_ep;
-    s->rx_ep = rx_ep;
-
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, apple_mca_serialise, s);
+}
+
+static void apple_mca_realize(DeviceState* dev, Error** errp)
+{
+    AppleMCAState* s   = APPLE_MCA(dev);
+    AppleSIO*      sio = APPLE_SIO(object_property_get_link(OBJECT(dev), "sio", &error_abort));
+
+    s->tx_ep = apple_sio_get_endpoint(sio, s->tx_chan_id);
+    s->rx_ep = apple_sio_get_endpoint(sio, s->rx_chan_id);
 
     if (AUD_register_card("mca", &s->card, NULL)) {
         audsettings settings = {0};
@@ -499,6 +508,4 @@ SysBusDevice* apple_mca_create(AppleDTNode* node, AppleSIODMAEndpoint* tx_ep, Ap
     else {
         error_report("Failed to create QEMU sound card for Multi-Channel Audio");
     }
-
-    return sbd;
 }

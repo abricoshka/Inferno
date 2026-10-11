@@ -20,7 +20,6 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/a9.h"
-#include "hw/arm/dt.h"
 #include "hw/or-irq.h"
 #include "hw/qdev-properties.h"
 #include "qapi/error.h"
@@ -155,28 +154,6 @@ AppleA9* apple_a9_create(const char* name, uint32_t cpu_id, uint32_t phys_id)
     memory_region_init(&acpu->memory, obj, "cpu-memory", UINT64_MAX);
     memory_region_init_alias(&acpu->sysmem, obj, "sysmem", get_system_memory(), 0, UINT64_MAX);
     memory_region_add_subregion_overlap(&acpu->memory, 0, &acpu->sysmem, -2);
-
-    return acpu;
-}
-
-AppleA9* apple_a9_from_node(AppleDTNode* node)
-{
-    AppleA9* acpu;
-
-    acpu = apple_a9_create(apple_dt_get_prop_str(node, "name", &error_fatal),
-                           apple_dt_get_prop_u32(node, "cpu-id", &error_fatal),
-                           apple_dt_get_prop_u32(node, "reg", &error_fatal));
-
-    apple_dt_del_prop_named(node, "reg-private");
-    apple_dt_del_prop_named(node, "cpu-uttdbg-reg");
-    if (acpu->cpu_id == 0) { apple_dt_set_prop_str(node, "state", "running"); }
-    apple_dt_set_prop_u64(node, "timebase-frequency", 24000000);
-    apple_dt_set_prop_u64(node, "fixed-frequency", 24000000);
-    apple_dt_set_prop_u64(node, "peripheral-frequency", 24000000);
-    apple_dt_set_prop_u64(node, "memory-frequency", 24000000);
-    apple_dt_set_prop_u64(node, "bus-frequency", 24000000);
-    apple_dt_set_prop_u64(node, "clock-frequency", 24000000);
-    apple_dt_del_prop_named(node, "coresight-reg");
 
     return acpu;
 }

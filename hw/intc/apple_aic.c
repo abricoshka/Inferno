@@ -19,14 +19,12 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/intc/apple_aic.h"
 #include "hw/irq.h"
-#include "hw/pci/msi.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
+#include "hw/qdev-properties.h"
 #include "trace.h"
 
 /*
@@ -48,7 +46,7 @@
  * num IRQ + (Y * 2) + 1 -> other_ipi (cpuX->cpuY)
  */
 
-// TODO: this is hardcoded for T8030
+// FIXME: this is hardcoded for T8030
 #define AIC_INT_COUNT (576)
 #define AIC_CPU_COUNT (6)
 #define AIC_VERSION   (2)
@@ -195,25 +193,25 @@ static void apple_aic_deliver(AppleAICState* s)
 {
     uint32_t intr      = 0;
     uint32_t potential = 0;
-    int      i;
+    uint32_t i;
 
-    for (i = 0; i < s->numCPU; i++) {
-        uint32_t pending  = qatomic_read(&s->cpus[i].pendingIPI);
+    for (i = 0; i < s->num_cpu; i++) {
+        uint32_t pending  = qatomic_read(&s->cpus[i].pending_ipi);
         uint32_t ipi_mask = qatomic_read(&s->cpus[i].ipi_mask);
 
         if ((pending & AIC_IPI_SELF) & ~ipi_mask) { intr |= (1 << i); }
-        if ((~ipi_mask & AIC_IPI_NORMAL) && (pending & ((1 << s->numCPU) - 1))) { intr |= (1 << i); }
+        if ((~ipi_mask & AIC_IPI_NORMAL) && (pending & ((1 << s->num_cpu) - 1))) { intr |= (1 << i); }
     }
 
     i = -1;
-    while ((i = find_next_bit32(s->eir_state, s->numIRQ, i + 1)) < s->numIRQ) {
+    while ((i = find_next_bit32(s->eir_state, s->num_irq, i + 1)) < s->num_irq) {
         uint32_t dest;
         if (!aic_test_bit(s->eir_mask, i) && (dest = qatomic_read(&s->eir_dest[i]))) {
             if (((intr & dest) == 0)) {
                 /* The interrupt doesn't have a cpu that can process it yet */
                 uint32_t cpu = ctz32(dest);
 
-                if (unlikely(cpu >= s->numCPU)) {
+                if (unlikely(cpu >= s->num_cpu)) {
                     qemu_log_mask(LOG_GUEST_ERROR, "AIC: vector %d has no reachable destination (0x%x)\n", i, dest);
                     continue;
                 }
@@ -222,11 +220,11 @@ static void apple_aic_deliver(AppleAICState* s)
                 potential |= dest;
             }
             else {
-                int k;
+                uint32_t k;
 
                 potential |= dest;
 
-                for (k = 0; k < s->numCPU; k++) {
+                for (k = 0; k < s->num_cpu; k++) {
                     if (((intr & (1 << k)) == 0) && (potential & (1 << k))) {
                         /*
                          * cpu K isn't in the interrupt list
@@ -239,7 +237,7 @@ static void apple_aic_deliver(AppleAICState* s)
             }
         }
     }
-    for (i = 0; i < s->numCPU; i++) {
+    for (i = 0; i < s->num_cpu; i++) {
         if (intr & (1 << i)) { qemu_irq_raise(s->cpus[i].irq); }
     }
 }
@@ -284,9 +282,9 @@ static void apple_aic_tmr_tick(void* opaque)
 
 static void apple_aic_update(AppleAICState* s)
 {
-    int i;
+    uint32_t i;
 
-    for (i = 0; i < s->numCPU; i++) { qatomic_or(&s->cpus[i].pendingIPI, qatomic_xchg(&s->cpus[i].deferredIPI, 0)); }
+    for (i = 0; i < s->num_cpu; i++) { qatomic_or(&s->cpus[i].pending_ipi, qatomic_xchg(&s->cpus[i].deferred_ipi, 0)); }
 
     apple_aic_deliver(s);
 }
@@ -316,7 +314,7 @@ static void apple_aic_tick(void* opaque)
 
 static void apple_aic_reset_state(AppleAICState* s)
 {
-    int i;
+    uint32_t i;
 
     /* iBoot leaves ACG enabled with all wait timeouts at 64us */
     qatomic_set(&s->global_cfg, AIC_GLBCFG_IEN | AIC_GLBCFG_SYNC_ACG | AIC_GLBCFG_EIR_ACG | AIC_GLBCFG_REG_ACG
@@ -325,20 +323,20 @@ static void apple_aic_reset_state(AppleAICState* s)
                                     | AIC_GLBCFG_DIWT(AIC_GLBCFG_WT_64MICRO));
 
     /* mask all IRQs */
-    for (i = 0; i < s->numEIR; i++) { qatomic_set(&s->eir_mask[i], 0xFFFFFFFF); }
+    for (i = 0; i < s->num_eir; i++) { qatomic_set(&s->eir_mask[i], 0xFFFFFFFF); }
 
     /* dest default to 0 */
-    for (i = 0; i < s->numIRQ; i++) { qatomic_set(&s->eir_dest[i], 0); }
+    for (i = 0; i < s->num_irq; i++) { qatomic_set(&s->eir_dest[i], 0); }
 
-    for (i = 0; i < s->numCPU; i++) {
+    for (i = 0; i < s->num_cpu; i++) {
         AppleAICCPU* o = &s->cpus[i];
 
         if (o->tmr != NULL) { timer_del(o->tmr); }
 
         /* mask all IPI */
         qatomic_set(&o->ipi_mask, AIC_IPI_NORMAL | AIC_IPI_SELF);
-        qatomic_set(&o->pendingIPI, 0);
-        qatomic_set(&o->deferredIPI, 0);
+        qatomic_set(&o->pending_ipi, 0);
+        qatomic_set(&o->deferred_ipi, 0);
         qatomic_set(&o->tmr_cfg, 0);
         qatomic_set(&o->tmr_isr, 0);
         qatomic_set(&o->tmr_state, 0);
@@ -382,7 +380,9 @@ static void apple_aic_write(void* opaque, hwaddr addr, uint64_t data, unsigned s
             uint32_t slot = AIC_SHARED_STAMP_SLOT(addr);
 
             if (AIC_SHARED_STAMP_OFF(addr) != 0) {
-                qemu_log_mask(LOG_UNIMP, "AIC: Write to unsupported shared timestamp reg 0x" HWADDR_FMT_plx "\n", addr);
+                qemu_log_mask(LOG_UNIMP,
+                              "AIC: Write to unsupported shared timestamp reg 0x" HWADDR_FMT_plx " value %" PRIx64 "\n",
+                              addr, data);
                 break;
             }
 
@@ -390,29 +390,29 @@ static void apple_aic_write(void* opaque, hwaddr addr, uint64_t data, unsigned s
             break;
         }
         case REG_AIC_IPI_SET: {
-            int i;
+            uint32_t i;
 
-            for (i = 0; i < s->numCPU; i++) {
+            for (i = 0; i < s->num_cpu; i++) {
                 if (val & (1 << i)) {
-                    set_bit32_atomic(o->cpu_id, &s->cpus[i].pendingIPI);
+                    set_bit32_atomic(o->cpu_id, &s->cpus[i].pending_ipi);
                     if (~qatomic_read(&s->cpus[i].ipi_mask) & AIC_IPI_NORMAL) { qemu_irq_raise(s->cpus[i].irq); }
                 }
             }
 
             if (val & AIC_IPI_SELF) {
-                qatomic_or(&o->pendingIPI, AIC_IPI_SELF);
+                qatomic_or(&o->pending_ipi, AIC_IPI_SELF);
                 if (~qatomic_read(&o->ipi_mask) & AIC_IPI_SELF) { qemu_irq_raise(o->irq); }
             }
             break;
         }
         case REG_AIC_IPI_CLR: {
-            int i;
+            uint32_t i;
 
-            for (i = 0; i < s->numCPU; i++) {
-                if (val & (1 << i)) { clear_bit32_atomic(o->cpu_id, &s->cpus[i].pendingIPI); }
+            for (i = 0; i < s->num_cpu; i++) {
+                if (val & (1 << i)) { clear_bit32_atomic(o->cpu_id, &s->cpus[i].pending_ipi); }
             }
 
-            if (val & AIC_IPI_SELF) { qatomic_and(&o->pendingIPI, ~AIC_IPI_SELF); }
+            if (val & AIC_IPI_SELF) { qatomic_and(&o->pending_ipi, ~AIC_IPI_SELF); }
             break;
         }
         case REG_AIC_IPI_MASK_SET: qatomic_or(&o->ipi_mask, val & (AIC_IPI_NORMAL | AIC_IPI_SELF)); break;
@@ -421,54 +421,54 @@ static void apple_aic_write(void* opaque, hwaddr addr, uint64_t data, unsigned s
             apple_aic_deliver(s);
             break;
         case REG_AIC_IPI_DEFER_SET: {
-            int i;
+            uint32_t i;
 
-            for (i = 0; i < s->numCPU; i++) {
-                if (val & (1 << i)) { set_bit32_atomic(o->cpu_id, &s->cpus[i].deferredIPI); }
+            for (i = 0; i < s->num_cpu; i++) {
+                if (val & (1 << i)) { set_bit32_atomic(o->cpu_id, &s->cpus[i].deferred_ipi); }
             }
 
-            if (val & AIC_IPI_SELF) { qatomic_or(&o->deferredIPI, AIC_IPI_SELF); }
+            if (val & AIC_IPI_SELF) { qatomic_or(&o->deferred_ipi, AIC_IPI_SELF); }
             break;
         }
         case REG_AIC_IPI_DEFER_CLR: {
-            int i;
+            uint32_t i;
 
-            for (i = 0; i < s->numCPU; i++) {
-                if (val & (1 << i)) { clear_bit32_atomic(o->cpu_id, &s->cpus[i].deferredIPI); }
+            for (i = 0; i < s->num_cpu; i++) {
+                if (val & (1 << i)) { clear_bit32_atomic(o->cpu_id, &s->cpus[i].deferred_ipi); }
             }
 
-            if (val & AIC_IPI_SELF) { qatomic_and(&o->deferredIPI, ~AIC_IPI_SELF); }
+            if (val & AIC_IPI_SELF) { qatomic_and(&o->deferred_ipi, ~AIC_IPI_SELF); }
             break;
         }
         case REG_AIC_EIR_DEST(0)... REG_AIC_EIR_DEST(AIC_INT_COUNT): {
             uint32_t vector = (addr - REG_AIC_EIR_DEST(0)) / 4;
-            if (unlikely(vector >= s->numIRQ)) { break; }
+            if (unlikely(vector >= s->num_irq)) { break; }
             qatomic_set(&s->eir_dest[vector], val);
             break;
         }
         case REG_AIC_EIR_SW_SET(0)... REG_AIC_EIR_SW_SET(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_SW_SET(0)) / 4;
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
             qatomic_or(&s->eir_state[eir], val);
             apple_aic_deliver(s);
             break;
         }
         case REG_AIC_EIR_SW_CLR(0)... REG_AIC_EIR_SW_CLR(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_SW_CLR(0)) / 4;
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
             qatomic_and(&s->eir_state[eir], ~val);
             break;
         }
         case REG_AIC_EIR_MASK_SET(0)... REG_AIC_EIR_MASK_SET(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_MASK_SET(0)) / 4;
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
             qatomic_or(&s->eir_mask[eir], val);
             break;
         }
         case REG_AIC_EIR_MASK_CLR(0)... REG_AIC_EIR_MASK_CLR(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_MASK_CLR(0)) / 4;
 
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
 
             qatomic_and(&s->eir_mask[eir], ~val);
             apple_aic_deliver(s);
@@ -476,14 +476,14 @@ static void apple_aic_write(void* opaque, hwaddr addr, uint64_t data, unsigned s
         }
         case REG_AIC_WHOAMI_Pn(0)... REG_AIC_WHOAMI_Pn(AIC_CPU_COUNT) - 4: {
             uint32_t cpu = ((addr - 0x5000) / 0x80);
-            if (unlikely(cpu >= s->numCPU)) { break; }
+            if (unlikely(cpu >= s->num_cpu)) { break; }
             addr = addr - 0x5000 + 0x2000 - 0x80 * cpu;
             apple_aic_write(&s->cpus[cpu], addr, data, size);
             break;
         }
         default:
-            qemu_log_mask(LOG_UNIMP, "AIC: Write to unsupported reg 0x" HWADDR_FMT_plx " cpu %u: 0x%x\n", addr,
-                          o->cpu_id, val);
+            qemu_log_mask(LOG_UNIMP, "AIC: Write to unsupported reg 0x" HWADDR_FMT_plx " cpu %u: %" PRIx64 "\n", addr,
+                          o->cpu_id, data);
             break;
     }
 }
@@ -495,7 +495,7 @@ static uint64_t apple_aic_read(void* opaque, hwaddr addr, unsigned size)
 
     switch (addr) {
         case REG_AIC_REV          : return AIC_VERSION;
-        case REG_AIC_CAP0         : return (((uint64_t)s->numCPU - 1) << 16) | (s->numIRQ);
+        case REG_AIC_CAP0         : return (((uint64_t)s->num_cpu - 1) << 16) | (s->num_irq);
         case REG_AIC_GLB_CFG      : return qatomic_read(&s->global_cfg);
         case REG_AIC_PVT_STAMP_CFG: return qatomic_read(&s->pvt_stamp_cfg);
         case REG_AIC_PVT_STAMP_LO:
@@ -522,7 +522,7 @@ static uint64_t apple_aic_read(void* opaque, hwaddr addr, unsigned size)
         }
         case REG_AIC_WHOAMI: return o->cpu_id;
         case REG_AIC_IACK  : {
-            int i;
+            uint32_t i;
 
             qemu_irq_lower(o->irq);
 
@@ -531,22 +531,22 @@ static uint64_t apple_aic_read(void* opaque, hwaddr addr, unsigned size)
                 return kAIC_INT_TMR | kAIC_INT_PVT_TMR;
             }
 
-            if (qatomic_read(&o->pendingIPI) & AIC_IPI_SELF & ~qatomic_read(&o->ipi_mask)) {
-                qatomic_and(&o->pendingIPI, ~AIC_IPI_SELF);
+            if (qatomic_read(&o->pending_ipi) & AIC_IPI_SELF & ~qatomic_read(&o->ipi_mask)) {
+                qatomic_and(&o->pending_ipi, ~AIC_IPI_SELF);
                 qatomic_or(&o->ipi_mask, AIC_IPI_SELF);
                 return kAIC_INT_IPI | kAIC_INT_IPI_SELF;
             }
 
             if (~qatomic_read(&o->ipi_mask) & AIC_IPI_NORMAL) {
-                if (qatomic_read(&o->pendingIPI) & ((1 << s->numCPU) - 1)) {
-                    qatomic_and(&o->pendingIPI, ~((1 << s->numCPU) - 1));
+                if (qatomic_read(&o->pending_ipi) & ((1 << s->num_cpu) - 1)) {
+                    qatomic_and(&o->pending_ipi, ~((1 << s->num_cpu) - 1));
                     qatomic_or(&o->ipi_mask, AIC_IPI_NORMAL);
                     return kAIC_INT_IPI | kAIC_INT_IPI_NORM;
                 }
             }
 
             i = -1;
-            while ((i = find_next_bit32(s->eir_state, s->numIRQ, i + 1)) < s->numIRQ) {
+            while ((i = find_next_bit32(s->eir_state, s->num_irq, i + 1)) < s->num_irq) {
                 if (!(qatomic_read(&s->eir_dest[i]) & (1 << o->cpu_id))) { continue; }
                 if (test_and_set_bit32_acquire(i, s->eir_mask)) { continue; }
                 return kAIC_INT_EXT | AIC_INT_EXTID(i);
@@ -558,47 +558,40 @@ static uint64_t apple_aic_read(void* opaque, hwaddr addr, unsigned size)
         case REG_AIC_EIR_DEST(0)... REG_AIC_EIR_DEST(AIC_INT_COUNT): {
             uint32_t vector = (addr - REG_AIC_EIR_DEST(0)) / 4;
 
-            if (unlikely(vector >= s->numIRQ)) { break; }
+            if (unlikely(vector >= s->num_irq)) { break; }
 
             return qatomic_read(&s->eir_dest[vector]);
         }
         case REG_AIC_EIR_MASK_SET(0)... REG_AIC_EIR_MASK_SET(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_MASK_SET(0)) / 4;
 
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
 
             return qatomic_read(&s->eir_mask[eir]);
         }
         case REG_AIC_EIR_MASK_CLR(0)... REG_AIC_EIR_MASK_CLR(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_MASK_CLR(0)) / 4;
 
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
 
             return qatomic_read(&s->eir_mask[eir]);
         }
         case REG_AIC_EIR_INT_RO(0)... REG_AIC_EIR_INT_RO(kAIC_NUM_EIRS): {
             uint32_t eir = (addr - REG_AIC_EIR_INT_RO(0)) / 4;
 
-            if (unlikely(eir >= s->numEIR)) { break; }
+            if (unlikely(eir >= s->num_eir)) { break; }
             return qatomic_read(&s->eir_state[eir]);
         }
         case REG_AIC_WHOAMI_Pn(0)... REG_AIC_WHOAMI_Pn(AIC_CPU_COUNT) - 4: {
             uint32_t cpu = ((addr - 0x5000) / 0x80);
 
-            if (unlikely(cpu >= s->numCPU)) { break; }
+            if (unlikely(cpu >= s->num_cpu)) { break; }
 
             addr = addr - 0x5000 + 0x2000 - 0x80 * cpu;
             return apple_aic_read(&s->cpus[cpu], addr, size);
         }
         default:
-            if (addr == s->time_base + 0x20) { return apple_aic_emulate_timer() & 0xFFFFFFFF; }
-            else if (addr == s->time_base + 0x28) {
-                return (apple_aic_emulate_timer() >> 32) & 0xFFFFFFFF;
-            }
-            else {
-                qemu_log_mask(LOG_UNIMP, "AIC: Read from unsupported reg 0x" HWADDR_FMT_plx " cpu: %u\n", addr,
-                              o->cpu_id);
-            }
+            qemu_log_mask(LOG_UNIMP, "AIC: Read from unsupported reg 0x" HWADDR_FMT_plx " cpu: %u\n", addr, o->cpu_id);
             break;
     }
     return -1;
@@ -615,33 +608,78 @@ static const MemoryRegionOps apple_aic_ops = {
     .valid.unaligned       = false,
 };
 
+static uint64_t apple_aic_timebase_read(void* opaque, hwaddr addr, unsigned size)
+{
+    AppleAICCPU* o = opaque;
+
+    // FIXME: Low and high bits here will differ due to separated call per read!!!
+    switch (addr) {
+        case 0x20: return extract64(apple_aic_emulate_timer(), 0, 32);
+        case 0x28: return extract64(apple_aic_emulate_timer(), 32, 32);
+        default:
+            qemu_log_mask(LOG_UNIMP, "AIC Timebase: Read from unsupported reg 0x" HWADDR_FMT_plx " cpu: %u\n", addr,
+                          o->cpu_id);
+            return -1;
+    }
+}
+
+static void apple_aic_timebase_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
+{
+    AppleAICCPU* o = opaque;
+
+    switch (addr) {
+        default:
+            qemu_log_mask(LOG_UNIMP,
+                          "AIC Timebase: Write to unsupported reg 0x" HWADDR_FMT_plx " cpu: %u value %" PRIx64 "\n",
+                          addr, o->cpu_id, data);
+            break;
+    }
+}
+
+static const MemoryRegionOps apple_aic_timebase_ops = {
+    .read                  = apple_aic_timebase_read,
+    .write                 = apple_aic_timebase_write,
+    .endianness            = DEVICE_LITTLE_ENDIAN,
+    .impl.min_access_size  = 4,
+    .impl.max_access_size  = 4,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+    .valid.unaligned       = false,
+};
+
 static void apple_aic_realize(DeviceState* dev, struct Error** errp)
 {
     AppleAICState* s   = APPLE_AIC(dev);
     SysBusDevice*  sbd = SYS_BUS_DEVICE(dev);
-    int            i;
+    uint32_t       i;
 
-    s->cpus = g_new0(AppleAICCPU, s->numCPU);
+    s->num_irq = s->num_eir * 32;
 
-    for (i = 0; i < s->numCPU; i++) {
+    s->cpus = g_new0(AppleAICCPU, s->num_cpu);
+
+    for (i = 0; i < s->num_cpu; i++) {
         AppleAICCPU* cpu = &s->cpus[i];
 
         cpu->aic    = s;
         cpu->cpu_id = i;
         cpu->tmr    = timer_new_ns(QEMU_CLOCK_VIRTUAL, apple_aic_tmr_tick, cpu);
-        memory_region_init_io(&cpu->iomem, OBJECT(dev), &apple_aic_ops, cpu, TYPE_APPLE_AIC, s->base_size);
+        memory_region_init_io(&cpu->iomem, OBJECT(dev), &apple_aic_ops, cpu, TYPE_APPLE_AIC, 0x8000);
         memory_region_enable_lockless_io(&cpu->iomem);
+        memory_region_init_io(&cpu->timebase_iomem, OBJECT(dev), &apple_aic_timebase_ops, cpu,
+                              TYPE_APPLE_AIC ".timebase", 0x1000);
+        memory_region_enable_lockless_io(&cpu->timebase_iomem);
         sysbus_init_mmio(sbd, &cpu->iomem);
+        sysbus_init_mmio(sbd, &cpu->timebase_iomem);
         sysbus_init_irq(sbd, &cpu->irq);
     }
 
-    qdev_init_gpio_in(dev, apple_aic_set_irq, s->numIRQ);
+    qdev_init_gpio_in(dev, apple_aic_set_irq, s->num_irq);
 
-    assert_cmpuint(s->numCPU, !=, 0);
+    assert_cmpuint(s->num_cpu, !=, 0);
 
-    s->eir_mask  = g_new0(uint32_t, s->numEIR);
-    s->eir_dest  = g_new0(uint32_t, s->numIRQ);
-    s->eir_state = g_new0(uint32_t, s->numEIR);
+    s->eir_mask  = g_new0(uint32_t, s->num_eir);
+    s->eir_dest  = g_new0(uint32_t, s->num_irq);
+    s->eir_state = g_new0(uint32_t, s->num_eir);
 
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, apple_aic_tick, dev);
     timer_mod_ns(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + apple_aic_diwt_ns(s));
@@ -650,46 +688,19 @@ static void apple_aic_realize(DeviceState* dev, struct Error** errp)
 static void apple_aic_unrealize(DeviceState* dev)
 {
     AppleAICState* s = APPLE_AIC(dev);
-    int            i;
+    uint32_t       i;
 
-    for (i = 0; i < s->numCPU; i++) {
+    for (i = 0; i < s->num_cpu; i++) {
         if (s->cpus[i].tmr != NULL) { timer_free(s->cpus[i].tmr); }
     }
 
     timer_free(s->timer);
 }
 
-SysBusDevice* apple_aic_create(uint32_t numCPU, AppleDTNode* node, AppleDTNode* timebase_node)
-{
-    DeviceState*   dev;
-    AppleAICState* s;
-    AppleDTProp*   prop;
-    hwaddr*        reg;
-
-    dev = qdev_new(TYPE_APPLE_AIC);
-    s   = APPLE_AIC(dev);
-
-    s->phandle = apple_dt_get_prop_u32(node, "AAPL,phandle", &error_fatal);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg          = (hwaddr*)prop->data;
-    s->base_size = reg[1];
-
-    prop = apple_dt_get_prop(node, "ipid-mask");
-    assert_nonnull(prop);
-    s->numEIR = prop->len / 4;
-    s->numIRQ = s->numEIR * 32;
-    s->numCPU = numCPU;
-
-    s->time_base =
-        apple_dt_get_prop_u64(timebase_node, "reg", &error_warn) - apple_dt_get_prop_u64(node, "reg", &error_warn);
-
-    apple_dt_set_prop_u32(node, "#main-cpus", numCPU);
-    apple_dt_set_prop_u32(node, "#shared-timestamps", 0);
-
-    return SYS_BUS_DEVICE(dev);
-}
+static const Property apple_aic_properties[] = {
+    DEFINE_PROP_UINT32("num-cpu", AppleAICState, num_cpu, 0),
+    DEFINE_PROP_UINT32("num-eir", AppleAICState, num_eir, 0),
+};
 
 static void apple_aic_class_init(ObjectClass* klass, const void* data)
 {
@@ -701,6 +712,7 @@ static void apple_aic_class_init(ObjectClass* klass, const void* data)
     dc->realize   = apple_aic_realize;
     dc->unrealize = apple_aic_unrealize;
     dc->desc      = "Apple Interrupt Controller";
+    device_class_set_props(dc, apple_aic_properties);
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleAICState, apple_aic, APPLE_AIC, SYS_BUS_DEVICE)

@@ -20,7 +20,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/spmi/spmi.h"
 #include "hw/sysbus.h"
 #include "qemu/fifo32.h"
@@ -51,5 +50,3 @@ struct AppleSPMIState
     uint32_t     data_filled;
     uint32_t     command;
 };
-
-SysBusDevice* apple_spmi_from_node(AppleDTNode* node);

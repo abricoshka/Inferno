@@ -21,7 +21,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/cpu/cluster.h"
 #include "qemu/queue.h"
 #include "system/memory.h"
@@ -137,7 +136,6 @@ typedef struct AppleA13Cluster
 
 AppleA13State* apple_a13_create(const char* name, uint32_t cpu_id, uint32_t phys_id, uint32_t cluster_id,
                                 uint16_t cluster_type);
-AppleA13State* apple_a13_from_node(AppleDTNode* node);
 bool           apple_a13_is_asleep(const AppleA13State* acpu);
 bool           apple_a13_is_off(const AppleA13State* acpu);
 void           apple_a13_set_on(AppleA13State* acpu);

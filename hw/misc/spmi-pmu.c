@@ -1,17 +1,12 @@
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/irq.h"
 #include "hw/misc/spmi-pmu.h"
 #include "hw/registerfields.h"
 #include "hw/spmi/spmi.h"
-#include "qapi/error.h"
-#include "qemu/module.h"
+#include "hw/qdev-properties.h"
 #include "qemu/timer.h"
 #include "system/runstate.h"
 #include "system/system.h"
-
-#define TYPE_APPLE_SPMI_PMU "apple-spmi-pmu"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleSPMIPMUState, APPLE_SPMI_PMU)
 
 #define RTC_TICK_FREQ (32768ULL)
 
@@ -174,47 +169,45 @@ static int apple_spmi_pmu_command(SPMISlave* slave, uint8_t opcode, uint16_t add
     }
 }
 
-DeviceState* apple_spmi_pmu_from_node(AppleDTNode* node)
+static void apple_spmi_pmu_realize(DeviceState* dev, Error** errp)
 {
-    DeviceState*       dev;
-    AppleSPMIPMUState* pmu;
-    AppleDTProp*       prop;
-
-    dev = qdev_new(TYPE_APPLE_SPMI_PMU);
-    pmu = APPLE_SPMI_PMU(dev);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    spmi_set_slave_sid(SPMI_SLAVE(dev), *(uint32_t*)prop->data);
-
-    pmu->reg_rtc          = apple_dt_get_prop_u32(node, "info-rtc", &error_fatal);
-    pmu->reg_alarm        = apple_dt_get_prop_u32(node, "info-rtc_alarm_offset", &error_fatal);
-    pmu->reg_alarm_ctrl   = apple_dt_get_prop_u32(node, "info-rtc_alarm_ctrl", &error_fatal);
-    pmu->reg_alarm_event  = apple_dt_get_prop_u32(node, "info-rtc_alarm_event", &error_fatal);
-    pmu->reg_rtc_irq_mask = apple_dt_get_prop_u32(node, "info-rtc_irq_mask_offset", &error_fatal);
-    pmu->reg_leg_scrpad   = apple_dt_get_prop_u32(node, "info-leg_scrpad", &error_fatal);
-    // TODO: Handle `info-clock_offset` if it exists.
+    AppleSPMIPMUState* pmu = APPLE_SPMI_PMU(dev);
 
     apple_spmi_pmu_set_tick_offset(pmu, apple_rtc_get_current_tick(pmu));
+}
+
+static void apple_spmi_pmu_init(Object* obj)
+{
+    AppleSPMIPMUState* pmu = APPLE_SPMI_PMU(obj);
 
     pmu->timer = timer_new_ns(rtc_clock, apple_spmi_pmu_alarm, pmu);
     qemu_system_wakeup_enable(QEMU_WAKEUP_REASON_RTC, true);
 
-    qdev_init_gpio_out(dev, &pmu->irq, 1);
-
-    return dev;
+    qdev_init_gpio_out(DEVICE(pmu), &pmu->irq, 1);
 }
+
+static const Property apple_spmi_pmu_properties[] = {
+    DEFINE_PROP_UINT32("reg-rtc", AppleSPMIPMUState, reg_rtc, 0),
+    DEFINE_PROP_UINT32("reg-alarm", AppleSPMIPMUState, reg_alarm, 0),
+    DEFINE_PROP_UINT32("reg-alarm-ctrl", AppleSPMIPMUState, reg_alarm_ctrl, 0),
+    DEFINE_PROP_UINT32("reg-alarm-event", AppleSPMIPMUState, reg_alarm_event, 0),
+    DEFINE_PROP_UINT32("reg-rtc-irq-mask", AppleSPMIPMUState, reg_rtc_irq_mask, 0),
+    DEFINE_PROP_UINT32("reg-leg-scrpad", AppleSPMIPMUState, reg_leg_scrpad, 0),
+    // TODO: `info-clock_offset`
+};
 
 static void apple_spmi_pmu_class_init(ObjectClass* klass, const void* data)
 {
     DeviceClass*    dc = DEVICE_CLASS(klass);
     SPMISlaveClass* sc = SPMI_SLAVE_CLASS(klass);
 
-    dc->desc = "Apple Dialog SPMI PMU";
+    dc->realize = apple_spmi_pmu_realize;
+    dc->desc    = "Apple Dialog SPMI PMU";
+    device_class_set_props(dc, apple_spmi_pmu_properties);
 
     sc->send    = apple_spmi_pmu_send;
     sc->recv    = apple_spmi_pmu_recv;
     sc->command = apple_spmi_pmu_command;
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSPMIPMUState, apple_spmi_pmu, APPLE_SPMI_PMU, SPMI_SLAVE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleSPMIPMUState, apple_spmi_pmu, APPLE_SPMI_PMU, SPMI_SLAVE)

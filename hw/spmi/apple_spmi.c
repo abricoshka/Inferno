@@ -475,34 +475,6 @@ static void apple_spmi_init(Object* obj)
     qdev_init_gpio_out_named(dev, &s->resp_irq, APPLE_SPMI_RESP_IRQ, 1);
 }
 
-SysBusDevice* apple_spmi_from_node(AppleDTNode* node)
-{
-    DeviceState*    dev;
-    AppleSPMIState* s;
-    SysBusDevice*   sbd;
-    uint32_t        phandle;
-
-    dev = qdev_new(TYPE_APPLE_SPMI);
-    s   = APPLE_SPMI(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    dev->id = apple_dt_get_prop_strdup(node, "name", &error_fatal);
-
-    s->reg_vers = apple_dt_get_prop_u32_or(node, "reg-vers", s->reg_vers, &error_fatal);
-
-    // XXX: There is a register overlapping issue (STS and ENAB) with reg v0
-    assert_cmpuint(s->reg_vers, !=, 0);
-
-    phandle = apple_dt_get_prop_u32(node, "AAPL,phandle", &error_fatal);
-
-    s->resp_intr_index = apple_dt_get_prop_u32(node, "interrupts", &error_warn);
-
-    // The first interrupt in list (response) should be self-wired
-    assert_cmpuint(apple_dt_get_prop_u32(node, "interrupt-parent", &error_warn), ==, phandle);
-
-    return sbd;
-}
-
 static void apple_spmi_class_init(ObjectClass* klass, const void* data)
 {
     ResettableClass* rc = RESETTABLE_CLASS(klass);

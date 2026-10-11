@@ -20,7 +20,6 @@
 
 #include "qemu/osdep.h"
 #include "crypto/hash.h"
-#include "hw/arm/dt.h"
 #include "hw/arm/sep/sim.h"
 #include "hw/misc/a7iop/core.h"
 #include "hw/misc/a7iop/mailbox/core.h"
@@ -946,32 +945,14 @@ static void apple_sep_sim_handle_messages(void* opaque)
     }
 }
 
-AppleSEPSim* apple_sep_sim_from_node(AppleDTNode* node, bool modern)
+static void apple_sep_sim_init(Object* obj)
 {
-    DeviceState* dev;
-    AppleA7IOP*  a7iop;
-    AppleSEPSim* s;
-    AppleDTProp* prop;
-    uint64_t*    reg;
-    AppleDTNode* child;
+    AppleA7IOP* a7iop = APPLE_A7IOP(obj);
 
-    dev   = qdev_new(TYPE_APPLE_SEP_SIM);
-    a7iop = APPLE_A7IOP(dev);
-    s     = APPLE_SEP_SIM(dev);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg = (uint64_t*)prop->data;
-
-    apple_a7iop_init(a7iop, "SEP", reg[1], modern ? APPLE_A7IOP_V4 : APPLE_A7IOP_V2, NULL,
-                     apple_sep_sim_handle_messages);
-
-    qemu_mutex_init(&s->lock);
-
-    child = apple_dt_get_node(node, "iop-sep-nub");
-    assert_nonnull(child);
-    apple_dt_del_node_named(child, "Lynx");
-    return s;
+    a7iop->role            = "SEP";
+    a7iop->mmio_size       = 0x10000;
+    a7iop->handle_messages = apple_sep_sim_handle_messages;
+    qemu_mutex_init(&APPLE_SEP_SIM(obj)->lock);
 }
 
 static void apple_sep_sim_realize(DeviceState* dev, Error** errp)
@@ -1062,4 +1043,4 @@ static void apple_sep_sim_class_init(ObjectClass* klass, const void* data)
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSEPSim, apple_sep_sim, APPLE_SEP_SIM, APPLE_A7IOP)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleSEPSim, apple_sep_sim, APPLE_SEP_SIM, APPLE_A7IOP)

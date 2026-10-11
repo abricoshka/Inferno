@@ -21,7 +21,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/misc/a7iop/base.h"
 #include "hw/sysbus.h"
 
@@ -211,8 +210,6 @@ struct SMCKeyData
     void*    data;
     QTAILQ_ENTRY(SMCKeyData) next;
 };
-
-SysBusDevice* apple_smc_create(AppleDTNode* node, AppleA7IOPVersion version, uint64_t sram_size);
 
 SMCKey*     apple_smc_get_key(AppleSMC* s, uint32_t key);
 SMCKeyData* apple_smc_get_key_data(AppleSMC* s, uint32_t key);

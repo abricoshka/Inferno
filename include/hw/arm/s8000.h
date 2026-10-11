@@ -41,10 +41,7 @@ typedef struct
 
 typedef struct
 {
-    MachineState parent;
-    hwaddr       armio_base;
-    hwaddr       armio_size;
-
+    MachineState    parent;
     unsigned long   dram_size;
     AppleA9*        cpus[A9_MAX_CPU];
     CPUClusterState cluster;

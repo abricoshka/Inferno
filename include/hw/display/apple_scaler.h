@@ -19,10 +19,7 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/sysbus.h"
 
 #define TYPE_APPLE_SCALER "apple-scaler"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleScalerState, APPLE_SCALER);
-
-SysBusDevice* apple_scaler_create(AppleDTNode* node, MemoryRegion* dma_mr);

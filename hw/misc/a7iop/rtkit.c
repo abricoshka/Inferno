@@ -384,32 +384,20 @@ static const AppleA7IOPOps apple_rtkit_iop_ops = {
     .wakeup = apple_rtkit_iop_wakeup,
 };
 
-void apple_rtkit_init(AppleRTKit* s, void* opaque, const char* role, uint64_t mmio_size, AppleA7IOPVersion version,
-                      const AppleRTKitOps* ops)
+static void apple_rtkit_init(Object* obj)
 {
-    AppleA7IOP* a7iop = &s->parent_obj;
+    AppleRTKit* s     = APPLE_RTKIT(obj);
+    AppleA7IOP* a7iop = APPLE_A7IOP(obj);
 
-    apple_a7iop_init(a7iop, role, mmio_size, version, &apple_rtkit_iop_ops, apple_rtkit_handle_messages_bh);
+    a7iop->ops             = &apple_rtkit_iop_ops;
+    a7iop->handle_messages = apple_rtkit_handle_messages_bh;
 
-    s->opaque = opaque ? opaque : s;
+    s->opaque = s;
     AppleRTKitEPTable_init(s->endpoints);
-    s->ops = ops;
     qemu_mutex_init(&s->lock);
 
     apple_rtkit_register_control_ep(s, EP_MANAGEMENT, s, apple_rtkit_mgmt_handle_msg);
     apple_rtkit_register_control_ep(s, EP_CRASHLOG, s, NULL);
-}
-
-AppleRTKit* apple_rtkit_new(void* opaque, const char* role, uint64_t mmio_size, AppleA7IOPVersion version,
-                            const AppleRTKitOps* ops)
-{
-    AppleRTKit* s;
-
-    s = APPLE_RTKIT(qdev_new(TYPE_APPLE_RTKIT));
-
-    apple_rtkit_init(s, opaque, role, mmio_size, version, ops);
-
-    return s;
 }
 
 static void apple_rtkit_reset_enter(Object* obj, ResetType type)
@@ -441,4 +429,4 @@ static void apple_rtkit_class_init(ObjectClass* klass, const void* data)
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleRTKit, apple_rtkit, APPLE_RTKIT, APPLE_A7IOP)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleRTKit, apple_rtkit, APPLE_RTKIT, APPLE_A7IOP)

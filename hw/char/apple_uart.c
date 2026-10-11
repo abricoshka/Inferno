@@ -25,7 +25,6 @@
 #include "qapi/error.h"
 #include "qemu/fifo8.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "qemu/timer.h"
 
 #include "hw/char/apple_uart.h"
@@ -134,9 +133,6 @@ typedef struct
     uint32_t sp, rp; /* store and retrieve pointers */
     uint32_t size;
 } AppleUartFIFO;
-
-#define TYPE_APPLE_UART "apple-uart"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleUartState, APPLE_UART)
 
 struct AppleUartState
 {
@@ -536,26 +532,6 @@ static void apple_uart_reset_enter(Object* obj, ResetType type)
     trace_apple_uart_rxsize(s->channel, s->rx_fifo_size);
 }
 
-DeviceState* apple_uart_create(hwaddr addr, int fifo_size, int channel, Chardev* chr, qemu_irq irq)
-{
-    DeviceState*  dev;
-    SysBusDevice* bus;
-
-    dev = qdev_new(TYPE_APPLE_UART);
-
-    qdev_prop_set_chr(dev, "chardev", chr);
-    qdev_prop_set_uint32(dev, "channel", channel);
-    qdev_prop_set_uint32(dev, "rx-size", fifo_size);
-    qdev_prop_set_uint32(dev, "tx-size", fifo_size);
-
-    bus = SYS_BUS_DEVICE(dev);
-    sysbus_realize_and_unref(bus, &error_fatal);
-    if (addr != (hwaddr)-1) { sysbus_mmio_map(bus, 0, addr); }
-    sysbus_connect_irq(bus, 0, irq);
-
-    return dev;
-}
-
 static void apple_uart_init(Object* obj)
 {
     SysBusDevice*   dev = SYS_BUS_DEVICE(obj);
@@ -623,3 +599,19 @@ static const TypeInfo apple_uart_info = {
 static void apple_uart_register(void) { type_register_static(&apple_uart_info); }
 
 type_init(apple_uart_register)
+
+DeviceState* apple_uart_create(hwaddr addr, qemu_irq irq, Chardev* chr)
+{
+    DeviceState*  dev;
+    SysBusDevice* sbd;
+
+    dev = qdev_new(TYPE_APPLE_UART);
+    sbd = SYS_BUS_DEVICE(dev);
+
+    qdev_prop_set_chr(dev, "chardev", chr);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, addr);
+    sysbus_connect_irq(sbd, 0, irq);
+
+    return dev;
+}

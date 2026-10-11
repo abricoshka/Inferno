@@ -20,7 +20,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/misc/a7iop/base.h"
 #include "hw/sysbus.h"
 
@@ -57,7 +56,6 @@ typedef struct
                                            uint32_t out_len);
 } AppleAOPEndpointDescription;
 
-SysBusDevice*     apple_aop_create(AppleDTNode* node, AppleA7IOPVersion version);
 AppleAOPEndpoint* apple_aop_ep_create(AppleAOP* s, void* opaque, const AppleAOPEndpointDescription* descr);
 /// NOTE: Must be used while state is locked.
 MemTxResult apple_aop_ep_send_report_locked(AppleAOPEndpoint* s, uint16_t packet_type, const void* payload,

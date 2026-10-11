@@ -105,40 +105,28 @@ static const MemoryRegionOps synopsys_mipi_dsim_swmpr_reg_ops = {
     .valid.unaligned       = false,
 };
 
-SysBusDevice* synopsys_mipi_dsim_create(AppleDTNode* node)
+static void synopsys_mipi_dsim_reset_enter(Object* obj, ResetType type)
 {
-    DeviceState*           dev;
-    SynopsysMIPIDSIMState* s;
-    SysBusDevice*          sbd;
-    AppleDTProp*           prop;
-    uint64_t*              reg;
-
-    dev = qdev_new(TYPE_SYNOPSYS_MIPI_DSIM);
-    s   = SYNOPSYS_MIPI_DSIM(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg = (uint64_t*)prop->data;
-    memory_region_init_io(&s->iomems[0], OBJECT(dev), &synopsys_mipi_dsim_reg_ops, s, TYPE_SYNOPSYS_MIPI_DSIM ".regs",
-                          reg[1]);
-    sysbus_init_mmio(sbd, &s->iomems[0]);
-    memory_region_init_io(&s->iomems[1], OBJECT(dev), &synopsys_mipi_dsim_swmpr_reg_ops, s,
-                          TYPE_SYNOPSYS_MIPI_DSIM ".swmpr_regs", reg[3]);
-    sysbus_init_mmio(sbd, &s->iomems[1]);
-
-    sysbus_init_irq(sbd, &s->irqs[0]);
-    sysbus_init_irq(sbd, &s->irqs[1]);
-
-    return sbd;
-}
-
-static void synopsys_mipi_dsim_reset_hold(Object* obj, ResetType type)
-{
-    SynopsysMIPIDSIMState* s = SYNOPSYS_MIPI_DSIM(obj);
+    SynopsysMIPIDSIMState* mipi = SYNOPSYS_MIPI_DSIM(obj);
 
     // Default to display powered on
-    s->power_up = REG_FIELD_DP32(0, CORE_PWR_UP, SHUTDOWNZ, 1);
+    mipi->power_up = REG_FIELD_DP32(0, CORE_PWR_UP, SHUTDOWNZ, 1);
+}
+
+static void synopsys_mipi_dsim_init(Object* obj)
+{
+    SynopsysMIPIDSIMState* mipi = SYNOPSYS_MIPI_DSIM(obj);
+    SysBusDevice*          sbd  = SYS_BUS_DEVICE(obj);
+
+    memory_region_init_io(&mipi->iomems[0], obj, &synopsys_mipi_dsim_reg_ops, mipi, TYPE_SYNOPSYS_MIPI_DSIM ".regs",
+                          0xC0000);
+    sysbus_init_mmio(sbd, &mipi->iomems[0]);
+    memory_region_init_io(&mipi->iomems[1], obj, &synopsys_mipi_dsim_swmpr_reg_ops, mipi,
+                          TYPE_SYNOPSYS_MIPI_DSIM ".swmpr_regs", 0x10000);
+    sysbus_init_mmio(sbd, &mipi->iomems[1]);
+
+    sysbus_init_irq(sbd, &mipi->irqs[0]);
+    sysbus_init_irq(sbd, &mipi->irqs[1]);
 }
 
 static void synopsys_mipi_dsim_class_init(ObjectClass* oc, const void* data)
@@ -149,11 +137,11 @@ static void synopsys_mipi_dsim_class_init(ObjectClass* oc, const void* data)
     rc = RESETTABLE_CLASS(oc);
     dc = DEVICE_CLASS(oc);
 
-    rc->phases.hold = synopsys_mipi_dsim_reset_hold;
+    rc->phases.enter = synopsys_mipi_dsim_reset_enter;
 
     dc->desc           = "Synopsys MIPI DSIM";
     dc->user_creatable = false;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(SynopsysMIPIDSIMState, synopsys_mipi_dsim, SYNOPSYS_MIPI_DSIM, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(SynopsysMIPIDSIMState, synopsys_mipi_dsim, SYNOPSYS_MIPI_DSIM, SYS_BUS_DEVICE)

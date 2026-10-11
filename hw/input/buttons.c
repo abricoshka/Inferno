@@ -2,6 +2,7 @@
  * Apple iPhone 11 Buttons
  *
  * Copyright (c) 2025-2026 Christian Inci (chris-pcguy).
+ * Copyright (c) 2025-2026 Visual Ehrmanntraut (VisualEhrmanntraut).
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -21,12 +22,10 @@
 #include "hw/input/buttons.h"
 #include "hw/misc/smc.h"
 #include "qapi/error.h"
+#include "hw/qdev-properties.h"
 #include "qemu/lockable.h"
 #include "system/runstate.h"
 #include "ui/input.h"
-
-#define TYPE_APPLE_BUTTONS "apple-buttons"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleButtonsState, APPLE_BUTTONS)
 
 struct AppleButtonsState
 {
@@ -35,19 +34,20 @@ struct AppleButtonsState
 
     /*< public >*/
     QemuMutex mutex;
+    AppleSMC* smc;
     uint16_t  states;
 };
 
 static void apple_buttons_handle_event(DeviceState* dev, QemuConsole* src, InputEvent* evt)
 {
-    AppleButtonsState* s   = APPLE_BUTTONS(dev);
-    InputKeyEvent*     key = evt->u.key.data;
+    AppleButtonsState* buttons = APPLE_BUTTONS(dev);
+    InputKeyEvent*     key     = evt->u.key.data;
     int                qcode;
     AppleSMCHIDButton  button;
 
-    QEMU_LOCK_GUARD(&s->mutex);
+    QEMU_LOCK_GUARD(&buttons->mutex);
 
-    AppleSMC* smc = APPLE_SMC_IOP(object_property_get_link(OBJECT(qdev_get_machine()), "smc", &error_fatal));
+    AppleSMC* smc = buttons->smc;
 
     qemu_system_wakeup_request(QEMU_WAKEUP_REASON_OTHER, NULL);
 
@@ -58,11 +58,11 @@ static void apple_buttons_handle_event(DeviceState* dev, QemuConsole* src, Input
         case Q_KEY_CODE_F2:
             if (key->down) {
                 button = SMC_HID_BUTTON_RINGER;
-                if (s->states & BIT32(button)) { s->states &= ~BIT32(button); }
+                if (buttons->states & BIT32(button)) { buttons->states &= ~BIT32(button); }
                 else {
-                    s->states |= BIT32(button);
+                    buttons->states |= BIT32(button);
                 }
-                apple_smc_send_hid_button(smc, button, (s->states & BIT32(button)) != 0);
+                apple_smc_send_hid_button(smc, button, (buttons->states & BIT32(button)) != 0);
             }
             return;
         case Q_KEY_CODE_F3 : button = SMC_HID_BUTTON_VOL_DOWN; break;
@@ -76,10 +76,10 @@ static void apple_buttons_handle_event(DeviceState* dev, QemuConsole* src, Input
         default            : return;
     }
 
-    if (((s->states & BIT32(button)) != 0) != key->down) {
-        if (key->down) { s->states |= BIT32(button); }
+    if (((buttons->states & BIT32(button)) != 0) != key->down) {
+        if (key->down) { buttons->states |= BIT32(button); }
         else {
-            s->states &= ~BIT32(button);
+            buttons->states &= ~BIT32(button);
         }
         apple_smc_send_hid_button(smc, button, key->down);
     }
@@ -100,30 +100,7 @@ BUTTON_READER(vol_down, VOL_DOWN);
 BUTTON_READER(hold, HOLD);
 BUTTON_READER(ringer, RINGER);
 
-SysBusDevice* apple_buttons_create(AppleDTNode* node)
-{
-    DeviceState*       dev;
-    AppleButtonsState* s;
-    SysBusDevice*      sbd;
-
-    dev = qdev_new(TYPE_APPLE_BUTTONS);
-    s   = APPLE_BUTTONS(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    AppleSMC* smc = APPLE_SMC_IOP(object_property_get_link(OBJECT(qdev_get_machine()), "smc", &error_fatal));
-    apple_smc_add_key_func(smc, 'bVUP', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, s, apple_buttons_smc_read_vol_up, NULL);
-    apple_smc_add_key_func(smc, 'bVDN', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, s, apple_buttons_smc_read_vol_down, NULL);
-    apple_smc_add_key_func(smc, 'bHLD', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, s, apple_buttons_smc_read_hold, NULL);
-    apple_smc_add_key_func(smc, 'bRIN', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, s, apple_buttons_smc_read_ringer, NULL);
-    bool powered_by_hold_btn = true;
-    apple_smc_add_key(smc, 'bPHD', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R, &powered_by_hold_btn);
-
-    qemu_mutex_init(&s->mutex);
-
-    return sbd;
-}
-
-static void apple_buttons_qdev_reset_hold(Object* obj, ResetType type)
+static void apple_buttons_reset_enter(Object* obj, ResetType type)
 {
     AppleButtonsState* s = APPLE_BUTTONS(obj);
     QEMU_LOCK_GUARD(&s->mutex);
@@ -138,33 +115,42 @@ static const QemuInputHandler apple_buttons_handler = {
 
 static void apple_buttons_realize(DeviceState* dev, Error** errp)
 {
-    QemuInputHandlerState* s = qemu_input_handler_register(dev, &apple_buttons_handler);
-    qemu_input_handler_activate(s);
+    AppleButtonsState* buttons = APPLE_BUTTONS(dev);
+    AppleSMC*          smc     = buttons->smc;
+    apple_smc_add_key_func(smc, 'bVUP', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, buttons, apple_buttons_smc_read_vol_up,
+                           NULL);
+    apple_smc_add_key_func(smc, 'bVDN', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, buttons, apple_buttons_smc_read_vol_down,
+                           NULL);
+    apple_smc_add_key_func(smc, 'bHLD', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, buttons, apple_buttons_smc_read_hold,
+                           NULL);
+    apple_smc_add_key_func(smc, 'bRIN', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_LE, buttons, apple_buttons_smc_read_ringer,
+                           NULL);
+    bool powered_by_hold_btn = true;
+    apple_smc_add_key(smc, 'bPHD', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R, &powered_by_hold_btn);
+
+    QemuInputHandlerState* input_handler = qemu_input_handler_register(dev, &apple_buttons_handler);
+    qemu_input_handler_activate(input_handler);
     qemu_system_wakeup_enable(QEMU_WAKEUP_REASON_OTHER, true);
 }
 
-static void apple_buttons_unrealize(DeviceState* dev) { }
+static void apple_buttons_init(Object* obj)
+{
+    AppleButtonsState* buttons = APPLE_BUTTONS(obj);
+    qemu_mutex_init(&buttons->mutex);
+    object_property_add_link(obj, "smc", TYPE_APPLE_SMC_IOP, (Object**)&buttons->smc,
+                             qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
+}
 
 static void apple_buttons_class_init(ObjectClass* klass, const void* data)
 {
     DeviceClass*     dc = DEVICE_CLASS(klass);
     ResettableClass* rc = RESETTABLE_CLASS(klass);
 
-    rc->phases.hold = apple_buttons_qdev_reset_hold;
+    rc->phases.enter = apple_buttons_reset_enter;
 
-    dc->realize   = apple_buttons_realize;
-    dc->unrealize = apple_buttons_unrealize;
-    dc->desc      = "Apple Buttons";
+    dc->realize = apple_buttons_realize;
+    dc->desc    = "Apple Buttons";
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }
 
-static const TypeInfo apple_buttons_types = {
-    .name   = TYPE_APPLE_BUTTONS,
-    .parent = TYPE_SYS_BUS_DEVICE,
-    OBJECT_TYPE_INSTANCE(AppleButtonsState),
-    .class_init = apple_buttons_class_init,
-};
-
-static void apple_buttons_init(void) { type_register_static(&apple_buttons_types); }
-
-type_init(apple_buttons_init);
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleButtonsState, apple_buttons, APPLE_BUTTONS, SYS_BUS_DEVICE);

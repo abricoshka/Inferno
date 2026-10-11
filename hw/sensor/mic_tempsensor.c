@@ -18,9 +18,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/i2c/i2c.h"
 #include "hw/sensor/mic_tempsensor.h"
 #include "hw/registerfields.h"
-#include "qapi/error.h"
+#include "hw/qdev-properties.h"
 
 // clang-format off
 REG8(ID0, 0)
@@ -45,8 +46,10 @@ struct AppleMicTempSensorState
     bool    receiving_addr;
     uint8_t addr;
     uint8_t cur_addr;
-    uint8_t id0;
-    uint8_t id1;
+    uint8_t product_id;
+    uint8_t vendor_id;
+    uint8_t revision;
+    uint8_t fab_id;
 };
 
 static uint8_t apple_mic_temp_sensor_rx(I2CSlave* s)
@@ -55,8 +58,13 @@ static uint8_t apple_mic_temp_sensor_rx(I2CSlave* s)
     uint8_t                  ret;
 
     switch (sensor->cur_addr) {
-        case R_ID0   : ret = sensor->id0; break;
-        case R_ID1   : ret = sensor->id1; break;
+        case R_ID0:
+            ret =
+                REG_FIELD_DP8(REG_FIELD_DP8(0, ID0, PRODUCT_ID, sensor->product_id), ID0, VENDOR_ID, sensor->vendor_id);
+            break;
+        case R_ID1:
+            ret = REG_FIELD_DP8(REG_FIELD_DP8(0, ID1, REVISION, sensor->revision), ID1, FAB_ID, sensor->fab_id);
+            break;
         case R_STATUS: ret = REG_FIELD_DP8(0, STATUS, OK, 1); break;
         // 0x1F131B is ~30 C for a type 1 sensor with zeroed trim.
         case R_VALUE0: ret = 0x1B; break;
@@ -96,6 +104,13 @@ static int apple_mic_temp_sensor_event(I2CSlave* s, enum i2c_event event)
     return 0;
 }
 
+static const Property apple_mic_temp_sensor_properties[] = {
+    DEFINE_PROP_UINT8("product-id", AppleMicTempSensorState, product_id, 0),
+    DEFINE_PROP_UINT8("vendor-id", AppleMicTempSensorState, vendor_id, 0),
+    DEFINE_PROP_UINT8("revision", AppleMicTempSensorState, revision, 0),
+    DEFINE_PROP_UINT8("fab-id", AppleMicTempSensorState, fab_id, 0),
+};
+
 static void apple_mic_temp_sensor_class_init(ObjectClass* klass, const void* data)
 {
     DeviceClass*   dc = DEVICE_CLASS(klass);
@@ -104,6 +119,7 @@ static void apple_mic_temp_sensor_class_init(ObjectClass* klass, const void* dat
     dc->desc           = "Apple Mic/ICA60 Temp Sensor";
     dc->user_creatable = false;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    device_class_set_props(dc, apple_mic_temp_sensor_properties);
 
     c->recv  = apple_mic_temp_sensor_rx;
     c->send  = apple_mic_temp_sensor_tx;
@@ -111,19 +127,3 @@ static void apple_mic_temp_sensor_class_init(ObjectClass* klass, const void* dat
 }
 
 OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleMicTempSensorState, apple_mic_temp_sensor, APPLE_MIC_TEMP_SENSOR, I2C_SLAVE)
-
-I2CSlave* apple_mic_temp_sensor_create(uint8_t addr, I2CBus* bus, uint8_t product_id, uint8_t vendor_id,
-                                       uint8_t revision, uint8_t fab_id, Error** errp)
-{
-    ERRP_GUARD();
-
-    I2CSlave*                dev    = i2c_slave_new(TYPE_APPLE_MIC_TEMP_SENSOR, addr);
-    AppleMicTempSensorState* sensor = container_of(dev, AppleMicTempSensorState, i2c);
-
-    sensor->id0 = REG_FIELD_DP8(REG_FIELD_DP8(0, ID0, PRODUCT_ID, product_id), ID0, VENDOR_ID, vendor_id);
-    sensor->id1 = REG_FIELD_DP8(REG_FIELD_DP8(0, ID1, REVISION, revision), ID1, FAB_ID, fab_id);
-
-    i2c_slave_realize_and_unref(dev, bus, errp);
-
-    return dev;
-}

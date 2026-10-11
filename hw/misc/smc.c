@@ -21,6 +21,7 @@
 #include "qemu/osdep.h"
 #include "hw/misc/a7iop/rtkit.h"
 #include "hw/misc/smc.h"
+#include "hw/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/memalign.h"
 #include "qemu/queue.h"
@@ -52,6 +53,7 @@ struct AppleSMCClass
 {
     AppleRTKitClass parent_class;
 
+    DeviceRealize    parent_realize;
     ResettablePhases parent_phases;
 };
 
@@ -412,23 +414,47 @@ static const AppleRTKitOps apple_smc_rtkit_ops = {
     .boot_done = apple_smc_boot_done,
 };
 
-SysBusDevice* apple_smc_create(AppleDTNode* node, AppleA7IOPVersion version, uint64_t sram_size)
+static void apple_smc_realize(DeviceState* dev, Error** errp)
 {
-    DeviceState*  dev;
-    AppleSMC*     s;
-    AppleRTKit*   rtk;
-    SysBusDevice* sbd;
-    AppleDTNode*  child;
-    AppleDTProp*  prop;
-    uint64_t*     reg;
-    uint8_t       data[8]                   = {0x40, 0x19, 0x01, 0x00, 0x80, 0x70, 0x00, 0x00};
-    uint8_t       ac_adapter_count          = 1;
-    int8_t        ac_w                      = 0x1;    // should actually be a function
-    uint8_t       batt_feature_flags        = 0x0;
-    uint16_t      batt_cycle_count          = 7;
-    uint16_t      batt_avg_time_to_full     = 0xffff;    // not charging
-    uint16_t      batt_max_capacity         = 31337;
-    uint16_t      batt_full_charge_capacity = batt_max_capacity * 0.98;
+    AppleSMC*      s    = APPLE_SMC_IOP(dev);
+    AppleSMCClass* smcc = APPLE_SMC_IOP_GET_CLASS(dev);
+    SysBusDevice*  sbd  = SYS_BUS_DEVICE(dev);
+    Error*         err  = NULL;
+
+    if (s->sram_size == 0) {
+        error_setg(errp, "sram-size is not set");
+        return;
+    }
+
+    smcc->parent_realize(dev, &err);
+    if (err != NULL) {
+        error_propagate(errp, err);
+        return;
+    }
+
+    memory_region_init_io(&s->iomems[APPLE_SMC_MMIO_ASC], OBJECT(dev), &ascv2_core_reg_ops, s,
+                          TYPE_APPLE_SMC_IOP ".ascv2-core-reg", 0x4000);
+    sysbus_init_mmio(sbd, &s->iomems[APPLE_SMC_MMIO_ASC]);
+
+    s->sram = qemu_memalign(qemu_real_host_page_size(), s->sram_size);
+    memory_region_init_ram_device_ptr(&s->iomems[APPLE_SMC_MMIO_SRAM], OBJECT(dev), TYPE_APPLE_SMC_IOP ".sram",
+                                      s->sram_size, s->sram);
+    sysbus_init_mmio(sbd, &s->iomems[APPLE_SMC_MMIO_SRAM]);
+}
+
+static void apple_smc_init(Object* obj)
+{
+    AppleSMC*   s                         = APPLE_SMC_IOP(obj);
+    AppleRTKit* rtk                       = APPLE_RTKIT(obj);
+    AppleA7IOP* a7iop                     = APPLE_A7IOP(obj);
+    uint8_t     data[8]                   = {0x40, 0x19, 0x01, 0x00, 0x80, 0x70, 0x00, 0x00};
+    uint8_t     ac_adapter_count          = 1;
+    int8_t      ac_w                      = 0x1;    // should actually be a function
+    uint8_t     batt_feature_flags        = 0x0;
+    uint16_t    batt_cycle_count          = 7;
+    uint16_t    batt_avg_time_to_full     = 0xffff;    // not charging
+    uint16_t    batt_max_capacity         = 31337;
+    uint16_t    batt_full_charge_capacity = batt_max_capacity * 0.98;
     // *0.69 shows as 67%/68% (console debug output) with full_charge_capacity
     // of 98%
     uint16_t batt_current_capacity   = batt_full_charge_capacity * 0.69;
@@ -439,36 +465,10 @@ SysBusDevice* apple_smc_create(AppleDTNode* node, AppleA7IOPVersion version, uin
     int16_t  batt_actual_amperage    = 0x0;
     uint16_t batt_actual_voltage     = batt_cell_voltage;
 
-    assert_cmphex(sram_size, <=, UINT32_MAX);
-
-    dev = qdev_new(TYPE_APPLE_SMC_IOP);
-    s   = APPLE_SMC_IOP(dev);
-    rtk = APPLE_RTKIT(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    child = apple_dt_get_node(node, "iop-smc-nub");
-    assert_nonnull(child);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    apple_rtkit_init(rtk, NULL, "SMC", reg[1], version, &apple_smc_rtkit_ops);
+    a7iop->role      = "SMC";
+    a7iop->mmio_size = 0x20000;
+    rtk->ops         = &apple_smc_rtkit_ops;
     apple_rtkit_register_user_ep(rtk, kSMCKeyEndpoint, s, apple_smc_handle_key_endpoint);
-
-    memory_region_init_io(&s->iomems[APPLE_SMC_MMIO_ASC], OBJECT(dev), &ascv2_core_reg_ops, s,
-                          TYPE_APPLE_SMC_IOP ".ascv2-core-reg", reg[3]);
-    sysbus_init_mmio(sbd, &s->iomems[APPLE_SMC_MMIO_ASC]);
-
-    s->sram      = qemu_memalign(qemu_real_host_page_size(), sram_size);
-    s->sram_size = sram_size;
-    memory_region_init_ram_device_ptr(&s->iomems[APPLE_SMC_MMIO_SRAM], OBJECT(dev), TYPE_APPLE_SMC_IOP ".sram",
-                                      s->sram_size, s->sram);
-    sysbus_init_mmio(sbd, &s->iomems[APPLE_SMC_MMIO_SRAM]);
-
-    apple_dt_set_prop_u32(child, "pre-loaded", 1);
-    apple_dt_set_prop_u32(child, "running", 1);
 
     QTAILQ_INIT(&s->keys);
     QTAILQ_INIT(&s->key_data);
@@ -593,22 +593,25 @@ SysBusDevice* apple_smc_create(AppleDTNode* node, AppleA7IOPVersion version, uin
     // FIXME: Make sensors separate to standard keys, implementing 'aDCR'
     apple_smc_add_key_func(s, 'aDC#', 4, SMC_KEY_TYPE_HEX, SMC_ATTR_LE, s, apple_smc_sensor_count_read, NULL);
     apple_smc_add_key_func(s, 'aDC?', 4, SMC_KEY_TYPE_HEX, SMC_ATTR_LE, s, apple_smc_sensor_query_read, NULL);
-    return sbd;
 }
 
 static void apple_smc_reset_hold(Object* obj, ResetType type)
 {
-    AppleRTKitClass* rtkc;
-    AppleSMC*        s;
+    AppleSMCClass* smcc;
+    AppleSMC*      s;
 
-    rtkc = APPLE_RTKIT_GET_CLASS(obj);
+    smcc = APPLE_SMC_IOP_GET_CLASS(obj);
     s    = APPLE_SMC_IOP(obj);
 
-    if (rtkc->parent_phases.hold != NULL) { rtkc->parent_phases.hold(obj, type); }
+    if (smcc->parent_phases.hold != NULL) { smcc->parent_phases.hold(obj, type); }
 
     memset(s->sram, 0, s->sram_size);
     s->is_booted = false;
 }
+
+static const Property apple_smc_properties[] = {
+    DEFINE_PROP_UINT32("sram-size", AppleSMC, sram_size, 0),
+};
 
 static void apple_smc_class_init(ObjectClass* klass, const void* data)
 {
@@ -620,10 +623,12 @@ static void apple_smc_class_init(ObjectClass* klass, const void* data)
     dc   = DEVICE_CLASS(klass);
     smcc = APPLE_SMC_IOP_CLASS(klass);
 
+    device_class_set_parent_realize(dc, apple_smc_realize, &smcc->parent_realize);
     resettable_class_set_parent_phases(rc, NULL, apple_smc_reset_hold, NULL, &smcc->parent_phases);
+    device_class_set_props(dc, apple_smc_properties);
 
     dc->desc = "Apple System Management Controller IOP";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSMC, apple_smc, APPLE_SMC_IOP, APPLE_RTKIT)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleSMC, apple_smc, APPLE_SMC_IOP, APPLE_RTKIT)

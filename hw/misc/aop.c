@@ -627,6 +627,10 @@ static void apple_aop_realize(DeviceState* dev, Error** errp)
 
     if (aopc->parent_realize != NULL) { aopc->parent_realize(dev, errp); }
 
+    memory_region_init_io(&s->ascv2_iomem, OBJECT(dev), &ascv2_core_reg_ops, s, TYPE_APPLE_AOP ".ascv2-core-reg",
+                          0x4000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->ascv2_iomem);
+
     obj = object_property_get_link(OBJECT(dev), "dma-mr", &error_abort);
 
     s->dma_mr = MEMORY_REGION(obj);
@@ -675,44 +679,17 @@ static void apple_aop_class_init(ObjectClass* klass, const void* data)
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleAOP, apple_aop, APPLE_AOP, APPLE_RTKIT)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleAOP, apple_aop, APPLE_AOP, APPLE_RTKIT)
 
-SysBusDevice* apple_aop_create(AppleDTNode* node, AppleA7IOPVersion version)
+static void apple_aop_init(Object* obj)
 {
-    DeviceState*  dev;
-    AppleAOP*     s;
-    SysBusDevice* sbd;
-    AppleRTKit*   rtk;
-    AppleDTNode*  child;
-    AppleDTProp*  prop;
-    uint64_t*     reg;
+    AppleAOP*   s     = APPLE_AOP(obj);
+    AppleA7IOP* a7iop = APPLE_A7IOP(obj);
 
-    dev     = qdev_new(TYPE_APPLE_AOP);
-    s       = APPLE_AOP(dev);
-    sbd     = SYS_BUS_DEVICE(dev);
-    rtk     = APPLE_RTKIT(dev);
-    dev->id = g_strdup("aop");
-
-    child = apple_dt_get_node(node, "iop-aop-nub");
-    assert_nonnull(child);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    apple_rtkit_init(rtk, NULL, "AOP", reg[1], version, &apple_aop_rtkit_ops);
-
-    memory_region_init_io(&s->ascv2_iomem, OBJECT(dev), &ascv2_core_reg_ops, s, TYPE_APPLE_AOP ".ascv2-core-reg",
-                          reg[3]);
-    sysbus_init_mmio(sbd, &s->ascv2_iomem);
-
-    s->align = apple_dt_get_prop_u32_or(child, "aop-memory-alignment", 0x40, &error_fatal);
-
-    apple_dt_set_prop_u32(child, "pre-loaded", 1);
-    apple_dt_set_prop_u32(child, "running", 1);
-
-    return sbd;
+    a7iop->role           = "AOP";
+    a7iop->mmio_size      = 0x20000;
+    APPLE_RTKIT(obj)->ops = &apple_aop_rtkit_ops;
+    s->align              = 0x40;    // TODO: RTKit FW / Patchbay
 }
 
 AppleAOPEndpoint* apple_aop_ep_create(AppleAOP* s, void* opaque, const AppleAOPEndpointDescription* descr)

@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "qom/object.h"
 
@@ -34,9 +34,10 @@ typedef struct
     AppleAICState* aic;
     qemu_irq       irq;
     MemoryRegion   iomem;
+    MemoryRegion   timebase_iomem;
     uint32_t       cpu_id;
-    uint32_t       pendingIPI;
-    uint32_t       deferredIPI;
+    uint32_t       pending_ipi;
+    uint32_t       deferred_ipi;
     uint32_t       ipi_mask;
     uint32_t       tmr_cfg;
     uint32_t       tmr_isr;
@@ -49,19 +50,14 @@ struct AppleAICState
 {
     SysBusDevice parent_obj;
     QEMUTimer*   timer;
-    uint32_t     phandle;
-    uint32_t     base_size;
-    uint32_t     numEIR;
-    uint32_t     numIRQ;
-    uint32_t     numCPU;
+    uint32_t     num_eir;
+    uint32_t     num_irq;
+    uint32_t     num_cpu;
     uint32_t     global_cfg;
     uint32_t     pvt_stamp_cfg;
     uint32_t     shared_stamp[16];
-    uint32_t     time_base;
     uint32_t*    eir_mask;
     uint32_t*    eir_dest;
     AppleAICCPU* cpus;
     uint32_t*    eir_state;
 };
-
-SysBusDevice* apple_aic_create(uint32_t numCPU, AppleDTNode* node, AppleDTNode* timebase_node);

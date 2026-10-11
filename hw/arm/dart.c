@@ -19,13 +19,13 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/dart.h"
-#include "hw/arm/dt.h"
 #include "hw/irq.h"
 #include "hw/registerfields.h"
 #include "hw/sysbus.h"
 #include "monitor/hmp-target.h"
 #include "monitor/monitor.h"
 #include "qapi/error.h"
+#include "hw/qdev-properties.h"
 #include "qemu/bitops.h"
 #include "system/dma.h"
 #include "qobject/qdict.h"
@@ -42,6 +42,8 @@
         while (0)
 #endif
 
+// NOTE: there can be up to 64 SIDs. Not on the currently-emulated hardware,
+// but other ones.
 #define DART_TLB_ENTRIES     (256)
 #define DART_TLB_VALID       BIT_ULL(63)
 #define DART_TLB_GEN_SHIFT   (48)
@@ -147,14 +149,6 @@ REG32(DART_ST_MISS_CTR, 0x102C)
 REG32(DART_ST_HIT_CTR, 0x1034)
 // clang-format on
 
-typedef enum
-{
-    DART_UNKNOWN = 0,
-    DART_DART,
-    DART_SMMU,
-    DART_DAPF,
-} dart_instance_t;
-
 static const char* dart_instance_name[] = {
     [DART_UNKNOWN] = "Unknown",
     [DART_DART]    = "DART",
@@ -211,6 +205,7 @@ struct AppleDARTMapperInstance
 struct AppleDARTState
 {
     SysBusDevice        parent_obj;
+    const char*         name;
     qemu_irq            irq;
     AppleDARTInstance** instances;
     uint32_t            num_instances;
@@ -369,8 +364,8 @@ static void apple_dart_mapper_reg_write(void* opaque, hwaddr addr, uint64_t data
     uint32_t                 set_index;
     uint64_t                 sid_mask = 0;
 
-    DPRINTF("%s[%d]: (DART) 0x" HWADDR_FMT_plx " <- 0x" HWADDR_FMT_plx "\n",
-            mapper->common.dart->parent_obj.parent_obj.id, mapper->common.id, addr, data);
+    DPRINTF("%s[%d]: (DART) 0x" HWADDR_FMT_plx " <- 0x" HWADDR_FMT_plx "\n", mapper->common.dart->name,
+            mapper->common.id, addr, data);
 
     switch (addr >> 2) {
         case R_DART_TLB_OP:
@@ -448,8 +443,7 @@ static uint64_t apple_dart_mapper_reg_read(void* opaque, hwaddr addr, unsigned s
     AppleDARTMapperInstance* mapper = opaque;
     uint32_t                 i;
 
-    DPRINTF("%s[%d]: (DART) 0x" HWADDR_FMT_plx "\n", mapper->common.dart->parent_obj.parent_obj.id, mapper->common.id,
-            addr);
+    DPRINTF("%s[%d]: (DART) 0x" HWADDR_FMT_plx "\n", mapper->common.dart->name, mapper->common.id, addr);
 
     switch (addr >> 2) {
         case R_DART_PARAMS1           : return mapper->regs.params1;
@@ -489,15 +483,15 @@ static void apple_dart_dummy_reg_write(void* opaque, hwaddr addr, uint64_t data,
 {
     G_GNUC_UNUSED AppleDARTInstance* instance = opaque;
 
-    DPRINTF("%s[%d]: (%s) 0x" HWADDR_FMT_plx " <- 0x" HWADDR_FMT_plx "\n", instance->dart->parent_obj.parent_obj.id,
-            instance->id, dart_instance_name[instance->type], addr, data);
+    DPRINTF("%s[%d]: (%s) 0x" HWADDR_FMT_plx " <- 0x" HWADDR_FMT_plx "\n", instance->dart->name, instance->id,
+            dart_instance_name[instance->type], addr, data);
 }
 
 static uint64_t apple_dart_dummy_reg_read(void* opaque, hwaddr addr, unsigned size)
 {
     G_GNUC_UNUSED AppleDARTInstance* instance = opaque;
 
-    DPRINTF("%s[%d]: (%s) 0x" HWADDR_FMT_plx "\n", instance->dart->parent_obj.parent_obj.id, instance->id,
+    DPRINTF("%s[%d]: (%s) 0x" HWADDR_FMT_plx "\n", instance->dart->name, instance->id,
             dart_instance_name[instance->type], addr);
 
     return 0;
@@ -705,10 +699,9 @@ static IOMMUTLBEntry apple_dart_mapper_translate(IOMMUMemoryRegion* mr, hwaddr a
     }
 
 end:
-    DPRINTF("%s[%d]: (%s) SID %u: 0x" HWADDR_FMT_plx " -> 0x" HWADDR_FMT_plx " (%c%c)\n",
-            mapper->common.dart->parent_obj.parent_obj.id, mapper->common.id, dart_instance_name[mapper->common.type],
-            iommu->sid, entry.iova, entry.translated_addr, (entry.perm & IOMMU_RO) ? 'r' : '-',
-            (entry.perm & IOMMU_WO) ? 'w' : '-');
+    DPRINTF("%s[%d]: (%s) SID %u: 0x" HWADDR_FMT_plx " -> 0x" HWADDR_FMT_plx " (%c%c)\n", mapper->common.dart->name,
+            mapper->common.id, dart_instance_name[mapper->common.type], iommu->sid, entry.iova, entry.translated_addr,
+            (entry.perm & IOMMU_RO) ? 'r' : '-', (entry.perm & IOMMU_WO) ? 'w' : '-');
     return entry;
 }
 
@@ -783,8 +776,6 @@ static void apple_dart_reset_enter(Object* obj, ResetType type)
         if (dart->boot_tables[i] != 0) { apple_dart_apply_boot_table(dart, i); }
     }
 }
-
-static void apple_dart_realize(DeviceState* dev, Error** errp) { }
 
 void apple_dart_iommu_table_pages(IOMMUMemoryRegion* mr, GArray* out)
 {
@@ -883,23 +874,21 @@ IOMMUMemoryRegion* apple_dart_instance_iommu_mr(AppleDARTState* dart, uint32_t i
     return &mapper->iommus[sid]->iommu;
 }
 
-AppleDARTState* apple_dart_from_node(AppleDTNode* node)
+static void apple_dart_realize(DeviceState* dev, Error** errp)
 {
-    DeviceState*    dev;
     AppleDARTState* dart;
     SysBusDevice*   sbd;
-    AppleDTProp*    prop;
-    uint64_t*       reg;
-    uint32_t*       instance_data;
-    int             i;
 
-    dev  = qdev_new(TYPE_APPLE_DART);
     dart = APPLE_DART(dev);
     sbd  = SYS_BUS_DEVICE(dev);
 
-    dev->id = apple_dt_get_prop_strdup(node, "name", &error_fatal);
+    // Realizing gives the device a parent if it had none.
+    dart->name = object_get_canonical_path_component(OBJECT(dev));
 
-    dart->page_size  = apple_dt_get_prop_u32_or(node, "page-size", 0x1000, &error_fatal);
+    assert_false(dart->page_size == 0);
+    assert_false(dart->num_instances == 0);
+    assert_false(dart->sid_mask == 0);
+
     dart->page_shift = 31 - clz32(dart->page_size);
     dart->page_bits  = dart->page_size - 1;
     dart->page_mask  = ~dart->page_bits;
@@ -923,85 +912,9 @@ AppleDARTState* apple_dart_from_node(AppleDTNode* node)
             break;
         default: assert_not_reached();
     }
-
-    // NOTE: there can be up to 64 SIDs. Not on the currently-emulated hardware,
-    // but other ones.
-    dart->sid_mask     = apple_dt_get_prop_u32_or(node, "sids", 0xFFFF, &error_fatal);
-    dart->dart_options = apple_dt_get_prop_u32_or(node, "dart-options", 0, &error_fatal);
-
-    prop = apple_dt_get_prop(node, "instance");
-    if (prop == NULL) {
-        if (apple_dt_get_prop_u32_or(node, "smmu-present", 0, &error_fatal) == 1) {
-            instance_data = (uint32_t*)"TRADDART\0\0\0\0UMMSSMMU\0\0\0";
-        }
-        else {
-            instance_data = (uint32_t*)"TRADDART\0\0\0";
-        }
-    }
-    else {
-        assert_cmpuint(prop->len % 12, ==, 0);
-        instance_data = (uint32_t*)prop->data;
-    }
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    dart->num_instances = prop->len / 16;
-    dart->instances     = g_new(AppleDARTInstance*, dart->num_instances);
-    for (i = 0; i < dart->num_instances; i++) {
-        AppleDARTInstance* instance;
-
-        switch (ldl_le_p(instance_data)) {
-            case 'DART': {
-                AppleDARTMapperInstance* mapper = g_new0(AppleDARTMapperInstance, 1);
-                instance                        = &mapper->common;
-                instance->type                  = DART_DART;
-                memory_region_init_io(&instance->iomem, OBJECT(dev), &apple_dart_mapper_reg_ops, instance,
-                                      TYPE_APPLE_DART ".reg", reg[(i * 2) + 1]);
-                for (uint32_t sid = 0; sid < DART_MAX_STREAMS; sid++) {
-                    if (!(dart->sid_mask & BIT_ULL(sid))) { continue; }
-
-                    char* name = g_strdup_printf("dart-%s-%u-%u", dart->parent_obj.parent_obj.id, instance->id, sid);
-                    mapper->iommus[sid]         = g_new0(AppleDARTIOMMUMemoryRegion, 1);
-                    mapper->iommus[sid]->sid    = sid;
-                    mapper->iommus[sid]->mapper = mapper;
-                    memory_region_init_iommu(mapper->iommus[sid], sizeof(AppleDARTIOMMUMemoryRegion),
-                                             TYPE_APPLE_DART_IOMMU_MEMORY_REGION, OBJECT(dart), name,
-                                             1ULL << DART_MAX_VA_BITS);
-                    g_free(name);
-                }
-                break;
-            }
-            case 'SMMU':
-                instance       = g_new0(AppleDARTInstance, 1);
-                instance->type = DART_SMMU;
-                goto common;
-            case 'DAPF':
-                instance       = g_new0(AppleDARTInstance, 1);
-                instance->type = DART_DAPF;
-                goto common;
-            default:
-                instance       = g_new0(AppleDARTInstance, 1);
-                instance->type = DART_UNKNOWN;
-            common:
-                memory_region_init_io(&instance->iomem, OBJECT(dev), &apple_dart_dummy_reg_ops, instance,
-                                      TYPE_APPLE_DART ".reg", reg[(i * 2) + 1]);
-                break;
-        }
-        instance->id       = i;
-        instance->dart     = dart;
-        dart->instances[i] = instance;
-        sysbus_init_mmio(sbd, &instance->iomem);
-        DPRINTF("%s: DART %s instance %d: %s\n", __func__, instance->dart->parent_obj.parent_obj.id, i,
-                dart_instance_name[instance->type]);
-        instance_data += 3;
-    }
+    dart->instances = g_new0(AppleDARTInstance*, dart->num_instances);
 
     sysbus_init_irq(sbd, &dart->irq);
-
-    return dart;
 }
 
 static void apple_dart_dump_pt(Monitor* mon, AppleDARTInstance* instance, hwaddr iova, const uint64_t* entries,
@@ -1044,17 +957,15 @@ void hmp_info_dart(Monitor* mon, const QDict* qdict)
 
     if (name == NULL) {
         for (GSList* ele = device_list; ele; ele = ele->next) {
-            DeviceState* dev = ele->data;
-            dart             = APPLE_DART(dev);
-            monitor_printf(mon, "%s\tPage size: %d\t%d Instances\n", dev->id, dart->page_size, dart->num_instances);
+            dart = APPLE_DART(ele->data);
+            monitor_printf(mon, "%s\tPage size: %d\t%d Instances\n", dart->name, dart->page_size, dart->num_instances);
         }
         return;
     }
 
     for (GSList* ele = device_list; ele; ele = ele->next) {
-        DeviceState* dev = ele->data;
-        if (!strcmp(dev->id, name)) {
-            dart = APPLE_DART(dev);
+        if (!strcmp(APPLE_DART(ele->data)->name, name)) {
+            dart = APPLE_DART(ele->data);
             break;
         }
     }
@@ -1095,6 +1006,14 @@ void hmp_info_dart(Monitor* mon, const QDict* qdict)
     }
 }
 
+// First three have zeroes w/ assertions in realize to prevent silent issues.
+static const Property apple_dart_properties[] = {
+    DEFINE_PROP_UINT32("page-size", AppleDARTState, page_size, 0),
+    DEFINE_PROP_UINT64("sid-mask", AppleDARTState, sid_mask, 0),
+    DEFINE_PROP_UINT32("num-instances", AppleDARTState, num_instances, 0),
+    DEFINE_PROP_UINT32("dart-options", AppleDARTState, dart_options, 0),
+};
+
 static void apple_dart_class_init(ObjectClass* klass, const void* data)
 {
     ResettableClass* rc = RESETTABLE_CLASS(klass);
@@ -1104,6 +1023,7 @@ static void apple_dart_class_init(ObjectClass* klass, const void* data)
 
     dc->realize = apple_dart_realize;
     dc->desc    = "Apple DART IOMMU";
+    device_class_set_props(dc, apple_dart_properties);
 }
 
 static void apple_dart_iommu_memory_region_class_init(ObjectClass* klass, const void* data)
@@ -1130,3 +1050,71 @@ static const TypeInfo apple_dart_types[] = {
 };
 
 DEFINE_TYPES(apple_dart_types)
+
+AppleDARTState* apple_dart_create(uint32_t page_size, uint64_t sid_mask, uint32_t num_instances, uint32_t dart_options,
+                                  qemu_irq irq)
+{
+    DeviceState* dev;
+
+    dev = qdev_new(TYPE_APPLE_DART);
+
+    qdev_prop_set_uint32(dev, "page-size", page_size);
+    qdev_prop_set_uint64(dev, "sid-mask", sid_mask);
+    qdev_prop_set_uint32(dev, "num-instances", num_instances);
+    qdev_prop_set_uint32(dev, "dart-options", dart_options);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
+
+    return APPLE_DART(dev);
+}
+
+void apple_dart_set_dart_instance(AppleDARTState* dart, uint32_t i, hwaddr regs_addr)
+{
+    AppleDARTInstance*       instance;
+    AppleDARTMapperInstance* mapper;
+    char                     name[128];
+
+    assert_cmpuint(i, <, dart->num_instances);
+    assert_null(dart->instances[i]);
+
+    mapper         = g_new0(AppleDARTMapperInstance, 1);
+    instance       = &mapper->common;
+    instance->type = DART_DART;
+    instance->id   = i;
+    instance->dart = dart;
+    for (uint32_t sid = 0; sid < DART_MAX_STREAMS; ++sid) {
+        if (!(dart->sid_mask & BIT_ULL(sid))) { continue; }
+
+        snprintf(name, sizeof(name), "dart-%s-%u-%u", dart->name, instance->id, sid);
+        mapper->iommus[sid]         = g_new0(AppleDARTIOMMUMemoryRegion, 1);
+        mapper->iommus[sid]->sid    = sid;
+        mapper->iommus[sid]->mapper = mapper;
+        memory_region_init_iommu(mapper->iommus[sid], sizeof(AppleDARTIOMMUMemoryRegion),
+                                 TYPE_APPLE_DART_IOMMU_MEMORY_REGION, OBJECT(dart), name, 1ULL << DART_MAX_VA_BITS);
+    }
+    dart->instances[i] = instance;
+    memory_region_init_io(&instance->iomem, OBJECT(dart), &apple_dart_mapper_reg_ops, instance, TYPE_APPLE_DART ".reg",
+                          0x4000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dart), &instance->iomem);
+    DPRINTF("%s: DART %s instance %d: %s\n", __func__, instance->dart->name, i, dart_instance_name[instance->type]);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dart), i, regs_addr);
+}
+
+void apple_dart_set_other_instance(AppleDARTState* dart, uint32_t i, dart_instance_t type, hwaddr regs_addr)
+{
+    AppleDARTInstance* instance;
+
+    assert_cmpuint(i, <, dart->num_instances);
+    assert_false(type == DART_DART);
+
+    instance           = g_new0(AppleDARTInstance, 1);
+    instance->id       = i;
+    instance->type     = type;
+    instance->dart     = dart;
+    dart->instances[i] = instance;
+    memory_region_init_io(&instance->iomem, OBJECT(dart), &apple_dart_dummy_reg_ops, instance, TYPE_APPLE_DART ".reg",
+                          0x4000);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dart), &instance->iomem);
+    DPRINTF("%s: DART %s instance %d: %s\n", __func__, instance->dart->name, i, dart_instance_name[instance->type]);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dart), i, regs_addr);
+}

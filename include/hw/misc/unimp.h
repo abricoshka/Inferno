@@ -23,6 +23,7 @@ struct UnimplementedDeviceState
     unsigned     offset_fmt_width;
     char*        name;
     uint64_t     size;
+    uint64_t     stub_val;
 };
 
 /**
@@ -44,6 +45,22 @@ static inline void create_unimplemented_device(const char* name, hwaddr base, hw
 
     qdev_prop_set_string(dev, "name", name);
     qdev_prop_set_uint64(dev, "size", size);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    sysbus_mmio_map_overlap(SYS_BUS_DEVICE(dev), 0, base, -1000);
+}
+
+/**
+ * create_unimplemented_device_with_val: ditto above
+ * @stub_val: Constant returned by the MMIO
+ */
+static inline void create_unimplemented_device_with_val(const char* name, hwaddr base, hwaddr size, uint64_t stub_val)
+{
+    DeviceState* dev = qdev_new(TYPE_UNIMPLEMENTED_DEVICE);
+
+    qdev_prop_set_string(dev, "name", name);
+    qdev_prop_set_uint64(dev, "size", size);
+    qdev_prop_set_uint64(dev, "stub-val", stub_val);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(dev), 0, base, -1000);

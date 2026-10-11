@@ -20,7 +20,7 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/sysbus.h"
 
-SysBusDevice* apple_wdt_from_node(AppleDTNode* node);
+#define TYPE_APPLE_WDT "apple-wdt"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleWDTState, APPLE_WDT)

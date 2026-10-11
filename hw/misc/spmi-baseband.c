@@ -73,18 +73,11 @@ static int apple_spmi_baseband_command(SPMISlave* s, uint8_t opcode, uint16_t ad
     }
 }
 
-DeviceState* apple_spmi_baseband_create(AppleDTNode* node)
+static void apple_spmi_baseband_init(Object* obj)
 {
-    DeviceState*            dev = qdev_new(TYPE_APPLE_SPMI_BASEBAND);
-    AppleSPMIBasebandState* p   = APPLE_SPMI_BASEBAND(dev);
-    AppleDTProp*            prop;
+    AppleSPMIBasebandState* p = APPLE_SPMI_BASEBAND(obj);
 
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    spmi_set_slave_sid(SPMI_SLAVE(dev), *(uint32_t*)prop->data);
-
-    qdev_init_gpio_out(dev, &p->irq, 1);
-    return dev;
+    qdev_init_gpio_out(DEVICE(obj), &p->irq, 1);
 }
 
 static void apple_spmi_baseband_class_init(ObjectClass* klass, const void* data)
@@ -99,4 +92,4 @@ static void apple_spmi_baseband_class_init(ObjectClass* klass, const void* data)
     sc->command = apple_spmi_baseband_command;
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSPMIBasebandState, apple_spmi_baseband, APPLE_SPMI_BASEBAND, SPMI_SLAVE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleSPMIBasebandState, apple_spmi_baseband, APPLE_SPMI_BASEBAND, SPMI_SLAVE)

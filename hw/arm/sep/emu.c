@@ -427,28 +427,32 @@ void apple_sep_setup_tz0(AppleSEP* s, MemoryRegion* dram, hwaddr tz0_off, hwaddr
     memory_region_transaction_commit();
 }
 
-AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr base, uint32_t cpu_id, bool modern,
-                              uint32_t chip_id)
+static void apple_sep_cpu_reset_work(CPUState* cpu, run_on_cpu_data data)
 {
-    DeviceState* dev;
-    AppleA7IOP*  a7iop;
-    AppleSEP*    s;
-    AppleDTProp* prop;
-    uint64_t*    reg;
-    uint32_t     i;
+    AppleSEP* s = data.host_ptr;
+    object_property_set_uint(OBJECT(s->cpu), "rvbar", s->base & ~0xFFF, NULL);
+    cpu_reset(cpu);
+    DPRINTF("apple_sep_cpu_reset_work: before cpu_set_pc: base=0x%" VADDR_PRIX "\n", s->base);
+    cpu_set_pc(cpu, s->base);
+    cpu_synchronize_post_reset(cpu);
+}
 
-    dev   = qdev_new(TYPE_APPLE_SEP);
-    a7iop = APPLE_A7IOP(dev);
-    s     = APPLE_SEP(dev);
+static void apple_sep_realize(DeviceState* dev, Error** errp)
+{
+    AppleSEP*      s;
+    AppleSEPClass* sc;
 
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg = (uint64_t*)prop->data;
+    s  = APPLE_SEP(dev);
+    sc = APPLE_SEP_GET_CLASS(dev);
 
-    apple_a7iop_init(a7iop, "SEP", reg[1], modern ? APPLE_A7IOP_V4 : APPLE_A7IOP_V2, &apple_sep_iop_ops, NULL);
-    s->base    = base;
-    s->modern  = modern;
-    s->chip_id = chip_id;
+    if (sc->parent_realize) { sc->parent_realize(dev, errp); }
+
+    if (s->ool_mr == NULL) {
+        error_setg(errp, "ool-mr is not set");
+        return;
+    }
+
+    s->modern = s->parent_obj.version == APPLE_A7IOP_V4;
 
 #ifdef SEP_ENABLE_TRACE_BUFFER
     if (s->chip_id >= 0x8020) {
@@ -469,15 +473,15 @@ AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr bas
     }
 #endif
 
-    if (modern) { s->cpu = &apple_a13_create("sep-cpu", cpu_id, BIT_ULL(30), -1, 'S')->parent_obj; }
+    if (s->modern) { s->cpu = &apple_a13_create("sep-cpu", s->cpu_id, BIT_ULL(30), -1, 'S')->parent_obj; }
     else {
-        s->cpu = &apple_a9_create("sep-cpu", cpu_id, BIT_ULL(30))->parent_obj;
+        s->cpu = &apple_a9_create("sep-cpu", s->cpu_id, BIT_ULL(30))->parent_obj;
         object_property_set_bool(OBJECT(s->cpu), "aarch64", false, NULL);
     }
 
     if (tcg_enabled()) {
         MemoryRegion* mr0 = g_new0(MemoryRegion, 1);
-        memory_region_init_alias(mr0, OBJECT(s), "sep_dma", ool_mr, 0, SEP_DMA_MAPPING_SIZE);
+        memory_region_init_alias(mr0, OBJECT(s), "sep_dma", s->ool_mr, 0, SEP_DMA_MAPPING_SIZE);
         memory_region_add_subregion(apple_sep_cpu_memory(s), 0, mr0);
     }
 
@@ -485,24 +489,21 @@ AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr bas
     // hack
     if (s->chip_id >= 0x8020) {
         MemoryRegion* mr1 = g_new0(MemoryRegion, 1);
-        memory_region_init_alias(mr1, OBJECT(s), "sep_shmbuf_hdr", ool_mr, s->shmbuf_base, 0x4000);
+        memory_region_init_alias(mr1, OBJECT(s), "sep_shmbuf_hdr", s->ool_mr, s->shmbuf_base, 0x4000);
         memory_region_add_subregion(get_system_memory(), s->shmbuf_base, mr1);
     }
 #endif
     object_property_set_uint(OBJECT(s->cpu), "rvbar", s->base & ~0xFFF, NULL);
-    object_property_add_child(OBJECT(dev), DEVICE(s->cpu)->id, OBJECT(s->cpu));
+    object_property_add_child(OBJECT(s), DEVICE(s->cpu)->id, OBJECT(s->cpu));
 
     // AKF_MBOX reg is handled using the device tree
     // XPRT_{PMSC,FUSE,MISC} regs are handled in t8030.c
 
-    AppleDTNode* child = apple_dt_get_node(node, "iop-sep-nub");
-    assert_nonnull(child);
-
-    SysBusDevice* gpio                = NULL;
-    uint32_t      sep_gpio_pins       = 0x4;
-    uint32_t      sep_gpio_int_groups = 0x1;
-    gpio = SYS_BUS_DEVICE(apple_gpio_new("sep_gpio", 0x10000, sep_gpio_pins, sep_gpio_int_groups));
-    assert_nonnull(gpio);
+    SysBusDevice* gpio = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_GPIO));
+    qdev_prop_set_uint32(DEVICE(gpio), "pin-count", 4);
+    qdev_prop_set_uint32(DEVICE(gpio), "irq-group-count", 1);
+    object_property_add_child(OBJECT(s), "gpio", OBJECT(gpio));
+    sysbus_realize_and_unref(gpio, &error_fatal);
     if (s->chip_id == 0x8030) {
         sysbus_mmio_map(gpio, 0, 0x2414C0000ULL);    // T8030
     }
@@ -516,19 +517,15 @@ AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr bas
         sysbus_mmio_map(gpio, 0, 0x20DF00000ULL);    // S8000
     }
 
-    for (i = 0; i < sep_gpio_int_groups; i++) {
-        // sysbus_connect_irq(gpio, i,
-        // qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
-    }
-    for (i = 0; i < sep_gpio_pins; i++) {
-        // qdev_connect_gpio_out(DEVICE(gpio), i,
-        // qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
-    }
-    object_property_add_child(OBJECT(s), "gpio", OBJECT(gpio));
-    sysbus_realize_and_unref(gpio, &error_fatal);
-    SysBusDevice* i2c = NULL;
-    i2c               = apple_i2c_create("sep_i2c");
-    assert_nonnull(i2c);
+    // for (i = 0; i < sep_gpio_int_groups; i++) {
+    // sysbus_connect_irq(gpio, i,
+    // qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
+    // }
+    // for (i = 0; i < sep_gpio_pins; i++) {
+    // qdev_connect_gpio_out(DEVICE(gpio), i,
+    // qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
+    // }
+    SysBusDevice* i2c = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_I2C));
     object_property_add_child(OBJECT(s), "i2c", OBJECT(i2c));
     if (s->chip_id == 0x8030) {
         sysbus_mmio_map(i2c, 0, 0x241480000ULL);    // T8030
@@ -592,9 +589,6 @@ AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr bas
     sysbus_realize_and_unref(SYS_BUS_DEVICE(s->trng), &error_fatal);
 
 #if 1
-    s->ool_mr = ool_mr;
-    assert_nonnull(s->ool_mr);
-    object_property_add_const_link(OBJECT(s), "ool-mr", OBJECT(s->ool_mr));
     s->ool_as = g_new0(AddressSpace, 1);
     assert_nonnull(s->ool_as);
     address_space_init(s->ool_as, s->ool_mr, "sep.ool");
@@ -603,29 +597,6 @@ AppleSEP* apple_sep_from_node(AppleDTNode* node, MemoryRegion* ool_mr, vaddr bas
     apple_sep_dma_init(s);
 
     s->mailbox = s->parent_obj.iop_mailbox;
-
-    return s;
-}
-
-static void apple_sep_cpu_reset_work(CPUState* cpu, run_on_cpu_data data)
-{
-    AppleSEP* s = data.host_ptr;
-    object_property_set_uint(OBJECT(s->cpu), "rvbar", s->base & ~0xFFF, NULL);
-    cpu_reset(cpu);
-    DPRINTF("apple_sep_cpu_reset_work: before cpu_set_pc: base=0x%" VADDR_PRIX "\n", s->base);
-    cpu_set_pc(cpu, s->base);
-    cpu_synchronize_post_reset(cpu);
-}
-
-static void apple_sep_realize(DeviceState* dev, Error** errp)
-{
-    AppleSEP*      s;
-    AppleSEPClass* sc;
-
-    s  = APPLE_SEP(dev);
-    sc = APPLE_SEP_GET_CLASS(dev);
-
-    if (sc->parent_realize) { sc->parent_realize(dev, errp); }
 
     qdev_realize(DEVICE(s->cpu), NULL, errp);
     qdev_connect_gpio_out_named(DEVICE(s->mailbox), APPLE_A7IOP_SEP_CPU_IRQ, 0,
@@ -682,6 +653,24 @@ static void apple_sep_reset_hold(Object* obj, ResetType type)
     DPRINTF("SEP Progress: Sent fake Opcode17/INTEGRITY_TREE_SIZE\n");
 }
 
+static void apple_sep_init(Object* obj)
+{
+    AppleSEP*   s     = APPLE_SEP(obj);
+    AppleA7IOP* a7iop = APPLE_A7IOP(obj);
+
+    a7iop->role      = "SEP";
+    a7iop->ops       = &apple_sep_iop_ops;
+    a7iop->mmio_size = 0x10000;
+    object_property_add_link(obj, "ool-mr", TYPE_MEMORY_REGION, (Object**)&s->ool_mr,
+                             qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
+}
+
+static const Property apple_sep_properties[] = {
+    DEFINE_PROP_UINT64("base", AppleSEP, base, 0),
+    DEFINE_PROP_UINT32("cpu-id", AppleSEP, cpu_id, 0),
+    DEFINE_PROP_UINT32("chip-id", AppleSEP, chip_id, 0),
+};
+
 static void apple_sep_class_init(ObjectClass* klass, const void* data)
 {
     ResettableClass* rc = RESETTABLE_CLASS(klass);
@@ -689,11 +678,12 @@ static void apple_sep_class_init(ObjectClass* klass, const void* data)
     AppleSEPClass*   sc = APPLE_SEP_CLASS(klass);
     device_class_set_parent_realize(dc, apple_sep_realize, &sc->parent_realize);
     resettable_class_set_parent_phases(rc, NULL, apple_sep_reset_hold, NULL, &sc->parent_phases);
+    device_class_set_props(dc, apple_sep_properties);
     dc->desc = "Apple SEP";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 
-OBJECT_DEFINE_TYPE_CLASS_INIT(AppleSEP, apple_sep, APPLE_SEP, APPLE_A7IOP)
+OBJECT_DEFINE_TYPE_INSTANCE_INIT(AppleSEP, apple_sep, APPLE_SEP, APPLE_A7IOP)
 
 bool apple_sep_get_fuse_changer_bit(AppleSEP* s, uint8_t bit)
 { return apple_sep_pmgr_get_fuse_changer_bit(s->pmgr, bit); }

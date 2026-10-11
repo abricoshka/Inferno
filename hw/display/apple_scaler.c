@@ -210,12 +210,12 @@ struct AppleScalerState
     SysBusDevice parent_obj;
 
     /*< public >*/
-    QemuMutex     lock;
-    MemoryRegion  regs[2];
-    MemoryRegion* dma_mr;
-    AddressSpace  dma_as;
-    qemu_irq      irqs[2];
-    QEMUBH*       bh;
+    QemuMutex    lock;
+    MemoryRegion regs_iomem;
+    MemoryRegion apiodma_iomem;
+    AddressSpace dma_as;
+    qemu_irq     irqs[2];
+    QEMUBH*      bh;
 
     AppleScalerSrcDstConfig srcdst[SOURCE_DEST_COUNT];
     uint32_t                flip_rotate_cfg;
@@ -1227,7 +1227,7 @@ static const MemoryRegionOps apple_scaler_reg_ops = {
     .valid.unaligned       = false,
 };
 
-static void apple_scaler_unk_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
+static void apple_scaler_apiodma_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
 {
     // AppleScalerState *scaler = opaque;
 
@@ -1240,7 +1240,7 @@ static void apple_scaler_unk_reg_write(void* opaque, hwaddr addr, uint64_t data,
     }
 }
 
-static uint64_t apple_scaler_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
+static uint64_t apple_scaler_apiodma_reg_read(void* opaque, hwaddr addr, unsigned size)
 {
     // AppleScalerState *scaler = opaque;
     uint64_t ret;
@@ -1254,9 +1254,9 @@ static uint64_t apple_scaler_unk_reg_read(void* opaque, hwaddr addr, unsigned si
     return ret;
 }
 
-static const MemoryRegionOps apple_scaler_unk_reg_ops = {
-    .write                 = apple_scaler_unk_reg_write,
-    .read                  = apple_scaler_unk_reg_read,
+static const MemoryRegionOps apple_scaler_apiodma_reg_ops = {
+    .write                 = apple_scaler_apiodma_reg_write,
+    .read                  = apple_scaler_apiodma_reg_read,
     .endianness            = DEVICE_NATIVE_ENDIAN,
     .impl.min_access_size  = 4,
     .impl.max_access_size  = 4,
@@ -1265,11 +1265,35 @@ static const MemoryRegionOps apple_scaler_unk_reg_ops = {
     .valid.unaligned       = false,
 };
 
+static void apple_scaler_init(Object* obj)
+{
+    SysBusDevice*     sbd;
+    AppleScalerState* scaler;
+    int               i;
+
+    sbd    = SYS_BUS_DEVICE(obj);
+    scaler = APPLE_SCALER(sbd);
+
+    qemu_mutex_init(&scaler->lock);
+
+    memory_region_init_io(&scaler->regs_iomem, OBJECT(scaler), &apple_scaler_reg_ops, scaler, TYPE_APPLE_SCALER ".regs",
+                          0x20000);
+    memory_region_enable_lockless_io(&scaler->regs_iomem);
+    memory_region_init_io(&scaler->apiodma_iomem, OBJECT(scaler), &apple_scaler_apiodma_reg_ops, scaler,
+                          TYPE_APPLE_SCALER ".regs-apiodma", 0x4000);
+    memory_region_enable_lockless_io(&scaler->apiodma_iomem);
+    sysbus_init_mmio(sbd, &scaler->regs_iomem);
+    sysbus_init_mmio(sbd, &scaler->apiodma_iomem);
+
+    for (i = 0; i < 2; i++) { sysbus_init_irq(sbd, &scaler->irqs[i]); }
+
+    scaler->bh = aio_bh_new(qemu_get_aio_context(), apple_scaler_bh, scaler);
+}
+
 static void apple_scaler_realize(DeviceState* dev, Error** errp)
 {
-    // AppleScalerState *scaler = APPLE_SCALER(dev);
-    //
-    // QEMU_LOCK_GUARD(&scaler->lock);
+    address_space_init(&APPLE_SCALER(dev)->dma_as, MEMORY_REGION(object_property_get_link(OBJECT(dev), "dma-mr", errp)),
+                       "scaler0.dma");
 }
 
 static void apple_scaler_class_init(ObjectClass* klass, const void* data)
@@ -1285,43 +1309,4 @@ static void apple_scaler_class_init(ObjectClass* klass, const void* data)
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleScalerState, apple_scaler, APPLE_SCALER, SYS_BUS_DEVICE)
-
-SysBusDevice* apple_scaler_create(AppleDTNode* node, MemoryRegion* dma_mr)
-{
-    DeviceState*      dev;
-    SysBusDevice*     sbd;
-    AppleScalerState* scaler;
-    AppleDTProp*      prop;
-    uint64_t*         reg;
-    int               i;
-
-    assert_nonnull(node);
-    assert_nonnull(dma_mr);
-
-    dev    = qdev_new(TYPE_APPLE_SCALER);
-    sbd    = SYS_BUS_DEVICE(dev);
-    scaler = APPLE_SCALER(sbd);
-
-    qemu_mutex_init(&scaler->lock);
-
-    scaler->dma_mr = dma_mr;
-    object_property_add_const_link(OBJECT(scaler), "dma_mr", OBJECT(scaler->dma_mr));
-    address_space_init(&scaler->dma_as, scaler->dma_mr, "scaler0.dma");
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-    reg = (uint64_t*)prop->data;
-    memory_region_init_io(&scaler->regs[0], OBJECT(scaler), &apple_scaler_reg_ops, scaler, "scaler0.regs0", reg[1]);
-    memory_region_enable_lockless_io(&scaler->regs[0]);
-    memory_region_init_io(&scaler->regs[1], OBJECT(scaler), &apple_scaler_unk_reg_ops, scaler, "scaler0.regs1", reg[3]);
-    memory_region_enable_lockless_io(&scaler->regs[1]);
-    sysbus_init_mmio(sbd, &scaler->regs[0]);
-    sysbus_init_mmio(sbd, &scaler->regs[1]);
-
-    for (i = 0; i < 2; i++) { sysbus_init_irq(sbd, &scaler->irqs[i]); }
-
-    scaler->bh = aio_bh_new(qemu_get_aio_context(), apple_scaler_bh, scaler);
-
-    return sbd;
-}
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleScalerState, apple_scaler, APPLE_SCALER, SYS_BUS_DEVICE)

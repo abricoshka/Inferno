@@ -30,5 +30,3 @@
 
 #define TYPE_APPLE_MCA "apple.mca"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleMCAState, APPLE_MCA)
-
-SysBusDevice* apple_mca_create(AppleDTNode* node, AppleSIODMAEndpoint* tx_ep, AppleSIODMAEndpoint* rx_ep);

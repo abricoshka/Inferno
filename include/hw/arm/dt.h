@@ -65,15 +65,7 @@ uint16_t     apple_dt_get_prop_u16(AppleDTNode* node, const char* name, Error** 
 uint32_t     apple_dt_get_prop_u32(AppleDTNode* node, const char* name, Error** errp);
 uint64_t     apple_dt_get_prop_u64(AppleDTNode* node, const char* name, Error** errp);
 
-void apple_dt_connect_function_prop_out_in(DeviceState* target_device, DeviceState* src_device,
-                                           AppleDTProp* function_prop, const char* name);
-void apple_dt_connect_function_prop_out_in_gpio(DeviceState* src_device, AppleDTProp* function_prop,
-                                                const char* gpio_name);
-void apple_dt_connect_function_prop_in_out(DeviceState* target_device, DeviceState* src_device,
-                                           AppleDTProp* function_prop, const char* name);
-void apple_dt_connect_function_prop_in_out_gpio(DeviceState* src_device, AppleDTProp* function_prop,
-                                                const char* gpio_name);
-
+void     apple_dt_destroy(AppleDTNode* root);
 uint64_t apple_dt_finalise(AppleDTNode* root);
 void     apple_dt_serialise(AppleDTNode* root, void* buf);
 void     apple_dt_unfinalise(AppleDTNode* root);

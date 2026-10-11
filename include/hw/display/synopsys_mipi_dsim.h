@@ -20,10 +20,7 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/sysbus.h"
 
 #define TYPE_SYNOPSYS_MIPI_DSIM "synopsys-mipi-dsim"
 OBJECT_DECLARE_SIMPLE_TYPE(SynopsysMIPIDSIMState, SYNOPSYS_MIPI_DSIM);
-
-SysBusDevice* synopsys_mipi_dsim_create(AppleDTNode* node);

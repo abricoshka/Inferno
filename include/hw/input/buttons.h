@@ -2,6 +2,7 @@
  * Apple iPhone 11 Buttons
  *
  * Copyright (c) 2025-2026 Christian Inci (chris-pcguy).
+ * Copyright (c) 2025-2026 Visual Ehrmanntraut (VisualEhrmanntraut).
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -19,7 +20,8 @@
 
 #pragma once
 
-#include "hw/arm/dt.h"
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 
-SysBusDevice* apple_buttons_create(AppleDTNode* node);
+#define TYPE_APPLE_BUTTONS "apple-buttons"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleButtonsState, APPLE_BUTTONS)

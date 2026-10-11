@@ -42,14 +42,19 @@ struct AppleA7IOP
     SysBusDevice parent_obj;
 
     /*< public >*/
+    /* Set by subclasses in their instance_init. */
     const char*          role;
-    MemoryRegion         mmio;
     const AppleA7IOPOps* ops;
-    QemuMutex            lock;
-    AppleA7IOPMailbox*   ap_mailbox;
-    AppleA7IOPMailbox*   iop_mailbox;
-    uint32_t             cpu_status;
-    uint32_t             cpu_ctrl;
+    QEMUBHFunc*          handle_messages;
+
+    uint32_t           version;
+    uint64_t           mmio_size;
+    MemoryRegion       mmio;
+    QemuMutex          lock;
+    AppleA7IOPMailbox* ap_mailbox;
+    AppleA7IOPMailbox* iop_mailbox;
+    uint32_t           cpu_status;
+    uint32_t           cpu_ctrl;
 };
 
 bool     apple_a7iop_send_ap(AppleA7IOP* a7iop, const AppleA7IOPMessage* message);
@@ -61,5 +66,5 @@ uint32_t apple_a7iop_get_cpu_status(AppleA7IOP* a7iop);
 void     apple_a7iop_set_cpu_status(AppleA7IOP* a7iop, uint32_t value);
 uint32_t apple_a7iop_get_cpu_ctrl(AppleA7IOP* a7iop);
 void     apple_a7iop_set_cpu_ctrl(AppleA7IOP* a7iop, uint32_t value);
-void     apple_a7iop_init(AppleA7IOP* a7iop, const char* role, uint64_t mmio_size, AppleA7IOPVersion version,
-                          const AppleA7IOPOps* ops, QEMUBHFunc* handle_messages_func);
+/* Inputs `irq` to `irq + 3` of `intc` are IOP empty, IOP non-empty, AP empty and AP non-empty. */
+void apple_a7iop_connect_irqs(AppleA7IOP* a7iop, DeviceState* intc, uint32_t irq);

@@ -182,37 +182,18 @@ static void apple_sart_reset_enter(Object* obj, ResetType type)
     memset(s->regions, 0, sizeof(s->regions));
 }
 
-SysBusDevice* apple_sart_from_node(AppleDTNode* node)
+static void apple_sart_init(Object* obj)
 {
-    DeviceState*    dev;
-    AppleSARTState* s;
-    SysBusDevice*   sbd;
-    AppleDTProp*    prop;
-    uint64_t*       reg;
+    AppleSARTState* s   = APPLE_SART(obj);
+    SysBusDevice*   sbd = SYS_BUS_DEVICE(obj);
 
-    dev = qdev_new(TYPE_APPLE_SART);
-    s   = APPLE_SART(dev);
-    sbd = SYS_BUS_DEVICE(dev);
+    s->version = 1;
 
-    dev->id = apple_dt_get_prop_strdup(node, "name", &error_fatal);
-
-    // iOS 13 => v1?
-    s->version = apple_dt_get_prop_u32_or(node, "sart-version", 1, &error_fatal);
-    assert_cmpuint(s->version, >=, 1);
-    assert_cmpuint(s->version, <=, 3);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-    memory_region_init_io(&s->iomem, OBJECT(dev), &base_reg_ops, s, TYPE_APPLE_SART ".reg", reg[1]);
+    memory_region_init_io(&s->iomem, obj, &base_reg_ops, s, TYPE_APPLE_SART ".reg", sizeof(s->reg));
     sysbus_init_mmio(sbd, &s->iomem);
-    memory_region_init_iommu(&s->iommu, sizeof(AppleSARTIOMMUMemoryRegion), TYPE_APPLE_SART_IOMMU_MEMORY_REGION,
-                             OBJECT(s), dev->id, 1ULL << SART_MAX_VA_BITS);
-
+    memory_region_init_iommu(&s->iommu, sizeof(AppleSARTIOMMUMemoryRegion), TYPE_APPLE_SART_IOMMU_MEMORY_REGION, obj,
+                             TYPE_APPLE_SART ".iommu", 1ULL << SART_MAX_VA_BITS);
     sysbus_init_mmio(sbd, MEMORY_REGION(&s->iommu));
-
-    return sbd;
 }
 
 static void apple_sart_class_init(ObjectClass* klass, const void* data)
@@ -237,7 +218,8 @@ static const TypeInfo apple_sart_types[] = {
         .name   = TYPE_APPLE_SART,
         .parent = TYPE_SYS_BUS_DEVICE,
         OBJECT_TYPE_INSTANCE(AppleSARTState),
-        .class_init = apple_sart_class_init,
+        .instance_init = apple_sart_init,
+        .class_init    = apple_sart_class_init,
     },
     {
         .parent     = TYPE_IOMMU_MEMORY_REGION,

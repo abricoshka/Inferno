@@ -20,7 +20,6 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/dt.h"
 #include "hw/misc/a7iop/core.h"
 #include "hw/sysbus.h"
 #include "qom/object.h"
@@ -68,5 +67,3 @@ struct AppleSEPSim
     AppleSEPSimOOLInfo  ool_info[SEP_ENDPOINT_MAX];
     AppleSEPSimOOLState ool_state[SEP_ENDPOINT_MAX];
 };
-
-AppleSEPSim* apple_sep_sim_from_node(AppleDTNode* node, bool modern);

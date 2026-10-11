@@ -24,6 +24,7 @@
 #include "hw/misc/a7iop/rtkit.h"
 #include "hw/nvme/nvme.h"
 #include "hw/pci/msi.h"
+#include "hw/qdev-properties.h"
 #include "qemu/log.h"
 
 #if 0
@@ -37,9 +38,6 @@
         do { }                \
         while (0)
 #endif
-
-#define TYPE_APPLE_ANS "apple-ans"
-OBJECT_DECLARE_SIMPLE_TYPE(AppleANSState, APPLE_ANS)
 
 #define ANS_LOG_MSG(ep, msg)                                                                        \
     do {                                                                                            \
@@ -186,51 +184,27 @@ static const AppleRTKitOps ans_rtkit_ops = {
     .wakeup = apple_ans_start,
 };
 
-SysBusDevice* apple_ans_from_node(AppleDTNode* node, AppleA7IOPVersion version, PCIBus* pci_bus)
+static void apple_ans_init(Object* obj)
 {
-    DeviceState*   dev;
-    AppleANSState* s;
-    SysBusDevice*  sbd;
-    AppleDTNode*   child;
-    AppleDTProp*   prop;
-    uint64_t*      reg;
-    MemoryRegion*  alias;
+    DeviceState*   dev = DEVICE(obj);
+    AppleANSState* s   = APPLE_ANS(obj);
     PCIDevice*     pci_dev;
 
-    dev = qdev_new(TYPE_APPLE_ANS);
-    s   = APPLE_ANS(dev);
-    sbd = SYS_BUS_DEVICE(dev);
-
-    prop = apple_dt_get_prop(node, "reg");
-    assert_nonnull(prop);
-
-    reg = (uint64_t*)prop->data;
-
-    s->rtk = apple_rtkit_new(s, "ANS2", reg[1], version, &ans_rtkit_ops);
-    object_property_add_child(OBJECT(s), "rtkit", OBJECT(s->rtk));
+    s->rtk                         = APPLE_RTKIT(qdev_new(TYPE_APPLE_RTKIT));
+    s->rtk->opaque                 = s;
+    s->rtk->ops                    = &ans_rtkit_ops;
+    APPLE_A7IOP(s->rtk)->role      = "ANS2";
+    APPLE_A7IOP(s->rtk)->mmio_size = 0xC000;
+    object_property_add_child(obj, "rtkit", OBJECT(s->rtk));
     apple_rtkit_register_user_ep(s->rtk, 0, s, apple_ans_ep_handler);
-    sysbus_init_mmio(sbd, sysbus_mmio_get_region(SYS_BUS_DEVICE(s->rtk), 0));
 
-    memory_region_init_io(&s->iomems[1], OBJECT(s), &ascv2_core_reg_ops, s, TYPE_APPLE_ANS ".ascv2-core-reg", reg[3]);
-    sysbus_init_mmio(sbd, &s->iomems[1]);
-
-    memory_region_init_io(&s->iomems[2], OBJECT(s), &iop_autoboot_reg_ops, s, TYPE_APPLE_ANS ".iop-autoboot-reg",
-                          reg[5]);
-    sysbus_init_mmio(sbd, &s->iomems[2]);
-
-    sysbus_pass_irq(sbd, SYS_BUS_DEVICE(s->rtk));
-    sysbus_init_irq(sbd, &s->irq);
     qdev_init_gpio_in_named(dev, apple_ans_set_irq, "interrupt_pci", 1);
 
-    child = apple_dt_get_node(node, "iop-ans-nub");
-    assert_nonnull(child);
+    object_property_add_link(obj, "pci-bus", TYPE_PCI_BUS, (Object**)&s->pci_bus,
+                             qdev_prop_allow_set_link_before_realize, OBJ_PROP_LINK_STRONG);
 
-    apple_dt_set_prop_u32(child, "pre-loaded", 1);
-    apple_dt_set_prop_u32(child, "running", 1);
-
-    s->pci_bus = pci_bus;
-    pci_dev    = pci_new(-1, TYPE_NVME);
-    s->nvme    = NVME(pci_dev);
+    pci_dev = pci_new(-1, TYPE_NVME);
+    s->nvme = NVME(pci_dev);
 
     object_property_set_str(OBJECT(s->nvme), "serial", "ChefKiss-ANS", &error_fatal);
     object_property_set_bool(OBJECT(s->nvme), "is-apple-ans", true, &error_fatal);
@@ -240,20 +214,33 @@ SysBusDevice* apple_ans_from_node(AppleDTNode* node, AppleA7IOPVersion version, 
     object_property_set_uint(OBJECT(s->nvme), "physical_block_size", 4096, &error_fatal);
     object_property_set_bool(OBJECT(s->nvme), "msix-exclusive-bar", true, &error_fatal);
     object_property_add_child(OBJECT(s), "nvme", OBJECT(s->nvme));
-
-    memory_region_init_io(&s->iomems[3], OBJECT(s), &apple_ans_vendor_reg_ops, s, TYPE_APPLE_ANS ".mmio", reg[7]);
-    alias = g_new(MemoryRegion, 1);
-    memory_region_init_alias(alias, OBJECT(s), TYPE_APPLE_ANS ".nvme", &s->nvme->iomem, 0, 0x1200);
-    memory_region_add_subregion_overlap(&s->iomems[3], 0, alias, 1);
-    sysbus_init_mmio(sbd, &s->iomems[3]);
-
-    return sbd;
 }
 
 static void apple_ans_realize(DeviceState* dev, Error** errp)
 {
     AppleANSState* s       = APPLE_ANS(dev);
+    SysBusDevice*  sbd     = SYS_BUS_DEVICE(dev);
     PCIDevice*     pci_dev = PCI_DEVICE(s->nvme);
+    MemoryRegion*  alias;
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(s->rtk), errp)) { return; }
+    sysbus_init_mmio(sbd, sysbus_mmio_get_region(SYS_BUS_DEVICE(s->rtk), 0));
+
+    memory_region_init_io(&s->iomems[1], OBJECT(s), &ascv2_core_reg_ops, s, TYPE_APPLE_ANS ".ascv2-core-reg", 0x4000);
+    sysbus_init_mmio(sbd, &s->iomems[1]);
+
+    memory_region_init_io(&s->iomems[2], OBJECT(s), &iop_autoboot_reg_ops, s, TYPE_APPLE_ANS ".iop-autoboot-reg", 0x4);
+    sysbus_init_mmio(sbd, &s->iomems[2]);
+
+    memory_region_init_io(&s->iomems[3], OBJECT(s), &apple_ans_vendor_reg_ops, s, TYPE_APPLE_ANS ".mmio", 0x60000);
+    alias = g_new(MemoryRegion, 1);
+    memory_region_init_alias(alias, OBJECT(s), TYPE_APPLE_ANS ".nvme", &s->nvme->iomem, 0, 0x1200);
+    memory_region_add_subregion_overlap(&s->iomems[3], 0, alias, 1);
+    sysbus_init_mmio(sbd, &s->iomems[3]);
+
+    sysbus_pass_irq(sbd, SYS_BUS_DEVICE(s->rtk));
+    sysbus_init_irq(sbd, &s->irq);
+
     qdev_realize(DEVICE(s->nvme), BUS(s->pci_bus), &error_fatal);
     assert_true(pci_is_express(pci_dev));
     pcie_endpoint_cap_init(pci_dev, 0);
@@ -273,8 +260,6 @@ static void apple_ans_realize(DeviceState* dev, Error** errp)
     pci_dev->wmask[PCI_INTERRUPT_LINE] = 0x0;
     //pci_default_write_config(pci_dev, PCI_INTERRUPT_LINE, 0xff, 1);
 #endif
-
-    sysbus_realize(SYS_BUS_DEVICE(s->rtk), errp);
 }
 
 static void apple_ans_unrealize(DeviceState* dev)
@@ -305,4 +290,4 @@ static void apple_ans_class_init(ObjectClass* klass, const void* data)
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleANSState, apple_ans, APPLE_ANS, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_INSTANCE_INIT(AppleANSState, apple_ans, APPLE_ANS, SYS_BUS_DEVICE)
