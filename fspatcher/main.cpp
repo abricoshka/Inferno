@@ -363,17 +363,17 @@ namespace
 
         app.add_option("-d,--disk", diskPath, "Patch DYLD_CACHE_PATH in the System volume of the disk image IMAGE")
             ->check(CLI::ExistingFile);
-        app.add_option("-c,--cryptex", cryptex, "With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead");
+        app.add_flag("-c,--cryptex", cryptex, "With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead");
         const auto revertOnlyOpt =
-            app.add_option("-r,--revert", revertOnly, "Revert bytes to the original state, without reapplying patches");
-        const auto dryRunOpt = app.add_option("-n,--dry-run", dryRun,
+            app.add_flag("-r,--revert", revertOnly, "Revert bytes to the original state, without reapplying patches");
+        const auto dryRunOpt = app.add_flag("-n,--dry-run", dryRun,
                                               "Revert bytes and run patcher, but do not apply the patch modifications");
         revertOnlyOpt->excludes(dryRunOpt);
         dryRunOpt->excludes(revertOnlyOpt);
-        app.add_option("--unredact-logs", unredactLogs, "Patch libsystem_trace.dylib to unredact logs");
+        app.add_flag("--unredact-logs", unredactLogs, "Patch libsystem_trace.dylib to unredact logs");
         const auto openglesOpt =
-            app.add_option("--opengles", opengles, "Apply minimal patches necessary for the lack of Metal rendering");
-        const auto metalOpt = app.add_option("--metal", metal, "Apply no rendering patches");
+            app.add_flag("--opengles", opengles, "Apply minimal patches necessary for the lack of Metal rendering");
+        const auto metalOpt = app.add_flag("--metal", metal, "Apply no rendering patches");
         openglesOpt->excludes(metalOpt);
         metalOpt->excludes(openglesOpt);
         app.add_option("dyld_cache_path", cachePath, "Path to the main dyld_shared_cache_arm64e file")->required();
