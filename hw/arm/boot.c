@@ -44,6 +44,7 @@
 
 static const char* KEEP_COMP[] = {
     "adbe0,s8000\0$",
+    // "aop-audio-haptic\0$",
     // "aop-audio\0$",
     // "aop-audio-control\0$",
     // "aop-audio-speaker\0$",
