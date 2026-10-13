@@ -831,16 +831,15 @@ static void s8000_create_usb(AppleS8000MachineState* s8000)
     object_property_add_child(OBJECT(s8000), "otg", OBJECT(otg));
 
     host = usb_uplink_new(s8000->usb_uplink_type, s8000->usb_uplink_addr, &error_fatal);
-    object_property_add_child(OBJECT(s8000), "usb-host", OBJECT(host));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(host), &error_fatal);
     object_property_set_link(OBJECT(otg), "host", OBJECT(host), &error_fatal);
-    object_unref(OBJECT(host));
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(otg), &error_fatal);
 
     sysbus_mmio_map(SYS_BUS_DEVICE(otg), 0, 0x20C000030);
     sysbus_mmio_map(SYS_BUS_DEVICE(otg), 1, 0x20E0D8000);
     sysbus_mmio_map(SYS_BUS_DEVICE(otg), 2, 0x20C100000);
     sysbus_mmio_map(SYS_BUS_DEVICE(otg), 3, 0x20C900000);
-
-    sysbus_realize_and_unref(SYS_BUS_DEVICE(otg), &error_fatal);
 
     sysbus_connect_irq(SYS_BUS_DEVICE(otg), 0, s8000_irq(s8000, 0xD6));
 }

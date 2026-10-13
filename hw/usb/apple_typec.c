@@ -55,7 +55,6 @@ static void apple_typec_realize(DeviceState* dev, Error** errp)
         error_setg(errp, "`host' link is not set");
         return;
     }
-    sysbus_realize(s->host, errp);
 
     bus = QLIST_FIRST(&DEVICE(s->host)->child_bus);
     qdev_realize(DEVICE(s->dwc2.device), bus, errp);
