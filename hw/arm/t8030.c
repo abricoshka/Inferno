@@ -1891,6 +1891,7 @@ static void t8030_init(MachineState* machine)
     DeviceState*            aop_gpio;
     AppleSPMIState*         spmi;
     SysBusDevice*           sbd;
+    SysBusDevice*           aop;
     SysBusDevice*           sio;
     SysBusDevice*           sart;
     AppleSPIState*          spi;
@@ -2371,20 +2372,20 @@ static void t8030_init(MachineState* machine)
     dart = apple_dart_create(0x4000, 0x8001, 1, 0x5, t8030_irq(t8030, 0xE0));
     apple_dart_set_dart_instance(dart, 0, 0x24AC00000);
 
-    sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_AOP));
-    object_property_add_const_link(OBJECT(sbd), "dma-mr", OBJECT(apple_dart_iommu_mr(dart, 0)));
+    aop = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_AOP));
+    object_property_add_const_link(OBJECT(aop), "dma-mr", OBJECT(apple_dart_iommu_mr(dart, 0)));
 
     // sbd = apple_aop_audio_create(APPLE_AOP(aop));
     // assert_nonnull(sbd);
     // object_property_add_child(OBJECT(aop), "aop-audio", OBJECT(sbd));
     // sysbus_realize_and_unref(sbd, &error_fatal);
 
-    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_realize_and_unref(aop, &error_fatal);
 
-    sysbus_mmio_map(sbd, 0, 0x24A400000);
-    sysbus_mmio_map(sbd, 1, 0x24A050000);
+    sysbus_mmio_map(aop, 0, 0x24A400000);
+    sysbus_mmio_map(aop, 1, 0x24A050000);
 
-    apple_a7iop_connect_irqs(APPLE_A7IOP(sbd), DEVICE(t8030->aic), 0xD1);
+    apple_a7iop_connect_irqs(APPLE_A7IOP(aop), DEVICE(t8030->aic), 0xD1);
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_MCA));
     object_property_add_child(OBJECT(t8030), "mca", OBJECT(sbd));
