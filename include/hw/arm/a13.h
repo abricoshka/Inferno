@@ -113,13 +113,6 @@ typedef struct AppleA13State
     A13_CPREG_VAR_DEF(UPMPCM);
     A13_CPREG_VAR_DEF(UPMCR0);
     A13_CPREG_VAR_DEF(UPMSR);
-    /* CTRR (per-core on hardware) */
-    A13_CPREG_VAR_DEF(CTRR_A_LWR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_A_UPR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_B_LWR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_B_UPR_EL1);
-    A13_CPREG_VAR_DEF(CTRR_CTL_EL1);
-    A13_CPREG_VAR_DEF(CTRR_LOCK_EL1);
 } AppleA13State;
 
 typedef struct AppleA13Cluster
@@ -132,6 +125,12 @@ typedef struct AppleA13Cluster
     uint32_t        noWakeIPI[A13_MAX_CPU];
     uint64_t        ipi_cr;
     QTAILQ_ENTRY(AppleA13Cluster) next;
+    A13_CPREG_VAR_DEF(CTRR_A_LWR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_A_UPR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_B_LWR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_B_UPR_EL1);
+    A13_CPREG_VAR_DEF(CTRR_CTL_EL1);
+    A13_CPREG_VAR_DEF(CTRR_LOCK_EL1);
 } AppleA13Cluster;
 
 AppleA13State* apple_a13_create(const char* name, uint32_t cpu_id, uint32_t phys_id, uint32_t cluster_id,
