@@ -863,9 +863,6 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_str(node, "graphics-featureset-class", "GLES2,0");
     apple_dt_set_prop_str(node, "graphics-featureset-fallbacks", "");
     apple_dt_set_prop_str(node, "artwork-display-gamut", "sRGB");
-    apple_dt_set_prop_str(node, "jetsam-properties-product-type", "N104");
-    // TODO: PMP
-    apple_dt_set_prop_str(t8030->device_tree, "target-type", "n104sim");
 
     node = apple_dt_get_node(t8030->device_tree, "chosen/lock-regs/amcc");
     if (node != NULL) {
@@ -2457,6 +2454,7 @@ static void t8030_init(MachineState* machine)
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_DISPLAY_PIPE_V4));
     object_property_add_child(OBJECT(t8030), "disp0", OBJECT(sbd));
     object_property_add_const_link(OBJECT(sbd), "dma-mr", OBJECT(apple_dart_iommu_mr(dart, 0)));
+    object_property_add_const_link(OBJECT(sbd), "piodma-dma-mr", OBJECT(apple_dart_iommu_mr(dart, 4)));
     qdev_prop_set_uint32(DEVICE(sbd), "width", t8030->disp_width);
     qdev_prop_set_uint32(DEVICE(sbd), "height", t8030->disp_height);
     sysbus_realize_and_unref(sbd, &error_fatal);
@@ -2470,6 +2468,7 @@ static void t8030_init(MachineState* machine)
     sysbus_connect_irq(sbd, 6, t8030_irq(t8030, 0x139));
     sysbus_connect_irq(sbd, 7, t8030_irq(t8030, 0x144));
     sysbus_connect_irq(sbd, 8, t8030_irq(t8030, 0x145));
+    create_unimplemented_device("disp0-ipawrap", 0x230708000, 0x1000);
 
     dart = apple_dart_create(0x4000, 0x8001, 1, 0x5, t8030_irq(t8030, 0xE0));
     apple_dart_set_dart_instance(dart, 0, 0x24AC00000);

@@ -61,3 +61,10 @@ bool ck_patcher_find_callback(CKPatcherRange* range, const char* name, const uin
 bool ck_patcher_find_replace(CKPatcherRange* range, const char* name, const uint8_t* pattern, const uint8_t* mask,
                              size_t len, size_t align, uint32_t count, const uint8_t* replacement,
                              const uint8_t* replacement_mask, size_t replace_off, size_t replace_len);
+
+/// Thumb-2 `MOVW Rd, #imm16` (T3) at `buffer`.
+bool ck_patcher_thumb_movw(const uint8_t* buffer, uint16_t* imm);
+/// Thumb-2 `STR.W Rt, [Rn, #imm12]` (T3) at `buffer`.
+bool ck_patcher_thumb_str_imm12(const uint8_t* buffer, uint16_t* imm);
+/// Thumb-2 `B.W` (T4) or `BL` (T1) at `buffer`, which sits at `pc`.
+bool ck_patcher_thumb_branch(const uint8_t* buffer, uint32_t pc, uint32_t* target);

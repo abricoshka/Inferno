@@ -18,6 +18,7 @@
  */
 
 #include "hw/arm/patcher.h"
+#include "qemu/bitops.h"
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
 
@@ -168,4 +169,39 @@ uint8_t* ck_patcher_find_prev_insn(uint8_t* buffer, uint32_t num, uint32_t insn,
     }
 
     return NULL;
+}
+
+bool ck_patcher_thumb_movw(const uint8_t* buffer, uint16_t* imm)
+{
+    uint16_t hw1 = lduw_le_p(buffer);
+    uint16_t hw2 = lduw_le_p(buffer + 2);
+
+    if ((hw1 & 0xFBF0) != 0xF240 || (hw2 & 0x8000) != 0) { return false; }
+
+    *imm = extract32(hw1, 0, 4) << 12 | extract32(hw1, 10, 1) << 11 | extract32(hw2, 12, 3) << 8 | extract32(hw2, 0, 8);
+    return true;
+}
+
+bool ck_patcher_thumb_str_imm12(const uint8_t* buffer, uint16_t* imm)
+{
+    if ((lduw_le_p(buffer) & 0xFFF0) != 0xF8C0) { return false; }
+
+    *imm = extract32(lduw_le_p(buffer + 2), 0, 12);
+    return true;
+}
+
+bool ck_patcher_thumb_branch(const uint8_t* buffer, uint32_t pc, uint32_t* target)
+{
+    uint16_t hw1 = lduw_le_p(buffer);
+    uint16_t hw2 = lduw_le_p(buffer + 2);
+    uint32_t s;
+    uint32_t off;
+
+    if ((hw1 & 0xF800) != 0xF000 || (hw2 & 0x9000) != 0x9000) { return false; }
+
+    s       = extract32(hw1, 10, 1);
+    off     = s << 24 | (!(extract32(hw2, 13, 1) ^ s)) << 23 | (!(extract32(hw2, 11, 1) ^ s)) << 22
+              | extract32(hw1, 0, 10) << 12 | extract32(hw2, 0, 11) << 1;
+    *target = pc + 4 + sextract32(off, 0, 25);
+    return true;
 }
