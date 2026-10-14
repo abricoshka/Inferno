@@ -65,7 +65,7 @@ typedef struct
     hwaddr          panic_size;
     uint8_t         pmgr_reg[0x100000];
     MemoryRegion    amcc;
-    uint8_t         amcc_reg[0x100000];
+    uint8_t         amcc_reg[0x180000];
     bool            kaslr_off;
     bool            force_dfu;
     AppleDFUState*  dfu;

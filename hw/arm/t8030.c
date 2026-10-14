@@ -154,9 +154,9 @@
 #define PANIC_SIZE (0x100000)
 
 #define AMCC_BASE                               (0x200000000)
-#define AMCC_SIZE                               (0x100000)
 #define AMCC_PLANE_COUNT                        (4)
 #define AMCC_PLANE_STRIDE                       (0x40000)
+#define AMCC_SIZE                               (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE + 0x80000)
 #define AMCC_PLANE_BLK_MCC_CHANNEL_DEC(_p)      (0x4 + (_p) * AMCC_PLANE_STRIDE)
 #define AMCC_PLANE_BLK_MCC_CHANNEL_DEC_STACKED  BIT(0)
 #define AMCC_PLANE_BLK_HASH0_LO(_p)             (0x8 + (_p) * AMCC_PLANE_STRIDE)
