@@ -158,6 +158,7 @@ static const char* KEEP_COMP[] = {
     "mic-temp-sens,ica60\0$",
     "aapl,spmi\0$",
     "accbuck,fan53740\0$",
+    "mcc,t8030\0$",
 };
 
 static const char* REM_NAMES[] = {
@@ -208,9 +209,6 @@ static const char* REM_PROPS[] = {
 #endif
     "function-dock_parent",
     "function-error_handler",
-    "function-mcc_ctrl",
-    "function-mcc_dataset",
-    "mcc-power-gating",
     "nand-debug",
     "nvme-coastguard",    // FIXME: panic: "pmap_iommu_map failed\n"
     "soc-tuning",
