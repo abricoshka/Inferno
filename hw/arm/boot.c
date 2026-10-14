@@ -180,9 +180,7 @@ static const char* REM_NAMES[] = {
     "dart-isp\0$",
     "dart-jpeg0\0$",
     "dart-jpeg1\0$",
-    "dart-pmp\0$",
     "dockchannel-uart\0$",
-    "pmp\0$",
     "stockholm\0$",
     "stockholm-spmi\0$",
     "bluetooth-pcie\0$",
@@ -201,7 +199,6 @@ static const char* REM_NAMES[] = {
 
 static const char* REM_DEV_TYPES[] = {
     "wlan\0$",
-    "pmp\0$",
 };
 
 static const char* REM_PROPS[] = {
@@ -213,11 +210,9 @@ static const char* REM_PROPS[] = {
     "function-error_handler",
     "function-mcc_ctrl",
     "function-mcc_dataset",
-    "function-pmp_control",
     "mcc-power-gating",
     "nand-debug",
     "nvme-coastguard",    // FIXME: panic: "pmap_iommu_map failed\n"
-    "pmp",
     "soc-tuning",
     "invokes-sochot",
     "has-dapf",

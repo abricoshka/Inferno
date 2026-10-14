@@ -47,6 +47,7 @@
 #include "hw/i2c/apple_i2c.h"
 #include "hw/intc/apple_aic.h"
 #include "hw/misc/a7iop/core.h"
+#include "hw/misc/a7iop/rtkit.h"
 #include "hw/misc/aes.h"
 #include "hw/misc/aop.h"
 #include "hw/misc/baseband.h"
@@ -984,6 +985,11 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
+    node = apple_dt_get_node(t8030->device_tree, "arm-io/pmp/iop-pmp-nub");
+    assert_nonnull(node);
+    apple_dt_set_prop_u32(node, "pre-loaded", 1);
+    apple_dt_set_prop_u32(node, "running", 1);
+
     node = apple_dt_get_node(t8030->device_tree, "arm-io/spi1/multi-touch");
     assert_nonnull(node);
     apple_dt_set_prop_null(node, "function-power_ana");
@@ -1883,6 +1889,70 @@ static void t8030_reset(MachineState* machine, ResetType type)
     t8030_read_and_draw_boot_splash(t8030);
 }
 
+static void pmp_rtk_boot_done(void* opaque)
+{
+    AppleRTKit* rtk = opaque;
+    apple_rtkit_send_user_msg(rtk, 0, 0);    // ready
+}
+
+static AppleRTKitOps pmp_rtk_ops = {
+    .boot_done = pmp_rtk_boot_done,
+};
+
+static AppleDARTState* pmp_dart;
+static AddressSpace    pmp_dma_as;
+
+// 52..56 Cmd Type
+// 0: Ctrl? Command, 48..52
+//     0x00: Ready
+//     0x01: Init Memory
+//     0x02: Init Memory Ack
+// 1: eHub Command
+//     0x00/0x02: Node
+//     0x04/0x06: Time Series
+// 2: PM Command, 44..52
+// 3: pMon
+// 4..5: ??
+// 6: pBatt / Battery Report, bit 32: enable
+// 7: Fast Die
+static void pmp_rtk_ep0_handler(void* opaque, uint8_t ep, uint64_t msg)
+{
+    static const char* const domains[] = {"SOC", "DCS", "DISP", "AVE"};
+    static const char* const states[]  = {"VMIN", "VNOM", "VMAX"};
+    static const char* const devices[] = {
+        "CPU",  "ECPU", "PCPU", "GPU", "ISP",  "VDD_AVE", "DISP0", "VENC",
+        "VDEC", "JPEG", "MSR",  "ANE", "PCIE", "SBR",     "SEP",
+    };
+    AppleRTKit* rtk        = opaque;
+    uint8_t     buf[0x510] = {0};
+    uint64_t    cmd;
+
+    switch (extract64(msg, 52, 4)) {
+        case 0:
+            if (extract64(msg, 48, 4) != 1) { break; }
+
+            // fill the domain/device tables, ack without eHub
+            for (size_t i = 0; i < ARRAY_SIZE(domains); i++) {
+                strncpy((char*)buf + i * 0x2C, domains[i], 8);
+                for (size_t j = 0; j < ARRAY_SIZE(states); j++) {
+                    strncpy((char*)buf + i * 0x2C + 8 + j * 0xC, states[j], 8);
+                }
+            }
+            for (size_t i = 0; i < ARRAY_SIZE(devices); i++) { strncpy((char*)buf + 0xB0 + i * 0x18, devices[i], 8); }
+            dma_memory_write(&pmp_dma_as, extract64(msg, 0, 48) + 0x4000, buf, sizeof(buf), MEMTXATTRS_UNSPECIFIED);
+            apple_rtkit_send_user_msg(rtk, ep, deposit64(0, 48, 4, 2));
+            break;
+        case 2:
+            cmd = extract64(msg, 44, 8);
+            if (cmd >= 0xE) { break; }
+            msg = deposit64(msg, 44, 8, cmd + 1);
+            if (extract64(msg, 0, 32) == 0) { msg |= 1; }    // BIRQ/CIRQ fail on a zero payload
+            apple_rtkit_send_user_msg(rtk, ep, msg);
+            break;
+        default: break;
+    }
+}
+
 static void t8030_init(MachineState* machine)
 {
     AppleT8030MachineState* t8030;
@@ -2008,16 +2078,16 @@ static void t8030_init(MachineState* machine)
         {0x200148000, 0xD000},   {0x279000000, 0xD000},   {0x225000000, 0x15000}, {0x225004000, 0x4000},
         {0x225008000, 0x4000},   {0x226000000, 0x15000},  {0x226004000, 0x4000},  {0x226008000, 0x4000},
     };
-    /* 0: AKF, 1: ASCWrap, 2: PMS CSR */
+    /* 0: ASCWrap, 1: PMS CSR */
     static const hwaddr pmp_regs[][2] = {
-        {0x23BC00000, 0x60000}, {0x23B850000, 0x200000}, {0x23B500000, 0x60000}, {0x200020000, 0x4000},
-        {0x200060000, 0x4000},  {0x2000A0000, 0x4000},   {0x2000E0000, 0x4000},  {0x200154000, 0x4000},
-        {0x200204000, 0x4000},  {0x200244000, 0x4000},   {0x200284000, 0x4000},  {0x2002C4000, 0x4000},
-        {0x204D14000, 0x4000},  {0x210058000, 0x4000},   {0x210158000, 0x4000},  {0x210258000, 0x4000},
-        {0x210358000, 0x4000},  {0x210E20000, 0x60000},  {0x210E48000, 0x4000},  {0x211058000, 0x4000},
-        {0x211158000, 0x4000},  {0x211E20000, 0x60000},  {0x211E48000, 0x4000},  {0x23D100000, 0x14000},
-        {0x23D128000, 0x30000}, {0x23D180000, 0x4000},   {0x26B854000, 0x4000},  {0x26B8F0000, 0x4000},
-        {0x200170000, 0x4000},  {0x23500C000, 0x4000},   {0x23C100000, 0x4000},
+        {0x23B850000, 0x200000}, {0x23B500000, 0x60000}, {0x200020000, 0x4000},  {0x200060000, 0x4000},
+        {0x2000A0000, 0x4000},   {0x2000E0000, 0x4000},  {0x200154000, 0x4000},  {0x200204000, 0x4000},
+        {0x200244000, 0x4000},   {0x200284000, 0x4000},  {0x2002C4000, 0x4000},  {0x204D14000, 0x4000},
+        {0x210058000, 0x4000},   {0x210158000, 0x4000},  {0x210258000, 0x4000},  {0x210358000, 0x4000},
+        {0x210E20000, 0x60000},  {0x210E48000, 0x4000},  {0x211058000, 0x4000},  {0x211158000, 0x4000},
+        {0x211E20000, 0x60000},  {0x211E48000, 0x4000},  {0x23D100000, 0x14000}, {0x23D128000, 0x30000},
+        {0x23D180000, 0x4000},   {0x26B854000, 0x4000},  {0x26B8F0000, 0x4000},  {0x200170000, 0x4000},
+        {0x23500C000, 0x4000},   {0x23C100000, 0x4000},
     };
     MemoryRegion* mem = g_new(MemoryRegion, ARRAY_SIZE(pmgr_regs) + ARRAY_SIZE(pmp_regs));
     uint32_t      idx = 0;
@@ -2030,13 +2100,32 @@ static void t8030_init(MachineState* machine)
 
     t8030_pmgr_init_mmio(t8030, &mem[idx++], &pmgr_unk_reg_ops, NULL, "pmp-reg", pmp_regs[0][0], pmp_regs[0][1]);
     for (size_t i = 1; i < ARRAY_SIZE(pmp_regs); i++) {
-        if (pmp_regs[i][0] == 0 && pmp_regs[i][1] == 0) { continue; }
         snprintf(name, sizeof(name), "pmp-unk-reg-%zu", i - 1);
         t8030_pmgr_init_mmio(t8030, &mem[idx++], &pmgr_unk_reg_ops, NULL, name, pmp_regs[i][0], pmp_regs[i][1]);
     }
     /* FIXME: Each "Temp Sensor" actually houses multiple, each with different offsets and IRQs */
     create_unimplemented_device_with_val("PMGR SOC Die Temp Sensor", 0x23B2C4000, 0x34000, 0xAFAFAFAFAFAFAFAF);
     create_unimplemented_device_with_val("GPU MTR Temp Sensor", 0x23B2E0000, 0x8000, 0xAFAFAFAFAFAFAFAF);
+
+    dart = APPLE_DART(qdev_new(TYPE_APPLE_DART));
+    qdev_prop_set_uint32(DEVICE(dart), "page-size", 0x4000);
+    qdev_prop_set_uint64(DEVICE(dart), "sid-mask", 0x8001);
+    qdev_prop_set_uint32(DEVICE(dart), "num-instances", 1);
+    qdev_prop_set_uint32(DEVICE(dart), "dart-options", 0xD);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dart), &error_fatal);
+    apple_dart_set_dart_instance(dart, 0, 0x23B300000);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dart), 0, t8030_irq(t8030, 0x16A));
+    pmp_dart = dart;
+    address_space_init(&pmp_dma_as, MEMORY_REGION(apple_dart_iommu_mr(pmp_dart, 0)), "pmp.dma");
+
+    AppleRTKit* pmp_rtk             = APPLE_RTKIT(qdev_new(TYPE_APPLE_RTKIT));
+    APPLE_A7IOP(pmp_rtk)->role      = "PMP";
+    APPLE_A7IOP(pmp_rtk)->mmio_size = 0x60000;
+    pmp_rtk->ops                    = &pmp_rtk_ops;
+    apple_rtkit_register_user_ep(pmp_rtk, 0, pmp_rtk, pmp_rtk_ep0_handler);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(pmp_rtk), &error_fatal);
+    apple_a7iop_connect_irqs(APPLE_A7IOP(pmp_rtk), DEVICE(t8030->aic), 0x166);
+    sysbus_mmio_map(SYS_BUS_DEVICE(pmp_rtk), 0, 0x23BC00000);
 
     memory_region_init_io(&t8030->amcc, OBJECT(t8030), &amcc_reg_ops, t8030, "amcc", AMCC_SIZE);
     memory_region_add_subregion(get_system_memory(), AMCC_BASE, &t8030->amcc);
