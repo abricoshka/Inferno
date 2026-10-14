@@ -118,7 +118,7 @@ static void progress_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
                     DPRINTF("%s: SHMBUF_TEST0: trace_data8:0x%" PRIX64 ": "
                             "shmbuf=0x" HWADDR_FMT_plx ": ep=0x%02x, tag=0x%02x, opcode=0x%02x(%u), "
                             "param=0x%02x, data=0x%08x\n",
-                            s->mailbox->role, data, shmbuf_base, sep_msg.ep, sep_msg.tag, sep_msg.op, sep_msg.op,
+                            s->sep->mailbox->role, data, shmbuf_base, sep_msg.ep, sep_msg.tag, sep_msg.op, sep_msg.op,
                             sep_msg.param, sep_msg.data);
                     int debug_trace_mmio_index = -1;
                     if (s->sep->chip_id == 0x8015) { debug_trace_mmio_index = 11; }
@@ -128,7 +128,7 @@ static void progress_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
                     if (debug_trace_mmio_index != -1) {
                         s->sep->shmbuf_base = shmbuf_base;
                         // uint64_t tracebuf_mmio_addr = shmbuf_base + s->trace_buffer_base_offset;
-                        // DPRINTF("%s: SHMBUF_TEST1: tracbuf=0x" HWADDR_FMT_plx "\n", s->mailbox->role,
+                        // DPRINTF("%s: SHMBUF_TEST1: tracbuf=0x" HWADDR_FMT_plx "\n", s->sep->mailbox->role,
                         //         tracebuf_mmio_addr);
                         // _if SEP_ENABLE_DEBUG_TRACE_MAPPING
                         // TODO: T8020 isn't handled here anymore, but T8015

@@ -454,25 +454,6 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
 
     s->modern = s->parent_obj.version == APPLE_A7IOP_V4;
 
-#ifdef SEP_ENABLE_TRACE_BUFFER
-    if (s->chip_id >= 0x8020) {
-        if (s->chip_id == 0x8020) { assert_not_reached(); }
-        s->shmbuf_base = SEP_SHMBUF_BASE;
-        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
-    }
-    else if (s->chip_id == 0x8015) {
-        s->shmbuf_base = 0;    // is dynamic
-        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
-    }
-    else if (s->chip_id == 0x8000) {
-        s->shmbuf_base = 0;    // is dynamic ???
-        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
-    }
-    else {
-        assert_not_reached();
-    }
-#endif
-
     if (s->modern) { s->cpu = &apple_a13_create("sep-cpu", s->cpu_id, BIT_ULL(30), -1, 'S')->parent_obj; }
     else {
         s->cpu = &apple_a9_create("sep-cpu", s->cpu_id, BIT_ULL(30))->parent_obj;
@@ -485,14 +466,6 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
         memory_region_add_subregion(apple_sep_cpu_memory(s), 0, mr0);
     }
 
-#ifdef SEP_ENABLE_OVERWRITE_SHMBUF_OBJECTS
-    // hack
-    if (s->chip_id >= 0x8020) {
-        MemoryRegion* mr1 = g_new0(MemoryRegion, 1);
-        memory_region_init_alias(mr1, OBJECT(s), "sep_shmbuf_hdr", s->ool_mr, s->shmbuf_base, 0x4000);
-        memory_region_add_subregion(get_system_memory(), s->shmbuf_base, mr1);
-    }
-#endif
     object_property_set_uint(OBJECT(s->cpu), "rvbar", s->base & ~0xFFF, NULL);
     object_property_add_child(OBJECT(s), DEVICE(s->cpu)->id, OBJECT(s->cpu));
 
@@ -597,6 +570,34 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
     apple_sep_dma_init(s);
 
     s->mailbox = s->parent_obj.iop_mailbox;
+
+#ifdef SEP_ENABLE_TRACE_BUFFER
+    if (s->chip_id >= 0x8020) {
+        if (s->chip_id == 0x8020) { assert_not_reached(); }
+        s->shmbuf_base = SEP_SHMBUF_BASE;
+        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
+    }
+    else if (s->chip_id == 0x8015) {
+        s->shmbuf_base = 0;    // is dynamic
+        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
+    }
+    else if (s->chip_id == 0x8000) {
+        s->shmbuf_base = 0;    // is dynamic ???
+        apple_sep_debug_trace_set_region(s->debug_trace, 0x10000, 0x10000);
+    }
+    else {
+        assert_not_reached();
+    }
+#endif
+
+#ifdef SEP_ENABLE_OVERWRITE_SHMBUF_OBJECTS
+    // hack
+    if (s->chip_id >= 0x8020) {
+        MemoryRegion* mr1 = g_new0(MemoryRegion, 1);
+        memory_region_init_alias(mr1, OBJECT(s), "sep_shmbuf_hdr", s->ool_mr, s->shmbuf_base, 0x4000);
+        memory_region_add_subregion(get_system_memory(), s->shmbuf_base, mr1);
+    }
+#endif
 
     qdev_realize(DEVICE(s->cpu), NULL, errp);
     qdev_connect_gpio_out_named(DEVICE(s->mailbox), APPLE_A7IOP_SEP_CPU_IRQ, 0,

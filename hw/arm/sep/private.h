@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/cutils.h"
 #include "qom/object.h"
 #include "hw/arm/sep/emu.h"
 #include "hw/i2c/apple_i2c.h"

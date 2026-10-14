@@ -45,7 +45,7 @@ void apple_sep_debug_trace_enable(AppleSEPDebugTraceState* s)
 {
     DPRINTF("SEP_PROGRESS: Enable Trace Buffer: s->shmbuf_base: "
             "0x" HWADDR_FMT_plx "\n",
-            s->shmbuf_base);
+            s->sep->shmbuf_base);
 
     if (!s->sep->shmbuf_base) { return; }
 
@@ -925,7 +925,7 @@ static void apple_sep_debug_trace_class_init(ObjectClass* klass, const void* cla
     dc->realize      = apple_sep_debug_trace_realize;
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSEPDebugTraceState, apple_sep_debug_trace, APPLE_SEP_DEBUG_TRACE, I2C_SLAVE)
+OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSEPDebugTraceState, apple_sep_debug_trace, APPLE_SEP_DEBUG_TRACE, SYS_BUS_DEVICE)
 
 AppleSEPDebugTraceState* apple_sep_debug_trace_create(AppleSEP* sep)
 {
