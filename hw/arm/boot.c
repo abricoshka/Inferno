@@ -196,6 +196,7 @@ static const char* REM_NAMES[] = {
     // doing this won't^H^H^Hwill fix sepfw 17
     // should also work with 14beta5
     "Lynx\0$",
+    "iap\0$",    // iOS 13
 };
 
 static const char* REM_DEV_TYPES[] = {
