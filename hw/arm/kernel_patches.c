@@ -890,6 +890,34 @@ void ck_patch_kernel(MachoHeader64* hdr)
     }
 }
 
+void ck_patch_txm(MachoHeader64* hdr)
+{
+    MachoSegmentCommand64* seg = apple_boot_get_segment(hdr, "__TEXT_EXEC");
+    vaddr                  base;
+
+    if (seg == NULL) {
+        warn_report("Failed to find TXM `__TEXT_EXEC`.");
+        return;
+    }
+
+    apple_boot_get_kc_bounds(hdr, NULL, &base, NULL, NULL, NULL);
+    g_autofree CKPatcherRange* text =
+        ck_patcher_range_from_ptr("__TEXT_EXEC", apple_boot_get_macho_buffer(hdr) + seg->vmaddr - base, seg->vmsize);
+
+    //   mov w0, #0x293e ; movk w0, #0x3, lsl #16   ->   mov w0, #0x3e ; nop
+    static const uint8_t pattern[] = {
+        0xC0, 0x27, 0x85, 0x52,    // mov w0, #0x293e
+        0x60, 0x00, 0xA0, 0x72,    // movk w0, #0x3, lsl #16
+    };
+    static const uint8_t repl[] = {
+        0xC0, 0x07, 0x80, 0x52,    // mov w0, #0x3e
+        0x1F, 0x20, 0x03, 0xD5,    // nop
+    };
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(repl));
+    ck_patcher_find_replace(text, "accept code signature slot mismatch (TXM)", pattern, NULL, sizeof(pattern),
+                            sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl));
+}
+
 /// Patch `buffer` and find the span that changed; returns false if nothing did.
 static bool ck_kp_patch_libimg4(uint8_t* buffer, uint64_t len, uint64_t* first, uint64_t* last)
 {

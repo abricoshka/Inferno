@@ -1321,6 +1321,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     if (apple_dfu_copy_image(t8030->dfu, "rtrx", &data, &len)) {
         t8030->txm = apple_boot_load_monitor_data("DFU TXM", data, len, "trxm", "rtrx");
+        ck_patch_txm(t8030->txm);
         if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->txm); }
     }
 

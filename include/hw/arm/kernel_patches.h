@@ -22,6 +22,8 @@
 #include "hw/arm/boot.h"
 
 void ck_patch_kernel(MachoHeader64* hdr);
+/// Accept code-signature slot hash mismatches in TXM, so patched pages on SPTM kernels aren't killed.
+void ck_patch_txm(MachoHeader64* hdr);
 /// Rewrite the GXF transitions, lower-EL exception entries, exception returns and PAC key/SCTLR accesses of an image a
 /// hardware accelerator runs to `hvc`.
 void ck_patch_virt(MachoHeader64* hdr);
