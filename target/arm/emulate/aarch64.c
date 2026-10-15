@@ -18,16 +18,24 @@
  */
 
 #include "qemu/osdep.h"
-#include "exec/target_page.h"
 #include "system/hw_accel.h"
 #include "system/memory.h"
 #include "target/arm/emulate/aarch64.h"
 #include "cpu-qom.h"
 #include "cpu.h"
+#include "internals.h"
 
-// TODO: Protection checks? lol
-static hwaddr arm_aarch64_fallback_emu_vtop(CPUState* cpu, vaddr addr)
-{ return cpu_get_phys_page_debug(cpu, addr & TARGET_PAGE_MASK) + (addr & ~TARGET_PAGE_MASK); }
+static MemTxResult arm_aarch64_fallback_emu_access(CPUState* cpu, AddressSpace* as, vaddr addr,
+                                                   MMUAccessType access_type, void* buf, hwaddr len)
+{
+    CPUARMState*      env = cpu_env(cpu);
+    GetPhysAddrResult res = {};
+    ARMMMUFaultInfo   fi  = {};
+
+    if (get_phys_addr_debug(env, addr, access_type, arm_mmu_idx(env), &res, &fi)) { return MEMTX_ACCESS_ERROR; }
+
+    return address_space_rw(as, res.f.phys_addr, MEMTXATTRS_UNSPECIFIED, buf, len, access_type == MMU_DATA_STORE);
+}
 
 bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64FallbackEmuGetReg get_reg,
                                      ArmAarch64FallbackEmuSetReg set_reg)
@@ -38,9 +46,7 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
     cpu_synchronize_state(cpu);
 
     uint32_t inst = 0;
-    if (address_space_read(as, arm_aarch64_fallback_emu_vtop(cpu, env->pc), MEMTXATTRS_UNSPECIFIED, &inst, sizeof(inst))
-        != MEMTX_OK)
-    {
+    if (arm_aarch64_fallback_emu_access(cpu, as, env->pc, MMU_INST_FETCH, &inst, sizeof(inst)) != MEMTX_OK) {
         fprintf(stderr, "%s: Failed to read instruction\n", __func__);
         return false;
     }
@@ -56,10 +62,7 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
             uint32_t reg_size   = (inst & BIT(31)) == 0 ? 4 : 8;
             uint64_t addr       = base + (int64_t)sextract32(inst, 15, 7) * reg_size;
             uint8_t  data[0x10] = {0};
-            if (address_space_read(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED, data,
-                                   reg_size * 2)
-                == MEMTX_OK)
-            {
+            if (arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_LOAD, data, reg_size * 2) == MEMTX_OK) {
                 if (reg_size == sizeof(uint32_t)) {
                     set_reg(cpu, dst1, ldl_le_p(data));
                     set_reg(cpu, dst2, ldl_le_p(data + reg_size));
@@ -90,9 +93,7 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
                 stq_le_p(data, src1);
                 stq_le_p(data + reg_size, src2);
             }
-            success = address_space_write(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED, data,
-                                          reg_size * 2)
-                      == MEMTX_OK;
+            success = arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_STORE, data, reg_size * 2) == MEMTX_OK;
             if (!success) { fprintf(stderr, "%s: STP, failed\n", __func__); }
             break;
         }
@@ -109,14 +110,15 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
                     uint32_t reg_size = (inst & BIT(30)) == 0 ? 4 : 8;
                     uint64_t off      = sextract32(inst, 12, 9);
                     uint64_t addr     = get_reg(cpu, base) + (post ? 0 : off);
-                    success = address_space_write(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED,
-                                                  &src, reg_size)
-                              == MEMTX_OK;
+                    success =
+                        arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_STORE, &src, reg_size) == MEMTX_OK;
                     if (!success) {
                         fprintf(stderr, "%s: STR x%d, 0x%llX, 0x%llX, 0x%X, 0x%llX, failed\n", __func__, base, src, off,
                                 reg_size, addr);
                     }
-                    set_reg(cpu, base, addr + (post ? off : 0));
+                    else {
+                        set_reg(cpu, base, addr + (post ? off : 0));
+                    }
                     break;
                 }
                 case 0xB9000000: {    // str unsigned offset
@@ -125,9 +127,8 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
                     uint64_t off      = ((inst >> 10) & 0xFFF);
                     uint32_t reg_size = (inst & BIT(30)) == 0 ? 4 : 8;
                     uint64_t addr     = base + (off * reg_size);
-                    success = address_space_write(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED,
-                                                  &src, reg_size)
-                              == MEMTX_OK;
+                    success =
+                        arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_STORE, &src, reg_size) == MEMTX_OK;
                     if (!success) {
                         fprintf(stderr, "%s: STR 0x%llX, 0x%llX, 0x%llX, 0x%X, 0x%llX, failed\n", __func__, base, src,
                                 off, reg_size, addr);
@@ -141,10 +142,7 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
                     uint32_t reg_size = (inst & BIT(30)) == 0 ? 4 : 8;
                     uint64_t addr     = base + (off * reg_size);
                     uint64_t val      = 0;
-                    if (address_space_read(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED, &val,
-                                           reg_size)
-                        == MEMTX_OK)
-                    {
+                    if (arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_LOAD, &val, reg_size) == MEMTX_OK) {
                         set_reg(cpu, dst, val);
                     }
                     else {
@@ -168,10 +166,7 @@ bool arm_aarch64_fallback_emu_single(CPUState* cpu, AddressSpace* as, ArmAarch64
                     uint64_t off      = sextract32(inst, 12, 9);
                     uint64_t addr     = get_reg(cpu, base) + (post ? 0 : off);
                     uint64_t val      = 0;
-                    if (address_space_read(as, arm_aarch64_fallback_emu_vtop(cpu, addr), MEMTXATTRS_UNSPECIFIED, &val,
-                                           reg_size)
-                        == MEMTX_OK)
-                    {
+                    if (arm_aarch64_fallback_emu_access(cpu, as, addr, MMU_DATA_LOAD, &val, reg_size) == MEMTX_OK) {
                         set_reg(cpu, dst, val);
                         set_reg(cpu, base, addr + (post ? off : 0));
                     }

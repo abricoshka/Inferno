@@ -1210,6 +1210,22 @@ bool get_phys_addr(CPUARMState* env, vaddr address, MMUAccessType access_type, M
                    GetPhysAddrResult* result, ARMMMUFaultInfo* fi) __attribute__((nonnull));
 
 /**
+ * get_phys_addr_debug:
+ * @env: CPUARMState
+ * @address: virtual address to get physical address for
+ * @access_type: 0 for read, 1 for write, 2 for execute
+ * @mmu_idx: MMU index indicating required translation regime
+ * @result: set on translation success.
+ * @fi: set to fault info if the translation fails
+ *
+ * Like get_phys_addr, including the permission check for @access_type, but
+ * walks without the softmmu TLB and without updating the page tables, so it
+ * is usable from accelerators other than TCG.
+ */
+bool get_phys_addr_debug(CPUARMState* env, vaddr address, MMUAccessType access_type, ARMMMUIdx mmu_idx,
+                         GetPhysAddrResult* result, ARMMMUFaultInfo* fi) __attribute__((nonnull));
+
+/**
  * get_phys_addr_for_at:
  * @env: CPUARMState
  * @address: virtual address to get physical address for

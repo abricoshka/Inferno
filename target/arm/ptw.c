@@ -2625,6 +2625,20 @@ bool get_phys_addr(CPUARMState* env, vaddr address, MMUAccessType access_type, M
     return get_phys_addr_gpc(env, &ptw, address, access_type, memop, result, fi);
 }
 
+bool get_phys_addr_debug(CPUARMState* env, vaddr address, MMUAccessType access_type, ARMMMUIdx mmu_idx,
+                         GetPhysAddrResult* result, ARMMMUFaultInfo* fi)
+{
+    S1Translate ptw = {
+        .in_mmu_idx    = mmu_idx,
+        .in_space      = arm_mmu_idx_to_security_space(env, mmu_idx),
+        .in_debug      = true,
+        .in_at         = true,
+        .in_prot_check = 1 << access_type,
+    };
+
+    return get_phys_addr_gpc(env, &ptw, address, access_type, 0, result, fi);
+}
+
 static hwaddr arm_cpu_get_phys_page(CPUARMState* env, vaddr addr, MemTxAttrs* attrs, ARMMMUIdx mmu_idx)
 {
     S1Translate ptw = {
