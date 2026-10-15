@@ -1836,6 +1836,8 @@ static void t8030_read_and_draw_boot_splash(AppleT8030MachineState* t8030)
     png_set_sig_bytes(png_ptr, sizeof(sig));
 
     png_read_info(png_ptr, info_ptr);
+    png_set_filler(png_ptr, 0xFF, PNG_FILLER_AFTER);
+    png_read_update_info(png_ptr, info_ptr);
 
     ctx         = g_new(T8030DrawBootSplashContext, 1);
     ctx->width  = png_get_image_width(png_ptr, info_ptr);
@@ -1843,8 +1845,6 @@ static void t8030_read_and_draw_boot_splash(AppleT8030MachineState* t8030)
     ctx->image =
         pixman_image_create_bits(PIXMAN_a8b8g8r8, ctx->width, ctx->height, NULL, ctx->width * sizeof(uint32_t));
     data = pixman_image_get_data(ctx->image);
-
-    png_read_update_info(png_ptr, info_ptr);
 
     row_ptrs = g_new(png_bytep, ctx->height);
     for (size_t y = 0; y < ctx->height; y++) { row_ptrs[y] = (png_bytep)(data + (y * ctx->width)); }
@@ -1856,7 +1856,7 @@ static void t8030_read_and_draw_boot_splash(AppleT8030MachineState* t8030)
     fclose(fp);
 
     ctx->t8030      = t8030;
-    ctx->dest_width = (double)t8030->disp_width / 1.5;
+    ctx->dest_width = (double)t8030->disp_width / 1.25;
     ctx->dest_x     = (t8030->disp_width / 2) - (ctx->dest_width / 2);
     ctx->dest_y     = (t8030->disp_height / 2) - (ctx->dest_width / 2);
     ctx->disp_image = pixman_image_create_bits(PIXMAN_a8r8g8b8, t8030->disp_width, t8030->disp_height,
