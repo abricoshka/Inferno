@@ -35,7 +35,7 @@ static bool apple_apt_m3_is_push_lr(const uint8_t* insn)
 /*
  * m3_message() names itself in its assertion and stores OutCmdQ entries with
  * `str.w rT, [rN, #outcmdq]`, and the ActiveQ writer loads the flags offset
- * with `movw` right before `movs r0, #1; b m3_message`.
+ * with the last `movw` before `movs r0, #1; b m3_message`.
  */
 bool apple_apt_m3_find_queues(const uint8_t* imem, size_t size, uint32_t* outcmdq, uint32_t* activeq_flags)
 {
@@ -45,7 +45,9 @@ bool apple_apt_m3_find_queues(const uint8_t* imem, size_t size, uint32_t* outcmd
     uint32_t          ref    = 0;
     uint32_t          target;
     uint32_t          pc;
+    uint32_t          start;
     uint32_t          back;
+    uint32_t          prev;
     uint16_t          imm;
 
     *outcmdq       = 0;
@@ -76,9 +78,15 @@ bool apple_apt_m3_find_queues(const uint8_t* imem, size_t size, uint32_t* outcmd
     for (pc = 0; pc + 4 <= size; pc += 2) {
         if (!ck_patcher_thumb_branch(imem + pc, pc, &target) || target != entry) { continue; }
 
-        for (back = pc > 0x20 ? pc - 0x20 : 4; back < pc; back += 2) {
-            if (lduw_le_p(imem + back) == THUMB_MOVS_R0_1 && ck_patcher_thumb_movw(imem + back - 4, &imm)) {
-                *activeq_flags = imm;
+        start = pc > 0x20 ? pc - 0x20 : 4;
+        for (back = start; back < pc; back += 2) {
+            if (lduw_le_p(imem + back) != THUMB_MOVS_R0_1) { continue; }
+
+            for (prev = back - 4; prev >= start; prev -= 2) {
+                if (ck_patcher_thumb_movw(imem + prev, &imm)) {
+                    *activeq_flags = imm;
+                    break;
+                }
             }
         }
     }
