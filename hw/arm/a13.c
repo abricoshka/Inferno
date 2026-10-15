@@ -534,6 +534,7 @@ static void apple_a13_realize(DeviceState* dev, Error** errp)
 
     qdev_connect_gpio_out(dev, GTIMER_VIRT, qdev_get_gpio_in(fiq_or, 0));
     acpu->fast_ipi = qdev_get_gpio_in(fiq_or, 1);
+    qdev_connect_gpio_out(dev, GTIMER_PHYS, qdev_get_gpio_in(fiq_or, 2));
 }
 
 static void apple_a13_instance_init(Object* obj) { object_property_set_uint(obj, "cntfrq", 24000000, &error_fatal); }
