@@ -51,7 +51,7 @@ bool usb_uplink_packet_wake(USBPacket* p)
     if (co == NULL) { return false; }
 
     pkt->waiter = NULL;
-    qemu_coroutine_enter(co);
+    aio_co_wake(co);
     return true;
 }
 
@@ -71,6 +71,8 @@ int32_t usb_uplink_submit(USBDevice* dev, USBUplinkPacket* pkt, uint8_t ep_addr,
 {
     uint8_t      pid = (ep_addr & USB_DIR_IN) ? USB_TOKEN_IN : USB_TOKEN_OUT;
     USBEndpoint* ep;
+
+    BQL_LOCK_GUARD();
 
     if (!usb_uplink_device_usable(dev)) { return USB_RET_NODEV; }
 
@@ -127,13 +129,32 @@ static void usb_uplink_wake(USBUplinkDevice* x, USBEndpoint* ep)
     }
 }
 
+typedef struct USBUplinkWakeup
+{
+    USBUplinkDevice* x;
+    USBEndpoint*     ep;
+} USBUplinkWakeup;
+
+static void usb_uplink_wake_bh(void* opaque)
+{
+    g_autofree USBUplinkWakeup* w = opaque;
+
+    usb_uplink_wake(w->x, w->ep);
+}
+
+static void usb_uplink_schedule_wake(USBUplinkDevice* x, USBEndpoint* ep)
+{
+    USBUplinkWakeup* w = g_new(USBUplinkWakeup, 1);
+
+    w->x  = x;
+    w->ep = ep;
+    aio_bh_schedule_oneshot(x->ctx, usb_uplink_wake_bh, w);
+}
+
 void usb_uplink_wakeup_endpoint(USBBus* bus, USBEndpoint* ep, unsigned int stream)
-{ usb_uplink_wake(container_of(bus, USBUplinkDevice, bus), ep); }
+{ usb_uplink_schedule_wake(container_of(bus, USBUplinkDevice, bus), ep); }
 
-static void usb_uplink_wake_all_bh(void* opaque) { usb_uplink_wake(opaque, NULL); }
-
-void usb_uplink_wake_all(USBUplinkDevice* x)
-{ aio_bh_schedule_oneshot(qemu_get_aio_context(), usb_uplink_wake_all_bh, x); }
+void usb_uplink_wake_all(USBUplinkDevice* x) { usb_uplink_schedule_wake(x, NULL); }
 
 static int32_t coroutine_fn usb_uplink_xfer_stage(USBDevice* dev, uint8_t pid, void* buf, int len, uint32_t* actual_len,
                                                   bool wait_for_device)
@@ -142,20 +163,27 @@ static int32_t coroutine_fn usb_uplink_xfer_stage(USBDevice* dev, uint8_t pid, v
 
     for (;;) {
         USBUplinkPacket pkt = {0};
+        USBEndpoint*    ep;
         int32_t         status;
         int64_t         remaining;
+        bool            async;
 
-        if (!usb_uplink_device_usable(dev)) { return USB_RET_NODEV; }
+        {
+            BQL_LOCK_GUARD();
 
-        usb_packet_init(&pkt.p);
-        usb_packet_setup(&pkt.p, pid, usb_ep_get(dev, pid, 0), 0, 0, false, false);
-        if (len > 0) { usb_packet_addbuf(&pkt.p, buf, len); }
-        usb_handle_packet(dev, &pkt.p);
+            if (!usb_uplink_device_usable(dev)) { return USB_RET_NODEV; }
 
-        if (pkt.p.status == USB_RET_ASYNC) {
-            pkt.waiter = qemu_coroutine_self();
-            qemu_coroutine_yield();
+            ep = usb_ep_get(dev, pid, 0);
+            usb_packet_init(&pkt.p);
+            usb_packet_setup(&pkt.p, pid, ep, 0, 0, false, false);
+            if (len > 0) { usb_packet_addbuf(&pkt.p, buf, len); }
+            usb_handle_packet(dev, &pkt.p);
+
+            async = pkt.p.status == USB_RET_ASYNC;
+            if (async) { pkt.waiter = qemu_coroutine_self(); }
         }
+
+        if (async) { qemu_coroutine_yield(); }
 
         status = pkt.p.status;
         if (status == USB_RET_SUCCESS && actual_len != NULL) { *actual_len = pkt.p.actual_length; }
@@ -166,8 +194,7 @@ static int32_t coroutine_fn usb_uplink_xfer_stage(USBDevice* dev, uint8_t pid, v
         remaining = deadline - qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         if (remaining <= 0) { return status; }
 
-        usb_uplink_wait(container_of(usb_bus_from_device(dev), USBUplinkDevice, bus), usb_ep_get(dev, pid, 0),
-                        remaining);
+        usb_uplink_wait(container_of(usb_bus_from_device(dev), USBUplinkDevice, bus), ep, remaining);
     }
 }
 
@@ -362,18 +389,25 @@ USBUplinkDescriptors* coroutine_fn usb_uplink_read_descriptors(USBDevice* dev)
 {
     USBUplinkDescriptors* desc;
 
-    if (!usb_uplink_device_usable(dev)) { return NULL; }
+    {
+        BQL_LOCK_GUARD();
 
-    desc = usb_uplink_descriptors_from_model(dev);
+        if (!usb_uplink_device_usable(dev)) { return NULL; }
+
+        desc = usb_uplink_descriptors_from_model(dev);
+    }
+
     if (desc != NULL) { return desc; }
 
     return usb_uplink_descriptors_from_wire(dev);
 }
 
-void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops, USBPortOps* port_ops, void* opaque)
+void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops, USBPortOps* port_ops, void* opaque,
+                     AioContext* ctx)
 {
     unsigned int i;
 
+    x->ctx = ctx;
     qemu_co_mutex_init(&x->ctrl_lock);
     for (i = 0; i < ARRAY_SIZE(x->xfer_lock); i++) { qemu_co_mutex_init(&x->xfer_lock[i]); }
     QTAILQ_INIT(&x->waiters);
@@ -392,6 +426,8 @@ USBDevice* usb_uplink_active_except(USBUplinkDevice* x, USBPort* except)
 {
     USBDevice*   best = NULL;
     unsigned int i;
+
+    BQL_LOCK_GUARD();
 
     for (i = 0; i < ARRAY_SIZE(x->ports); i++) {
         USBDevice* dev = x->ports[i].dev;
@@ -434,7 +470,10 @@ const USBUplinkDescriptors* coroutine_fn usb_uplink_descriptors(USBUplinkDevice*
         }
     }
 
-    object_unref(OBJECT(dev));
+    {
+        BQL_LOCK_GUARD();
+        object_unref(OBJECT(dev));
+    }
 
     return x->desc;
 }
@@ -443,11 +482,34 @@ void usb_uplink_invalidate(USBUplinkDevice* x) { g_clear_pointer(&x->desc, usb_u
 
 void usb_uplink_release(USBUplinkDevice* x)
 {
-    USBDevice* dev = usb_uplink_active(x);
-
     usb_uplink_invalidate(x);
 
-    if (dev != NULL && dev->attached) { usb_device_reset(dev); }
+    BQL_LOCK_GUARD();
+    usb_device_reset(usb_uplink_active(x));
+}
+
+static void usb_uplink_cancel_ep(USBEndpoint* ep, void (*cancelled)(USBUplinkPacket* pkt))
+{
+    USBPacket* p;
+
+    while ((p = QTAILQ_FIRST(&ep->queue)) != NULL) {
+        usb_cancel_packet(p);
+        cancelled(container_of(p, USBUplinkPacket, p));
+    }
+}
+
+void usb_uplink_cancel(USBDevice* dev, void (*cancelled)(USBUplinkPacket* pkt))
+{
+    unsigned int i;
+
+    if (dev == NULL) { return; }
+
+    BQL_LOCK_GUARD();
+
+    for (i = 0; i < USB_MAX_ENDPOINTS; i++) {
+        usb_uplink_cancel_ep(&dev->ep_in[i], cancelled);
+        usb_uplink_cancel_ep(&dev->ep_out[i], cancelled);
+    }
 }
 
 int32_t coroutine_fn usb_uplink_transfer(USBUplinkDevice* x, USBUplinkPacket* pkt, uint8_t ep_addr, void* buf,

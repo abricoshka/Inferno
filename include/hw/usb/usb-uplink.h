@@ -63,17 +63,19 @@ void usb_uplink_descriptors_free(USBUplinkDescriptors* desc);
 /* A bus that exports whichever device is plugged into it. */
 typedef struct USBUplinkDevice
 {
-    USBBus  bus;
-    USBPort ports[USB_UPLINK_PORTS];
-    CoMutex ctrl_lock;
-    CoMutex xfer_lock[2 * (USB_MAX_ENDPOINTS + 1)];
+    USBBus      bus;
+    USBPort     ports[USB_UPLINK_PORTS];
+    AioContext* ctx;
+    CoMutex     ctrl_lock;
+    CoMutex     xfer_lock[2 * (USB_MAX_ENDPOINTS + 1)];
 
-    USBUplinkDescriptors* desc;
+    USBUplinkDescriptors* desc; /* @ctx only */
 
-    QTAILQ_HEAD(, USBUplinkWaiter) waiters;
+    QTAILQ_HEAD(, USBUplinkWaiter) waiters; /* @ctx only */
 } USBUplinkDevice;
 
-void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops, USBPortOps* port_ops, void* opaque);
+void usb_uplink_init(USBUplinkDevice* x, DeviceState* owner, USBBusOps* bus_ops, USBPortOps* port_ops, void* opaque,
+                     AioContext* ctx);
 
 void usb_uplink_wakeup_endpoint(USBBus* bus, USBEndpoint* ep, unsigned int stream);
 
@@ -95,6 +97,9 @@ const USBUplinkDescriptors* usb_uplink_descriptors_cached(USBUplinkDevice* x);
 
 /* Drops the cache and resets the device; use when a claim ends. */
 void usb_uplink_release(USBUplinkDevice* x);
+
+/* Cancels every transfer queued on @dev's data endpoints and hands each to @cancelled. */
+void usb_uplink_cancel(USBDevice* dev, void (*cancelled)(USBUplinkPacket* pkt));
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(USBUplinkDescriptors, usb_uplink_descriptors_free)
 

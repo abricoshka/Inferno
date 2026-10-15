@@ -31,6 +31,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qemu/sockets.h"
+#include "block/aio-wait.h"
 #include "qom/object.h"
 #include "system/system.h"
 #include "qemu/uuid.h"
@@ -351,6 +352,14 @@ static void vh_conn_spawn(USBVirtualHereConn* conn, CoroutineEntry* fn)
     qemu_coroutine_enter(qemu_coroutine_create(fn, conn));
 }
 
+static void vh_co_enter(USBVirtualHereState* s, Coroutine* co)
+{
+    if (qemu_get_current_aio_context() == s->ctx) { qemu_coroutine_enter(co); }
+    else {
+        aio_co_enter(s->ctx, co);
+    }
+}
+
 static USBVirtualHerePacket* vh_packet_new(USBVirtualHereConn* conn)
 {
     USBVirtualHerePacket* pkt = g_new0(USBVirtualHerePacket, 1);
@@ -358,7 +367,6 @@ static USBVirtualHerePacket* vh_packet_new(USBVirtualHereConn* conn)
     object_ref(OBJECT(conn));
     pkt->conn = conn;
     usb_packet_init(&pkt->base.p);
-    QLIST_INSERT_HEAD(&conn->packets, pkt, link);
     return pkt;
 }
 
@@ -366,7 +374,6 @@ static void vh_packet_free(USBVirtualHerePacket* pkt)
 {
     USBVirtualHereConn* conn = pkt->conn;
 
-    QLIST_REMOVE(pkt, link);
     usb_packet_cleanup(&pkt->base.p);
     g_free(pkt->buffer);
     g_free(pkt);
@@ -417,33 +424,18 @@ static void virtualhere_port_complete(USBPort* port, USBPacket* p)
     pkt             = container_of(container_of(p, USBUplinkPacket, p), USBVirtualHerePacket, base);
     pkt->out_status = usb_uplink_status_to_errno(p->status);
 
-    Coroutine* co = qemu_coroutine_create(vh_send_bulk_ack_co, pkt);
-    qemu_coroutine_enter(co);
+    vh_co_enter(pkt->conn->s, qemu_coroutine_create(vh_send_bulk_ack_co, pkt));
 }
 
 /* The USB core orphans queued packets on detach; the client still wants an ack. */
-static void vh_conn_abort_packets(USBVirtualHereConn* conn)
+static void vh_packet_aborted(USBUplinkPacket* p)
 {
-    QLIST_HEAD(, USBVirtualHerePacket) aborted = QLIST_HEAD_INITIALIZER(aborted);
-    USBVirtualHerePacket *pkt, *next;
+    USBVirtualHerePacket* pkt = container_of(p, USBVirtualHerePacket, base);
 
-    /* Cancel everything first: answering one packet can free another's entry. */
-    QLIST_FOREACH_SAFE (pkt, &conn->packets, link, next) {
-        if (!usb_packet_is_inflight(&pkt->base.p)) { continue; }
+    pkt->base.p.actual_length = 0;
+    pkt->out_status           = -ENODEV;
 
-        usb_cancel_packet(&pkt->base.p);
-        pkt->base.p.actual_length = 0;
-        pkt->out_status           = -ENODEV;
-
-        QLIST_REMOVE(pkt, link);
-        QLIST_INSERT_HEAD(&aborted, pkt, link);
-    }
-
-    while ((pkt = QLIST_FIRST(&aborted)) != NULL) {
-        QLIST_REMOVE(pkt, link);
-        QLIST_INSERT_HEAD(&conn->packets, pkt, link);
-        qemu_coroutine_enter(qemu_coroutine_create(vh_send_bulk_ack_co, pkt));
-    }
+    vh_co_enter(pkt->conn->s, qemu_coroutine_create(vh_send_bulk_ack_co, pkt));
 }
 
 static bool coroutine_fn vh_conn_announce_device(USBVirtualHereConn* conn)
@@ -668,17 +660,43 @@ static void vh_notify_device_removed(USBVirtualHereConn* conn, bool unbind)
     qemu_coroutine_enter(qemu_coroutine_create(vh_notify_device_removed_co, notice));
 }
 
-/* Attach runs before the core finishes wiring the device, so announce off a BH. */
-static void coroutine_fn vh_announce_attach_co(void* opaque)
+static void coroutine_fn vh_attach_co(void* opaque)
 {
-    USBVirtualHereConn* conn = opaque;
+    USBVirtualHereState* s    = opaque;
+    USBVirtualHereConn*  conn = s->active_conn;
 
-    if (!conn->closed) { vh_conn_announce_device(conn); }
-    object_unref(OBJECT(conn));
+    usb_uplink_invalidate(&s->usb);
+
+    if (conn != NULL && !conn->closed) {
+        object_ref(OBJECT(conn));
+        vh_conn_announce_device(conn);
+        object_unref(OBJECT(conn));
+    }
 }
 
-static void vh_announce_attach_bh(void* opaque)
-{ qemu_coroutine_enter(qemu_coroutine_create(vh_announce_attach_co, opaque)); }
+typedef struct VHDetach
+{
+    USBVirtualHereState* s;
+    bool                 last;
+} VHDetach;
+
+static void coroutine_fn vh_detach_co(void* opaque)
+{
+    g_autofree VHDetach* detach = opaque;
+    USBVirtualHereState* s      = detach->s;
+    USBVirtualHereConn*  conn   = s->active_conn;
+    bool                 bound  = conn != NULL && !conn->closed && conn->using_device;
+
+    if (detach->last && conn != NULL && !conn->closed) {
+        conn->using_device = false;
+        conn->use_pending  = false;
+        vh_notify_device_removed(conn, bound);
+    }
+
+    if (detach->last && bound) { vh_advance_device_id(s); }
+
+    usb_uplink_invalidate(&s->usb);
+}
 
 #define VIRTUALHERE_USE_DEVICE_WAIT_NS (10ULL * 1000 * 1000 * 1000)
 #define VIRTUALHERE_USE_DEVICE_POLL_NS (50 * 1000 * 1000)
@@ -791,10 +809,12 @@ static void coroutine_fn vh_conn_dispatch(USBVirtualHereConn* conn, const uint8_
             break;
         }
         case VIRTUALHERE_MSG_DEVICE_INIT: {
-            USBDevice* dev       = usb_uplink_active(&conn->s->usb);
-            uint8_t    status[4] = {0};
+            uint8_t status[4] = {0};
 
-            if (dev != NULL) { usb_device_reset(dev); }
+            {
+                BQL_LOCK_GUARD();
+                usb_device_reset(usb_uplink_active(&conn->s->usb));
+            }
             vh_conn_send_msg(conn, VIRTUALHERE_MSG_DEVICE_INIT_ACK, msg, status, sizeof(status));
             break;
         }
@@ -804,7 +824,7 @@ static void coroutine_fn vh_conn_dispatch(USBVirtualHereConn* conn, const uint8_
             VIRTUALHERE_DPRINTF("%s: stop-using-device\n", __func__);
             conn->using_device = false;
             conn->use_pending  = false;
-            vh_conn_abort_packets(conn);
+            usb_uplink_cancel(usb_uplink_active(&conn->s->usb), vh_packet_aborted);
             usb_uplink_release(&conn->s->usb);
             vh_conn_send_msg(conn, VIRTUALHERE_MSG_UNBIND_ACK, msg, released, sizeof(released));
             vh_notify_device_removed(conn, false);
@@ -859,7 +879,7 @@ static void vh_conn_close(USBVirtualHereConn* conn)
     if (conn->closed) { return; }
     conn->closed = true;
 
-    vh_conn_abort_packets(conn);
+    usb_uplink_cancel(usb_uplink_active(&s->usb), vh_packet_aborted);
     usb_uplink_wake_all(&s->usb);
 
     /* The claim dies with the connection, so the device must come back clean. */
@@ -884,7 +904,6 @@ static void usb_virtualhere_conn_init(Object* obj)
     USBVirtualHereConn* conn = USB_VIRTUALHERE_CONN(obj);
 
     qemu_co_mutex_init(&conn->write_mutex);
-    QLIST_INIT(&conn->packets);
 }
 
 static void usb_virtualhere_conn_finalize(Object* obj)
@@ -917,7 +936,7 @@ static void virtualhere_accept(QIONetListener* listener, QIOChannelSocket* cioc,
     object_ref(OBJECT(conn->ioc));
     qio_channel_set_blocking(conn->ioc, false, NULL);
     qio_channel_set_follow_coroutine_ctx(conn->ioc, true);
-    conn->heartbeat_timer = timer_new_ms(QEMU_CLOCK_REALTIME, vh_heartbeat_cb, conn);
+    conn->heartbeat_timer = aio_timer_new(s->ctx, QEMU_CLOCK_REALTIME, SCALE_MS, vh_heartbeat_cb, conn);
 
     s->active_conn = conn;
 
@@ -934,38 +953,23 @@ static void usb_virtualhere_attach(USBPort* port)
 
     if (port->dev == NULL || !port->dev->attached) { return; }
 
-    usb_uplink_invalidate(&s->usb);
-
-    if (s->active_conn != NULL && !s->active_conn->closed) {
-        object_ref(OBJECT(s->active_conn));
-        aio_bh_schedule_oneshot(qemu_get_aio_context(), vh_announce_attach_bh, s->active_conn);
-    }
+    aio_co_enter(s->ctx, qemu_coroutine_create(vh_attach_co, s));
 }
 
 static void usb_virtualhere_detach(USBPort* port)
 {
-    USBVirtualHereState* s     = port->opaque;
-    USBVirtualHereConn*  conn  = s->active_conn;
-    bool                 last  = usb_uplink_active_except(&s->usb, port) == NULL;
-    bool                 bound = conn != NULL && !conn->closed && conn->using_device;
+    USBVirtualHereState* s      = port->opaque;
+    VHDetach*            detach = g_new(VHDetach, 1);
 
     VIRTUALHERE_DPRINTF("%s: port[%d] detached, remaining=%p\n", __func__, port->index,
                         usb_uplink_active_except(&s->usb, port));
 
-    if (conn != NULL && !conn->closed) {
-        vh_conn_abort_packets(conn);
+    detach->s    = s;
+    detach->last = usb_uplink_active_except(&s->usb, port) == NULL;
 
-        if (last) {
-            conn->using_device = false;
-            conn->use_pending  = false;
-            vh_notify_device_removed(conn, bound);
-        }
-    }
-
-    if (last && bound) { vh_advance_device_id(s); }
-
-    usb_uplink_invalidate(&s->usb);
+    usb_uplink_cancel(port->dev, vh_packet_aborted);
     usb_uplink_wake_all(&s->usb);
+    aio_co_enter(s->ctx, qemu_coroutine_create(vh_detach_co, detach));
 }
 
 static USBBusOps usb_virtualhere_bus_ops = {
@@ -997,7 +1001,8 @@ static bool virtualhere_listen(USBVirtualHereState* s, Error** errp)
     }
 
     info_report("hcd-virtualhere (%s): listening on %s", path, s->addr);
-    qio_net_listener_set_client_func(s->listener, virtualhere_accept, s, NULL);
+    qio_net_listener_set_client_func_full(s->listener, virtualhere_accept, s, NULL,
+                                          iothread_get_g_main_context(s->iothread));
 
     /* Discovery is a convenience; a client can still be pointed at us by hand. */
     s->mdns = mdns_service_register(s->server_name, VIRTUALHERE_SERVICE_TYPE, atoi(addr->u.inet.port), s->server_id,
@@ -1018,7 +1023,11 @@ static void usb_virtualhere_realize(DeviceState* dev, Error** errp)
     vh_init_server_guid(s);
     s->device_id = VIRTUALHERE_SERVER_DEVICE_ID;
 
-    usb_uplink_init(&s->usb, dev, &usb_virtualhere_bus_ops, &usb_virtualhere_port_ops, s);
+    s->iothread = iothread_create(TYPE_USB_VIRTUALHERE, errp);
+    if (s->iothread == NULL) { return; }
+    s->ctx = iothread_get_aio_context(s->iothread);
+
+    usb_uplink_init(&s->usb, dev, &usb_virtualhere_bus_ops, &usb_virtualhere_port_ops, s, s->ctx);
 
     if (!virtualhere_listen(s, errp)) { return; }
 
@@ -1026,14 +1035,27 @@ static void usb_virtualhere_realize(DeviceState* dev, Error** errp)
     qemu_add_exit_notifier(&s->exit_notifier);
 }
 
-static void usb_virtualhere_teardown(USBVirtualHereState* s)
+static void vh_teardown_bh(void* opaque)
 {
+    USBVirtualHereState* s = opaque;
+
     if (s->active_conn != NULL) {
         USBVirtualHereConn* conn = s->active_conn;
 
         if (conn->using_device) { vh_notify_device_removed(conn, true); }
         vh_conn_close(conn);
     }
+
+    usb_uplink_invalidate(&s->usb);
+}
+
+static void usb_virtualhere_teardown(USBVirtualHereState* s)
+{
+    bool locked = bql_locked();
+
+    if (locked) { bql_unlock(); }
+    aio_wait_bh_oneshot(s->ctx, vh_teardown_bh, s);
+    if (locked) { bql_lock(); }
 
     mdns_service_unregister(s->mdns);
     s->mdns = NULL;
@@ -1059,7 +1081,6 @@ static void usb_virtualhere_unrealize(DeviceState* dev)
     qemu_remove_exit_notifier(&s->exit_notifier);
 
     usb_virtualhere_teardown(s);
-    usb_uplink_invalidate(&s->usb);
 }
 
 static const Property usb_virtualhere_props[] = {
