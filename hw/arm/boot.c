@@ -650,9 +650,6 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 
     apple_dt_del_prop_named(child, "entangle-nonce");
 
-    // Enable FastSim for iOS 26
-    apple_dt_set_prop_u32(child, "insecure_hpr", 1);
-
     child = apple_dt_get_node(root, "chosen/manifest-properties");
     assert_nonnull(child);
     apple_boot_compute_ap_nonce(apple_boot_get_crypto_hash_alg(apple_dt_get_node(root, "chosen")),
