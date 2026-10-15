@@ -77,6 +77,7 @@ struct AppleRTKit
     void*                opaque;
     uint8_t              ep0_status;
     uint32_t             protocol_version;
+    uint8_t              user_ep_start;
     AppleRTKitEPTable_t  endpoints;
     AppleA7IOPMessage    rollcall[RTKIT_ROLLCALL_BLOCKS];
     uint8_t              rollcall_head;
