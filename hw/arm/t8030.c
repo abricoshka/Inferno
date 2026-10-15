@@ -242,7 +242,7 @@ static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kerne
     t8030->build_version = build_version;
 
     switch (BUILD_VERSION_MAJOR(build_version)) {
-        case 13:
+        case 13: t8030->sio_protocol = 8; break;
         case 14:
         case 15:
         case 16: t8030->sio_protocol = 9; break;
