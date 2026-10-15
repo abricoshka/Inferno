@@ -1883,6 +1883,7 @@ static void t8030_reset(MachineState* machine, ResetType type)
     AppleT8030MachineState* t8030 = APPLE_T8030(machine);
 
     memset(t8030->pmgr_reg, 0, sizeof(t8030->pmgr_reg));
+    memset(t8030->amcc_reg, 0, sizeof(t8030->amcc_reg));
 
     pmgr_unk_e4800 = 0;
     // maybe also reset pmgr_unk_e4000 array
