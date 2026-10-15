@@ -28,7 +28,7 @@ local function probe(name, opt, setup)
 			add_links(opt.links)
 		end
 		if opt.cflags then
-			add_cflags(opt.cflags)
+			add_cflags(opt.cflags, {force = true})
 		end
 		setup()
 	option_end()
@@ -236,6 +236,7 @@ int main(void) {
 	probe_function("CONFIG_PREADV", "preadv", "sys/uio.h")
 	probe_function("CONFIG_VALLOC", "valloc", "stdlib.h")
 	probe_function("HAVE_COPY_FILE_RANGE", "copy_file_range", "unistd.h")
+	probe_function("HAVE_MEMMEM", "memmem", "string.h")
 	probe_function("HAVE_OPENPTY", "openpty", is_plat("macosx") and "util.h" or "pty.h", "util")
 	probe_function("HAVE_STRCHRNUL", "strchrnul", "string.h")
 	probe_function("HAVE_SYSTEM_FUNCTION", "system", "stdlib.h")

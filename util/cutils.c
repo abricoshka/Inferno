@@ -707,6 +707,24 @@ const char* qemu_strchrnul(const char* s, int c)
 #endif
 
 /**
+ * Searches for the first occurrence of 'needle' in 'haystack', and returns
+ * NULL if none was found.
+ */
+#ifndef HAVE_MEMMEM
+const void* qemu_memmem(const void* haystack, size_t haystack_len, const void* needle, size_t needle_len)
+{
+    const uint8_t* h = haystack;
+    size_t         off;
+
+    if (needle_len == 0) { return haystack; }
+    for (off = 0; off + needle_len <= haystack_len; off++) {
+        if (memcmp(h + off, needle, needle_len) == 0) { return h + off; }
+    }
+    return NULL;
+}
+#endif
+
+/**
  * parse_uint:
  *
  * @s: String to parse

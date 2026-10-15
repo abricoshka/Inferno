@@ -1,4 +1,4 @@
-add_requires("pkgconfig::glib-2.0 >=2.66.0", {alias = "glib"})
+add_requires("pkgconfig::glib-2.0 >=2.66.0", {alias = "glib", external = true})
 add_requires("pkgconfig::pixman-1 >=0.21.8", {alias = "pixman"})
 add_requires("pkgconfig::zlib", {alias = "zlib"})
 add_requires("pkgconfig::nettle >=3.10", {alias = "nettle"})

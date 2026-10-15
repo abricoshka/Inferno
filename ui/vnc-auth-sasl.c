@@ -99,7 +99,7 @@ size_t vnc_client_write_sasl(VncState* vs)
         }
         if (throttled && vs->force_update_offset == 0) { trace_vnc_client_unthrottle_forced(vs, vs->ioc); }
         offset = vs->output.offset;
-        buffer_advance(&vs->output, vs->sasl.encodedRawLength);
+        qemu_buffer_advance(&vs->output, vs->sasl.encodedRawLength);
         if (offset >= vs->throttle_output_offset && vs->output.offset < vs->throttle_output_offset) {
             trace_vnc_client_unthrottle_incremental(vs, vs->ioc, vs->output.offset);
         }
@@ -135,8 +135,8 @@ size_t vnc_client_read_sasl(VncState* vs)
 
     if (err != SASL_OK) { return vnc_client_io_error(vs, -1, NULL); }
     VNC_DEBUG("Read SASL Encoded %p size %ld Decoded %p size %d\n", encoded, ret, decoded, decodedLen);
-    buffer_reserve(&vs->input, decodedLen);
-    buffer_append(&vs->input, decoded, decodedLen);
+    qemu_buffer_reserve(&vs->input, decodedLen);
+    qemu_buffer_append(&vs->input, decoded, decodedLen);
     return decodedLen;
 }
 

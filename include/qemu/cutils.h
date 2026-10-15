@@ -142,6 +142,12 @@ static inline const char* qemu_strchrnul(const char* s, int c) { return strchrnu
 #else
 const char* qemu_strchrnul(const char* s, int c);
 #endif
+#ifdef HAVE_MEMMEM
+static inline const void* qemu_memmem(const void* haystack, size_t haystack_len, const void* needle, size_t needle_len)
+{ return memmem(haystack, haystack_len, needle, needle_len); }
+#else
+const void* qemu_memmem(const void* haystack, size_t haystack_len, const void* needle, size_t needle_len);
+#endif
 time_t mktimegm(struct tm* tm);
 int    qemu_parse_fd(const char* param);
 int    qemu_strtoi(const char* nptr, const char** endptr, int base, int* result);

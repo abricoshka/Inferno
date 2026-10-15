@@ -122,8 +122,8 @@ MDNSService* mdns_service_register(const char* name, const char* type, uint16_t 
     g_autofree gunichar2*        winstance     = g_utf8_to_utf16(instance_name, -1, NULL, NULL, NULL);
     g_autofree gunichar2*        whost         = g_utf8_to_utf16(host_name, -1, NULL, NULL, NULL);
     g_autofree gunichar2*        wtxt          = txt != NULL ? g_utf8_to_utf16(txt, -1, NULL, NULL, NULL) : NULL;
-    PWSTR                        keys[1]       = {(PWSTR)wtxt};
-    PWSTR                        values[1]     = {NULL};
+    PCWSTR                       keys[1]       = {(PCWSTR)wtxt};
+    PCWSTR                       values[1]     = {NULL};
     DNS_SERVICE_REGISTER_REQUEST req           = {0};
     MDNSService*                 svc;
     DWORD                        status;

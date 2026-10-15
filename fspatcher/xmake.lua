@@ -1,5 +1,5 @@
 if has_config("tools") then
-	add_requires("cli11")
+	add_requires("cli11", {external = true})
 	target("inferno-fs-patcher")
 		set_kind("binary")
 		set_languages("gnu11", "c++17")

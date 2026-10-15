@@ -159,8 +159,8 @@ static void G_GNUC_PRINTF(2, 3) qio_channel_websock_handshake_send_res(QIOChanne
     va_start(vargs, resmsg);
     response    = g_strdup_vprintf(resmsg, vargs);
     responselen = strlen(response);
-    buffer_reserve(&ioc->encoutput, responselen);
-    buffer_append(&ioc->encoutput, response, responselen);
+    qemu_buffer_reserve(&ioc->encoutput, responselen);
+    qemu_buffer_append(&ioc->encoutput, response, responselen);
     g_free(response);
     va_end(vargs);
 }
@@ -433,8 +433,8 @@ static int qio_channel_websock_handshake_read(QIOChannelWebsock* ioc, Error** er
     /* Typical HTTP headers from novnc are 512 bytes, so limiting
      * total header size to 4096 is easily enough. */
     size_t want = 4096 - ioc->encinput.offset;
-    buffer_reserve(&ioc->encinput, want);
-    ret = qio_channel_read(ioc->master, (char*)buffer_end(&ioc->encinput), want, errp);
+    qemu_buffer_reserve(&ioc->encinput, want);
+    ret = qio_channel_read(ioc->master, (char*)qemu_buffer_end(&ioc->encinput), want, errp);
     if (ret < 0) { return -1; }
     ioc->encinput.offset += ret;
 
@@ -455,8 +455,8 @@ static int qio_channel_websock_handshake_read(QIOChannelWebsock* ioc, Error** er
 
     qio_channel_websock_handshake_process(ioc, (char*)ioc->encinput.buffer, errp);
 
-    buffer_advance(&ioc->encinput,
-                   handshake_end - (char*)ioc->encinput.buffer + strlen(QIO_CHANNEL_WEBSOCK_HANDSHAKE_END));
+    qemu_buffer_advance(&ioc->encinput,
+                        handshake_end - (char*)ioc->encinput.buffer + strlen(QIO_CHANNEL_WEBSOCK_HANDSHAKE_END));
     return 1;
 }
 
@@ -477,7 +477,7 @@ static gboolean qio_channel_websock_handshake_send(QIOChannel* ioc, GIOCondition
         return FALSE;
     }
 
-    buffer_advance(&wioc->encoutput, ret);
+    qemu_buffer_advance(&wioc->encoutput, ret);
     if (wioc->encoutput.offset == 0) {
         if (wioc->io_err) {
             trace_qio_channel_websock_handshake_fail(ioc, error_get_pretty(wioc->io_err));
@@ -560,12 +560,12 @@ static void qio_channel_websock_encode(QIOChannelWebsock* ioc, uint8_t opcode, c
     header_size -= QIO_CHANNEL_WEBSOCK_HEADER_LEN_MASK;
 
     trace_qio_channel_websock_encode(ioc, opcode, header_size, size);
-    buffer_reserve(&ioc->encoutput, header_size + size);
-    buffer_append(&ioc->encoutput, header.buf, header_size);
+    qemu_buffer_reserve(&ioc->encoutput, header_size + size);
+    qemu_buffer_append(&ioc->encoutput, header.buf, header_size);
     for (i = 0; i < niov && size != 0; i++) {
         size_t want = iov[i].iov_len;
         if (want > size) { want = size; }
-        buffer_append(&ioc->encoutput, iov[i].iov_base, want);
+        qemu_buffer_append(&ioc->encoutput, iov[i].iov_base, want);
         size -= want;
     }
 }
@@ -690,7 +690,7 @@ static int qio_channel_websock_decode_header(QIOChannelWebsock* ioc, Error** err
     }
 
     trace_qio_channel_websock_header_full_decode(ioc, header_size, ioc->payload_remain, ioc->mask.u);
-    buffer_advance(&ioc->encinput, header_size);
+    qemu_buffer_advance(&ioc->encinput, header_size);
     return 0;
 }
 
@@ -731,8 +731,8 @@ static int qio_channel_websock_decode_payload(QIOChannelWebsock* ioc, Error** er
     if (ioc->opcode == QIO_CHANNEL_WEBSOCK_OPCODE_BINARY_FRAME) {
         if (payload_len) {
             /* binary frames are passed on */
-            buffer_reserve(&ioc->rawinput, payload_len);
-            buffer_append(&ioc->rawinput, ioc->encinput.buffer, payload_len);
+            qemu_buffer_reserve(&ioc->rawinput, payload_len);
+            qemu_buffer_append(&ioc->rawinput, ioc->encinput.buffer, payload_len);
         }
     }
     else if (ioc->opcode == QIO_CHANNEL_WEBSOCK_OPCODE_CLOSE) {
@@ -761,7 +761,7 @@ static int qio_channel_websock_decode_payload(QIOChannelWebsock* ioc, Error** er
         }
     } /* pong frames are ignored */
 
-    if (payload_len) { buffer_advance(&ioc->encinput, payload_len); }
+    if (payload_len) { qemu_buffer_advance(&ioc->encinput, payload_len); }
     return 0;
 }
 
@@ -799,9 +799,9 @@ static void qio_channel_websock_finalize(Object* obj)
 {
     QIOChannelWebsock* ioc = QIO_CHANNEL_WEBSOCK(obj);
 
-    buffer_free(&ioc->encinput);
-    buffer_free(&ioc->encoutput);
-    buffer_free(&ioc->rawinput);
+    qemu_buffer_free(&ioc->encinput);
+    qemu_buffer_free(&ioc->encoutput);
+    qemu_buffer_free(&ioc->rawinput);
     if (ioc->hs_io_tag) { g_source_remove(ioc->hs_io_tag); }
     if (ioc->io_tag) { g_source_remove(ioc->io_tag); }
     if (ioc->io_err) { error_free(ioc->io_err); }
@@ -815,7 +815,7 @@ static ssize_t qio_channel_websock_read_wire(QIOChannelWebsock* ioc, Error** err
     if (ioc->encinput.offset < 4096) {
         size_t want = 4096 - ioc->encinput.offset;
 
-        buffer_reserve(&ioc->encinput, want);
+        qemu_buffer_reserve(&ioc->encinput, want);
         ret = qio_channel_read(ioc->master, (char*)ioc->encinput.buffer + ioc->encinput.offset, want, errp);
         if (ret < 0) { return ret; }
         if (ret == 0 && ioc->encinput.offset == 0) {
@@ -850,7 +850,7 @@ static ssize_t qio_channel_websock_write_wire(QIOChannelWebsock* ioc, Error** er
                 return ret;
             }
         }
-        buffer_advance(&ioc->encoutput, ret);
+        qemu_buffer_advance(&ioc->encoutput, ret);
         done += ret;
         if (ioc->pong_remain < ret) { ioc->pong_remain = 0; }
         else {
@@ -942,7 +942,7 @@ static ssize_t qio_channel_websock_readv(QIOChannel* ioc, const struct iovec* io
         if (want < iov[i].iov_len) { break; }
     }
 
-    buffer_advance(&wioc->rawinput, got);
+    qemu_buffer_advance(&wioc->rawinput, got);
     qio_channel_websock_set_watch(wioc);
     return got;
 }
@@ -1021,9 +1021,9 @@ static int qio_channel_websock_close(QIOChannel* ioc, Error** errp)
     QIOChannelWebsock* wioc = QIO_CHANNEL_WEBSOCK(ioc);
 
     trace_qio_channel_websock_close(ioc);
-    buffer_free(&wioc->encinput);
-    buffer_free(&wioc->encoutput);
-    buffer_free(&wioc->rawinput);
+    qemu_buffer_free(&wioc->encinput);
+    qemu_buffer_free(&wioc->encoutput);
+    qemu_buffer_free(&wioc->rawinput);
     if (wioc->hs_io_tag) { g_clear_handle_id(&wioc->hs_io_tag, g_source_remove); }
     if (wioc->io_tag) { g_clear_handle_id(&wioc->io_tag, g_source_remove); }
     if (wioc->io_err) { g_clear_pointer(&wioc->io_err, error_free); }

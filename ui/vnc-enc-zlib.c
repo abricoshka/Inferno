@@ -45,7 +45,7 @@ void vnc_zlib_zfree(void* x, void* addr) { g_free(addr); }
 
 static void vnc_zlib_start(VncState* vs, VncWorker* worker)
 {
-    buffer_reset(&worker->zlib.zlib);
+    qemu_buffer_reset(&worker->zlib.zlib);
 
     // make the output buffer be the zlib buffer, so we can compress it later
     worker->zlib.tmp = vs->output;
@@ -91,7 +91,7 @@ static int vnc_zlib_stop(VncState* vs, VncWorker* worker)
     }
 
     // reserve memory in output buffer
-    buffer_reserve(&vs->output, worker->zlib.zlib.offset + 64);
+    qemu_buffer_reserve(&vs->output, worker->zlib.zlib.offset + 64);
 
     // set pointers
     zstream->next_in   = worker->zlib.zlib.buffer;
@@ -140,5 +140,5 @@ int vnc_zlib_send_framebuffer_update(VncState* vs, VncWorker* worker, int x, int
 void vnc_zlib_clear(VncWorker* worker)
 {
     if (worker->zlib.stream.opaque) { deflateEnd(&worker->zlib.stream); }
-    buffer_free(&worker->zlib.zlib);
+    qemu_buffer_free(&worker->zlib.zlib);
 }

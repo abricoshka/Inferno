@@ -21,6 +21,7 @@
 #include "hw/arm/patcher.h"
 #include "hw/display/apple_apt_m3.h"
 #include "qemu/bswap.h"
+#include "qemu/cutils.h"
 
 #define THUMB_MOVS_R0_1 (0x2001)
 
@@ -40,7 +41,7 @@ static bool apple_apt_m3_is_push_lr(const uint8_t* insn)
 bool apple_apt_m3_find_queues(const uint8_t* imem, size_t size, uint32_t* outcmdq, uint32_t* activeq_flags)
 {
     static const char name[] = "m3_message";
-    const uint8_t*    str    = memmem(imem, size, name, sizeof(name));
+    const uint8_t*    str    = qemu_memmem(imem, size, name, sizeof(name));
     uint32_t          entry  = 0;
     uint32_t          ref    = 0;
     uint32_t          target;

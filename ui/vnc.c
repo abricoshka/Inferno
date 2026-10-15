@@ -1059,8 +1059,8 @@ void vnc_disconnect_finish(VncState* vs)
     vnc_lock_output(vs);
     vnc_qmp_event(vs, QAPI_EVENT_VNC_DISCONNECTED);
 
-    buffer_free(&vs->input);
-    buffer_free(&vs->output);
+    qemu_buffer_free(&vs->input);
+    qemu_buffer_free(&vs->output);
 
     qapi_free_VncClientInfo(vs->info);
 
@@ -1086,7 +1086,7 @@ void vnc_disconnect_finish(VncState* vs)
 
     qemu_mutex_destroy(&vs->output_mutex);
     if (vs->bh != NULL) { qemu_bh_delete(vs->bh); }
-    buffer_free(&vs->jobs_buffer);
+    qemu_buffer_free(&vs->jobs_buffer);
 
     object_unref(OBJECT(vs->ioc));
     vs->ioc = NULL;
@@ -1180,7 +1180,7 @@ static size_t vnc_client_write_plain(VncState* vs)
         vs->force_update_offset -= ret;
     }
     offset = vs->output.offset;
-    buffer_advance(&vs->output, ret);
+    qemu_buffer_advance(&vs->output, ret);
     if (offset >= vs->throttle_output_offset && vs->output.offset < vs->throttle_output_offset) {
         trace_vnc_client_unthrottle_incremental(vs, vs->ioc, vs->output.offset);
     }
@@ -1264,8 +1264,8 @@ static size_t vnc_client_read_plain(VncState* vs)
 {
     size_t ret;
     VNC_DEBUG("Read plain %p size %zd offset %zd\n", vs->input.buffer, vs->input.capacity, vs->input.offset);
-    buffer_reserve(&vs->input, 4096);
-    ret = vnc_client_read_buf(vs, buffer_end(&vs->input), 4096);
+    qemu_buffer_reserve(&vs->input, 4096);
+    ret = vnc_client_read_buf(vs, qemu_buffer_end(&vs->input), 4096);
     if (!ret) { return 0; }
     vs->input.offset += ret;
     return ret;
@@ -1312,7 +1312,7 @@ static int vnc_client_read(VncState* vs)
             return -1;
         }
 
-        if (!ret) { buffer_advance(&vs->input, len); }
+        if (!ret) { qemu_buffer_advance(&vs->input, len); }
         else {
             vs->read_handler_expect = ret;
         }
@@ -1377,14 +1377,14 @@ void vnc_write(VncState* vs, const void* data, size_t len)
         vnc_disconnect_start(vs);
         return;
     }
-    buffer_reserve(&vs->output, len);
+    qemu_buffer_reserve(&vs->output, len);
 
-    if (vs->ioc != NULL && buffer_empty(&vs->output)) {
+    if (vs->ioc != NULL && qemu_buffer_empty(&vs->output)) {
         if (vs->ioc_tag) { g_source_remove(vs->ioc_tag); }
         vs->ioc_tag = qio_channel_add_watch(vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_OUT, vnc_client_io, vs, NULL);
     }
 
-    buffer_append(&vs->output, data, len);
+    qemu_buffer_append(&vs->output, data, len);
 }
 
 void vnc_write_s32(VncState* vs, int32_t value) { vnc_write_u32(vs, *(uint32_t*)&value); }
@@ -2737,23 +2737,23 @@ static void vnc_connect(VncDisplay* vd, QIOChannelSocket* sioc, bool skipauth, b
     object_ref(OBJECT(vs->ioc));
     vs->vd = vd;
 
-    buffer_init(&vs->input, "vnc-input/%p", sioc);
-    buffer_init(&vs->output, "vnc-output/%p", sioc);
-    buffer_init(&vs->jobs_buffer, "vnc-jobs_buffer/%p", sioc);
+    qemu_buffer_init(&vs->input, "vnc-input/%p", sioc);
+    qemu_buffer_init(&vs->output, "vnc-output/%p", sioc);
+    qemu_buffer_init(&vs->jobs_buffer, "vnc-jobs_buffer/%p", sioc);
 
-    buffer_init(&vc->worker.tight.tight, "vnc-tight/%p", sioc);
-    buffer_init(&vc->worker.tight.zlib, "vnc-tight-zlib/%p", sioc);
-    buffer_init(&vc->worker.tight.gradient, "vnc-tight-gradient/%p", sioc);
+    qemu_buffer_init(&vc->worker.tight.tight, "vnc-tight/%p", sioc);
+    qemu_buffer_init(&vc->worker.tight.zlib, "vnc-tight-zlib/%p", sioc);
+    qemu_buffer_init(&vc->worker.tight.gradient, "vnc-tight-gradient/%p", sioc);
 #ifdef CONFIG_VNC_JPEG
-    buffer_init(&vc->worker.tight.jpeg, "vnc-tight-jpeg/%p", sioc);
+    qemu_buffer_init(&vc->worker.tight.jpeg, "vnc-tight-jpeg/%p", sioc);
 #endif
 #ifdef CONFIG_PNG
-    buffer_init(&vc->worker.tight.png, "vnc-tight-png/%p", sioc);
+    qemu_buffer_init(&vc->worker.tight.png, "vnc-tight-png/%p", sioc);
 #endif
-    buffer_init(&vc->worker.zlib.zlib, "vnc-zlib/%p", sioc);
-    buffer_init(&vc->worker.zrle.zrle, "vnc-zrle/%p", sioc);
-    buffer_init(&vc->worker.zrle.fb, "vnc-zrle-fb/%p", sioc);
-    buffer_init(&vc->worker.zrle.zlib, "vnc-zrle-zlib/%p", sioc);
+    qemu_buffer_init(&vc->worker.zlib.zlib, "vnc-zlib/%p", sioc);
+    qemu_buffer_init(&vc->worker.zrle.zrle, "vnc-zrle/%p", sioc);
+    qemu_buffer_init(&vc->worker.zrle.fb, "vnc-zrle-fb/%p", sioc);
+    qemu_buffer_init(&vc->worker.zrle.zlib, "vnc-zrle-zlib/%p", sioc);
 
     if (skipauth) {
         vs->auth    = VNC_AUTH_NONE;

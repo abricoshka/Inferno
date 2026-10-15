@@ -716,7 +716,7 @@ static int tight_compress_data(VncState* vs, VncTight* tight, int stream_id, siz
     if (tight_init_stream(vs, tight, stream_id, level, strategy)) { return -1; }
 
     /* reserve memory in output buffer */
-    buffer_reserve(&tight->zlib, bytes + 64);
+    qemu_buffer_reserve(&tight->zlib, bytes + 64);
 
     /* set pointers */
     zstream->next_in   = tight->tight.buffer;
@@ -739,7 +739,7 @@ static int tight_compress_data(VncState* vs, VncTight* tight, int stream_id, siz
     tight_send_compact_size(vs, bytes);
     vnc_write(vs, tight->zlib.buffer, bytes);
 
-    buffer_reset(&tight->zlib);
+    qemu_buffer_reset(&tight->zlib);
 
     return bytes;
 }
@@ -916,7 +916,7 @@ static bool send_gradient_rect(VncState* vs, VncWorker* worker, int x, int y, in
     vnc_write_u8(vs, (stream | VNC_TIGHT_EXPLICIT_FILTER) << 4);
     vnc_write_u8(vs, VNC_TIGHT_FILTER_GRADIENT);
 
-    buffer_reserve(&tight->gradient, w * 3 * sizeof(int));
+    qemu_buffer_reserve(&tight->gradient, w * 3 * sizeof(int));
 
     if (tight->pixel24) {
         tight_filter_gradient24(vs, tight, tight->tight.buffer, w, h);
@@ -931,7 +931,7 @@ static bool send_gradient_rect(VncState* vs, VncWorker* worker, int x, int y, in
         bytes = 2;
     }
 
-    buffer_reset(&tight->gradient);
+    qemu_buffer_reset(&tight->gradient);
 
     bytes               = w * h * bytes;
     tight->tight.offset = bytes;
@@ -1020,7 +1020,7 @@ static boolean jpeg_empty_output_buffer(j_compress_ptr cinfo)
     Buffer*   buffer = &tight->jpeg;
 
     buffer->offset = buffer->capacity;
-    buffer_reserve(buffer, 2048);
+    qemu_buffer_reserve(buffer, 2048);
     jpeg_init_destination(cinfo);
     return TRUE;
 }
@@ -1046,7 +1046,7 @@ static int send_jpeg_rect(VncState* vs, VncWorker* worker, int x, int y, int w, 
 
     if (surface_bytes_per_pixel(vs->vd->ds) == 1) { return send_full_color_rect(vs, worker, x, y, w, h); }
 
-    buffer_reserve(&worker->tight.jpeg, 2048);
+    qemu_buffer_reserve(&worker->tight.jpeg, 2048);
 
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
@@ -1083,7 +1083,7 @@ static int send_jpeg_rect(VncState* vs, VncWorker* worker, int x, int y, int w, 
 
     tight_send_compact_size(vs, worker->tight.jpeg.offset);
     vnc_write(vs, worker->tight.jpeg.buffer, worker->tight.jpeg.offset);
-    buffer_reset(&worker->tight.jpeg);
+    qemu_buffer_reset(&worker->tight.jpeg);
 
     return 1;
 }
@@ -1120,7 +1120,7 @@ static void png_write_data(png_structp png_ptr, png_bytep data, png_size_t lengt
 {
     VncWorker* worker = png_get_io_ptr(png_ptr);
 
-    buffer_reserve(&worker->tight.png, worker->tight.png.offset + length);
+    qemu_buffer_reserve(&worker->tight.png, worker->tight.png.offset + length);
     memcpy(worker->tight.png.buffer + worker->tight.png.offset, data, length);
 
     worker->tight.png.offset += length;
@@ -1189,7 +1189,7 @@ static int send_png_rect(VncState* vs, VncWorker* worker, int x, int y, int w, i
 
     png_write_info(png_ptr, info_ptr);
 
-    buffer_reserve(&worker->tight.png, 2048);
+    qemu_buffer_reserve(&worker->tight.png, 2048);
     linebuf = qemu_pixman_linebuf_create(PIXMAN_BE_r8g8b8, w);
     buf     = (uint8_t*)pixman_image_get_data(linebuf);
     for (dy = 0; dy < h; dy++) {
@@ -1211,14 +1211,14 @@ static int send_png_rect(VncState* vs, VncWorker* worker, int x, int y, int w, i
 
     tight_send_compact_size(vs, worker->tight.png.offset);
     vnc_write(vs, worker->tight.png.buffer, worker->tight.png.offset);
-    buffer_reset(&worker->tight.png);
+    qemu_buffer_reset(&worker->tight.png);
     return 1;
 }
 #endif /* CONFIG_PNG */
 
 static void vnc_tight_start(VncState* vs, VncTight* tight)
 {
-    buffer_reset(&tight->tight);
+    qemu_buffer_reset(&tight->tight);
 
     // make the output buffer be the zlib buffer, so we can compress it later
     tight->tmp = vs->output;
@@ -1523,13 +1523,13 @@ void vnc_tight_clear(VncWorker* worker)
         if (worker->tight.stream[i].opaque) { deflateEnd(&worker->tight.stream[i]); }
     }
 
-    buffer_free(&worker->tight.tight);
-    buffer_free(&worker->tight.zlib);
-    buffer_free(&worker->tight.gradient);
+    qemu_buffer_free(&worker->tight.tight);
+    qemu_buffer_free(&worker->tight.zlib);
+    qemu_buffer_free(&worker->tight.gradient);
 #ifdef CONFIG_VNC_JPEG
-    buffer_free(&worker->tight.jpeg);
+    qemu_buffer_free(&worker->tight.jpeg);
 #endif
 #ifdef CONFIG_PNG
-    buffer_free(&worker->tight.png);
+    qemu_buffer_free(&worker->tight.png);
 #endif
 }

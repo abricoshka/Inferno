@@ -34,7 +34,7 @@ static const int bits_per_packed_pixel[] = {0, 1, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 
 
 static void vnc_zrle_start(VncState* vs, VncZrle* zrle)
 {
-    buffer_reset(&zrle->zrle);
+    qemu_buffer_reset(&zrle->zrle);
 
     /* make the output buffer be the zlib buffer, so we can compress it later */
     zrle->tmp  = vs->output;
@@ -52,8 +52,8 @@ static void* zrle_convert_fb(VncState* vs, VncZrle* zrle, int x, int y, int w, i
 {
     Buffer tmp;
 
-    buffer_reset(&zrle->fb);
-    buffer_reserve(&zrle->fb, w * h * bpp + bpp);
+    qemu_buffer_reset(&zrle->fb);
+    qemu_buffer_reserve(&zrle->fb, w * h * bpp + bpp);
 
     tmp        = vs->output;
     vs->output = zrle->fb;
@@ -69,7 +69,7 @@ static int zrle_compress_data(VncState* vs, VncZrle* zrle, int level)
 {
     z_streamp zstream = &zrle->stream;
 
-    buffer_reset(&zrle->zlib);
+    qemu_buffer_reset(&zrle->zlib);
 
     if (zstream->opaque != vs) {
         int err;
@@ -88,7 +88,7 @@ static int zrle_compress_data(VncState* vs, VncZrle* zrle, int level)
     }
 
     /* reserve memory in output buffer */
-    buffer_reserve(&zrle->zlib, zrle->zrle.offset + 64);
+    qemu_buffer_reserve(&zrle->zlib, zrle->zrle.offset + 64);
 
     /* set pointers */
     zstream->next_in   = zrle->zrle.buffer;
@@ -326,7 +326,7 @@ int vnc_zywrle_send_framebuffer_update(VncState* vs, VncWorker* worker, int x, i
 void vnc_zrle_clear(VncWorker* worker)
 {
     if (worker->zrle.stream.opaque) { deflateEnd(&worker->zrle.stream); }
-    buffer_free(&worker->zrle.zrle);
-    buffer_free(&worker->zrle.fb);
-    buffer_free(&worker->zrle.zlib);
+    qemu_buffer_free(&worker->zrle.zrle);
+    qemu_buffer_free(&worker->zrle.fb);
+    qemu_buffer_free(&worker->zrle.zlib);
 }

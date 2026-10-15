@@ -39,14 +39,14 @@ static void buffer_adj_size(Buffer* buffer, size_t len)
     size_t old       = buffer->capacity;
     buffer->capacity = buffer_req_size(buffer, len);
     buffer->buffer   = g_realloc(buffer->buffer, buffer->capacity);
-    trace_buffer_resize(buffer->name ?: "unnamed", old, buffer->capacity);
+    trace_qemu_buffer_resize(buffer->name ?: "unnamed", old, buffer->capacity);
 
     /* make it even harder for the buffer to shrink, reset average size
      * to current capacity if it is larger than the average. */
     buffer->avg_size = MAX(buffer->avg_size, buffer->capacity << BUFFER_AVG_SIZE_SHIFT);
 }
 
-void buffer_init(Buffer* buffer, const char* name, ...)
+void qemu_buffer_init(Buffer* buffer, const char* name, ...)
 {
     va_list ap;
 
@@ -57,7 +57,7 @@ void buffer_init(Buffer* buffer, const char* name, ...)
 
 static uint64_t buffer_get_avg_size(Buffer* buffer) { return buffer->avg_size >> BUFFER_AVG_SIZE_SHIFT; }
 
-void buffer_shrink(Buffer* buffer)
+void qemu_buffer_shrink(Buffer* buffer)
 {
     size_t new;
 
@@ -79,24 +79,24 @@ void buffer_shrink(Buffer* buffer)
     buffer_adj_size(buffer, 0);
 }
 
-void buffer_reserve(Buffer* buffer, size_t len)
+void qemu_buffer_reserve(Buffer* buffer, size_t len)
 {
     if ((buffer->capacity - buffer->offset) < len) { buffer_adj_size(buffer, len); }
 }
 
-gboolean buffer_empty(Buffer* buffer) { return buffer->offset == 0; }
+gboolean qemu_buffer_empty(Buffer* buffer) { return buffer->offset == 0; }
 
-uint8_t* buffer_end(Buffer* buffer) { return buffer->buffer + buffer->offset; }
+uint8_t* qemu_buffer_end(Buffer* buffer) { return buffer->buffer + buffer->offset; }
 
-void buffer_reset(Buffer* buffer)
+void qemu_buffer_reset(Buffer* buffer)
 {
     buffer->offset = 0;
-    buffer_shrink(buffer);
+    qemu_buffer_shrink(buffer);
 }
 
-void buffer_free(Buffer* buffer)
+void qemu_buffer_free(Buffer* buffer)
 {
-    trace_buffer_free(buffer->name ?: "unnamed", buffer->capacity);
+    trace_qemu_buffer_free(buffer->name ?: "unnamed", buffer->capacity);
     g_free(buffer->buffer);
     g_free(buffer->name);
     buffer->offset   = 0;
@@ -105,22 +105,22 @@ void buffer_free(Buffer* buffer)
     buffer->name     = NULL;
 }
 
-void buffer_append(Buffer* buffer, const void* data, size_t len)
+void qemu_buffer_append(Buffer* buffer, const void* data, size_t len)
 {
     memcpy(buffer->buffer + buffer->offset, data, len);
     buffer->offset += len;
 }
 
-void buffer_advance(Buffer* buffer, size_t len)
+void qemu_buffer_advance(Buffer* buffer, size_t len)
 {
     memmove(buffer->buffer, buffer->buffer + len, (buffer->offset - len));
     buffer->offset -= len;
-    buffer_shrink(buffer);
+    qemu_buffer_shrink(buffer);
 }
 
-void buffer_move_empty(Buffer* to, Buffer* from)
+void qemu_buffer_move_empty(Buffer* to, Buffer* from)
 {
-    trace_buffer_move_empty(to->name ?: "unnamed", from->offset, from->name ?: "unnamed");
+    trace_qemu_buffer_move_empty(to->name ?: "unnamed", from->offset, from->name ?: "unnamed");
     assert(to->offset == 0);
 
     g_free(to->buffer);
@@ -133,16 +133,16 @@ void buffer_move_empty(Buffer* to, Buffer* from)
     from->buffer   = NULL;
 }
 
-void buffer_move(Buffer* to, Buffer* from)
+void qemu_buffer_move(Buffer* to, Buffer* from)
 {
     if (to->offset == 0) {
-        buffer_move_empty(to, from);
+        qemu_buffer_move_empty(to, from);
         return;
     }
 
-    trace_buffer_move(to->name ?: "unnamed", from->offset, from->name ?: "unnamed");
-    buffer_reserve(to, from->offset);
-    buffer_append(to, from->buffer, from->offset);
+    trace_qemu_buffer_move(to->name ?: "unnamed", from->offset, from->name ?: "unnamed");
+    qemu_buffer_reserve(to, from->offset);
+    qemu_buffer_append(to, from->buffer, from->offset);
 
     g_free(from->buffer);
     from->offset   = 0;
