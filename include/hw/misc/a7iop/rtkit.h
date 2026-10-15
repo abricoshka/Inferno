@@ -83,6 +83,9 @@ struct AppleRTKit
     uint8_t              rollcall_count;
 };
 
+// FIXME: Temporary; set by the machine from the kernel version. Should be read from the IOP firmware.
+extern uint16_t apple_rtkit_max_version;
+
 void apple_rtkit_send_control_msg(AppleRTKit* s, uint8_t ep, uint64_t data);
 void apple_rtkit_send_user_msg(AppleRTKit* s, uint8_t ep, uint64_t data);
 void apple_rtkit_register_control_ep(AppleRTKit* s, uint8_t ep, void* opaque, AppleRTKitEPHandler* handler);

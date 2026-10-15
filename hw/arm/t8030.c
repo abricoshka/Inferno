@@ -253,6 +253,8 @@ static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kerne
         default: assert_not_reached();
     }
 
+    apple_rtkit_max_version = BUILD_VERSION_MAJOR(build_version) <= 13 ? 10 : 12;
+
     if (t8030->securerom_filename == NULL) {
         apple_boot_get_kc_bounds(kernel, NULL, &g_virt_base, &kc_end, NULL, NULL);
         info_report("Kernel virtual low: 0x%016" VADDR_PRIx, g_virt_base);

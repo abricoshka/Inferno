@@ -108,12 +108,9 @@ typedef union
 } AppleRTKitManagementMessage;
 QEMU_BUILD_BUG_ON(sizeof(AppleRTKitManagementMessage) != sizeof(uint64_t));
 
-enum
-{
-    RTKIT_MIN_VERSION           = 3,
-    RTKIT_MAX_VERSION_PRE_IOS14 = 10,
-    RTKIT_MAX_VERSION           = 12,
-};
+#define RTKIT_MIN_VERSION (3)
+
+uint16_t apple_rtkit_max_version = 12;
 
 static void apple_rtkit_construct_msg(AppleA7IOPMessage* message, const uint8_t ep, const uint64_t data)
 {
@@ -196,7 +193,7 @@ static void apple_rtkit_mgmt_send_hello_msg(AppleRTKit* s, uint16_t min_version,
 
 static void apple_rtkit_mgmt_send_hello(AppleRTKit* s)
 {
-    apple_rtkit_mgmt_send_hello_msg(s, RTKIT_MIN_VERSION, RTKIT_MAX_VERSION);
+    apple_rtkit_mgmt_send_hello_msg(s, RTKIT_MIN_VERSION, apple_rtkit_max_version);
     s->ep0_status = EP0_WAIT_HELLO;
 }
 
@@ -270,15 +267,6 @@ static void apple_rtkit_mgmt_handle_msg(void* opaque, uint8_t ep, uint64_t messa
     switch (msg->type) {
         case MSG_HELLO_ACK:
             assert_cmphex(s->ep0_status, ==, EP0_WAIT_HELLO);
-
-            // We must resend hello on iOS <=13 with a lower version range.
-            // FIXME: This doesn't work consistently;
-            // iOS sometimes panics about the mismatch due to a race condition.
-            // Good job Apple! Now we'll have to read the version from the fw.
-            if (msg->hello_ack.min_version == 0xFFFF && msg->hello_ack.max_version == 0xBAD) {
-                apple_rtkit_mgmt_send_hello_msg(s, RTKIT_MIN_VERSION, RTKIT_MAX_VERSION_PRE_IOS14);
-                break;
-            }
 
             s->protocol_version = msg->hello_ack.max_version;
 
