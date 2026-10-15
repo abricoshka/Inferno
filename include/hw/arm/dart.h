@@ -51,7 +51,6 @@ void            apple_dart_set_dart_instance(AppleDARTState* dart, uint32_t i, h
 void            apple_dart_set_other_instance(AppleDARTState* dart, uint32_t i, dart_instance_t type, hwaddr regs_addr);
 
 IOMMUMemoryRegion* apple_dart_iommu_mr(AppleDARTState* dart, uint32_t sid);
-void               apple_dart_iommu_table_pages(IOMMUMemoryRegion* mr, GArray* out);
 IOMMUMemoryRegion* apple_dart_instance_iommu_mr(AppleDARTState* s, uint32_t instance, uint32_t sid);
 
 /*

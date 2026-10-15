@@ -35,8 +35,6 @@ OBJECT_DECLARE_TYPE(AppleSEP, AppleSEPClass, APPLE_SEP)
 #define SEP_APERTURE_REGION3             (0x300000000ULL)
 #define SEP_APERTURE_REGION2             (0x340000000ULL)
 #define SEP_REGION2_SIZE                 ((((uint64_t)SEP_OPCODE17_INTEGRITY_TREE_SIZE) << 10) & 0xFFFFC000ULL)
-#define SEP_DMA_IOVA_SIZE                (0x100000000ULL)
-#define SEP_DART_PAGE_SIZE               (16 * KiB)
 
 typedef enum AppleSEPMMIOIndex
 {

@@ -164,15 +164,7 @@ struct AppleSEP
     AddressSpace*             ool_as;
     MemoryRegion              tz0_win_r2;
     MemoryRegion              tz0_win_r3;
-    MemoryRegion              tz0_mirror_r2;
-    MemoryRegion              tz0_mirror_r3;
     bool                      tz0_wins_inited;
-    IOMMUNotifier             dma_notifier;
-    GArray*                   dma_pending;
-    GPtrArray*                dma_windows;
-    GHashTable*               dma_shadow_pages;
-    QEMUBH*                   dma_rebuild_bh;
-    bool                      dma_refreshing;
     QEMUTimer*                timer;
     I2CSlave*                 nvram;
     uint32_t                  chip_id;

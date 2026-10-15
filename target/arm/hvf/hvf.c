@@ -1577,13 +1577,16 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
                 break;
             }
 
+            AddressSpace* as = cpu_get_address_space(cpu, ARMASIdx_NS);
+
+            if (hvf_map_private_page(as, excp->physical_address, iswrite)) { break; }
+
             if (cm) {
                 /* We don't cache MMIO regions */
                 advance_pc = true;
                 break;
             }
 
-            AddressSpace* as = cpu_get_address_space(cpu, ARMASIdx_NS);
             if (isv) {
                 if (iswrite) {
                     val = hvf_get_reg(cpu, srt);

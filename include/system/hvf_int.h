@@ -79,6 +79,7 @@ const char* hvf_return_string(hv_return_t ret);
 int         hvf_arch_init(void);
 hv_return_t hvf_arch_vm_create(MachineState* ms, uint32_t pa_range);
 hvf_slot*   hvf_find_overlap_slot(uint64_t, uint64_t);
+bool        hvf_map_private_page(AddressSpace* as, hwaddr ipa, bool is_write);
 void        hvf_kick_vcpu_thread(CPUState* cpu);
 
 /* Must be called by the owning thread */

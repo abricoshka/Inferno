@@ -1571,9 +1571,11 @@ bool apple_virt_handle_step(CPUState* cs)
     for (uint32_t i = 0; i < c->nr_step_pages; i++) {
         GXFPage* p = gxf_page(c->step_pages[i]);
 
-        gxf_page_updated(p->ipa, 0, GXF_PAGE_SIZE);
         p->steppers -= 1;
-        gxf_page_put(p);
+        if (p->mirrors->len == 0) { gxf_page_put(p); }
+        else {
+            gxf_page_updated(p->ipa, 0, GXF_PAGE_SIZE);
+        }
     }
     c->nr_step_pages = 0;
     return true;

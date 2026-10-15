@@ -141,13 +141,6 @@ void ck_sep_seprom_patches(CKPatcherRange* range)
                             sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl));
 }
 
-typedef struct
-{
-    hwaddr iova;
-    hwaddr pa;
-    hwaddr len;
-} AppleSEPDMARange;
-
 static MemoryRegion* apple_sep_cpu_memory(AppleSEP* s)
 {
     if (s->modern) { return &APPLE_A13(s->cpu)->memory; }
@@ -155,246 +148,16 @@ static MemoryRegion* apple_sep_cpu_memory(AppleSEP* s)
     return &APPLE_A9(s->cpu)->memory;
 }
 
-typedef struct
-{
-    AppleSEP*    sep;
-    MemoryRegion mr;
-    hwaddr       pa;
-    uint8_t*     data;
-} AppleSEPShadowPage;
-
-static void apple_sep_dma_refresh(AppleSEP* s);
-
-static uint64_t apple_sep_shadow_read(void* opaque, hwaddr addr, unsigned size)
-{
-    AppleSEPShadowPage* page = opaque;
-    uint64_t            val  = 0;
-
-    memcpy(&val, page->data + addr, size);
-    return val;
-}
-
-static void apple_sep_shadow_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
-{
-    AppleSEPShadowPage* page = opaque;
-
-    memcpy(page->data + addr, &data, size);
-    qemu_bh_schedule(page->sep->dma_rebuild_bh);
-}
-
-static const MemoryRegionOps apple_sep_shadow_ops = {
-    .read                  = apple_sep_shadow_read,
-    .write                 = apple_sep_shadow_write,
-    .endianness            = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 1,
-    .valid.max_access_size = 8,
-};
-
-static void apple_sep_shadow_free(gpointer data)
-{
-    AppleSEPShadowPage* page = data;
-
-    memory_region_del_subregion(get_system_memory(), &page->mr);
-    object_unparent(OBJECT(&page->mr));
-    g_free(page);
-}
-
-static void apple_sep_shadow_add(AppleSEP* s, hwaddr pa)
-{
-    AppleSEPShadowPage* page;
-    g_autofree char*    name = NULL;
-    uint64_t            size = SEP_DART_PAGE_SIZE;
-
-    pa &= ~(size - 1);
-
-    if (g_hash_table_contains(s->dma_shadow_pages, GUINT_TO_POINTER(pa))) { return; }
-
-    page      = g_new0(AppleSEPShadowPage, 1);
-    page->sep = s;
-    page->pa  = pa;
-    name      = g_strdup_printf("sep_dart_table_0x%" HWADDR_PRIx, pa);
-
-    memory_region_init_rom_device(&page->mr, OBJECT(s), &apple_sep_shadow_ops, page, name, size, &error_fatal);
-    page->data = memory_region_get_ram_ptr(&page->mr);
-    address_space_read(&address_space_memory, pa, MEMTXATTRS_UNSPECIFIED, page->data, size);
-    memory_region_add_subregion_overlap(get_system_memory(), pa, &page->mr, 2);
-
-    g_hash_table_insert(s->dma_shadow_pages, GUINT_TO_POINTER(pa), page);
-    // info_report("sep dma: shadowing dart table page 0x%" HWADDR_PRIx, pa);
-}
-
-static void apple_sep_dma_shadow_tables(AppleSEP* s)
-{
-    g_autoptr(GArray) pages    = g_array_new(false, false, sizeof(hwaddr));
-    g_autoptr(GHashTable) live = g_hash_table_new(g_direct_hash, g_direct_equal);
-    GHashTableIter iter;
-    gpointer       key;
-
-    apple_dart_iommu_table_pages(IOMMU_MEMORY_REGION(s->ool_mr), pages);
-
-    for (guint i = 0; i < pages->len; i++) {
-        hwaddr pa = g_array_index(pages, hwaddr, i) & ~(SEP_DART_PAGE_SIZE - 1);
-
-        apple_sep_shadow_add(s, pa);
-        g_hash_table_add(live, GUINT_TO_POINTER(pa));
-    }
-
-    g_hash_table_iter_init(&iter, s->dma_shadow_pages);
-
-    while (g_hash_table_iter_next(&iter, &key, NULL)) {
-        if (!g_hash_table_contains(live, key)) { g_hash_table_iter_remove(&iter); }
-    }
-}
-
-static void apple_sep_dma_clear_windows(AppleSEP* s)
-{
-    for (guint i = 0; i < s->dma_windows->len; i++) {
-        MemoryRegion* win = g_ptr_array_index(s->dma_windows, i);
-
-        memory_region_del_subregion(win->container, win);
-        object_unparent(OBJECT(win));
-    }
-
-    g_ptr_array_set_size(s->dma_windows, 0);
-}
-
-static void apple_sep_dma_add_window(AppleSEP* s, MemoryRegion* parent, hwaddr iova, hwaddr len, MemoryRegion* target,
-                                     hwaddr offset)
-{
-    MemoryRegion*    win  = g_new0(MemoryRegion, 1);
-    g_autofree char* name = g_strdup_printf("sep_dma_0x%" HWADDR_PRIx, iova);
-
-    memory_region_init_alias(win, OBJECT(s), name, target, offset, len);
-    memory_region_add_subregion_overlap(parent, iova, win, 1);
-    g_ptr_array_add(s->dma_windows, win);
-}
-
-static gint apple_sep_dma_range_cmp(gconstpointer a, gconstpointer b)
-{
-    const AppleSEPDMARange* x = a;
-    const AppleSEPDMARange* y = b;
-
-    return x->iova < y->iova ? -1 : x->iova > y->iova ? 1 : 0;
-}
-
-static void apple_sep_dma_rebuild(void* opaque) { apple_sep_dma_refresh(opaque); }
-
-static void apple_sep_dma_build_windows(AppleSEP* s)
-{
-    memory_region_transaction_begin();
-    apple_sep_dma_clear_windows(s);
-
-    g_array_sort(s->dma_pending, apple_sep_dma_range_cmp);
-
-    for (guint i = 0; i < s->dma_pending->len;) {
-        AppleSEPDMARange    run = g_array_index(s->dma_pending, AppleSEPDMARange, i);
-        MemoryRegionSection section;
-        guint               j;
-
-        for (j = i + 1; j < s->dma_pending->len; j++) {
-            AppleSEPDMARange* next = &g_array_index(s->dma_pending, AppleSEPDMARange, j);
-
-            if (next->iova != run.iova + run.len || next->pa != run.pa + run.len) { break; }
-
-            run.len += next->len;
-        }
-
-        i = j;
-
-        section = memory_region_find(get_system_memory(), run.pa, run.len);
-
-        if (section.mr == NULL) {
-            // warn_report("sep dma: unbacked 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova,
-            // run.len,
-            //             run.pa);
-            continue;
-        }
-
-        if (memory_region_is_ram(section.mr) && int128_get64(section.size) == run.len) {
-            apple_sep_dma_add_window(s, get_system_memory(), run.iova, run.len, section.mr,
-                                     section.offset_within_region);
-            // info_report("sep dma: 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx, run.iova, run.len,
-            // run.pa);
-        }
-        else {
-            // warn_report("sep dma: skipped 0x%" HWADDR_PRIx "+0x%" HWADDR_PRIx " -> 0x%" HWADDR_PRIx " (%s)",
-            // run.iova,
-            //             run.len, run.pa, section.mr->name);
-        }
-
-        memory_region_unref(section.mr);
-    }
-
-    memory_region_transaction_commit();
-}
-
-static void apple_sep_dma_refresh(AppleSEP* s)
-{
-    s->dma_refreshing = true;
-
-    apple_sep_dma_shadow_tables(s);
-
-    g_array_set_size(s->dma_pending, 0);
-    memory_region_iommu_replay(IOMMU_MEMORY_REGION(s->ool_mr), &s->dma_notifier);
-    apple_sep_dma_build_windows(s);
-
-    s->dma_refreshing = false;
-}
-
-static void apple_sep_dma_notify(IOMMUNotifier* n, IOMMUTLBEntry* entry)
-{
-    AppleSEP*        s = container_of(n, AppleSEP, dma_notifier);
-    AppleSEPDMARange range;
-
-    if ((entry->perm & IOMMU_RW) == 0) {
-        if (!s->dma_refreshing) { qemu_bh_schedule(s->dma_rebuild_bh); }
-        return;
-    }
-
-    if (entry->iova >= SEP_DMA_IOVA_SIZE) { return; }
-
-    range.iova = entry->iova;
-    range.pa   = entry->translated_addr;
-    range.len  = entry->addr_mask + 1;
-
-    g_array_append_val(s->dma_pending, range);
-}
-
-static void apple_sep_dma_init(AppleSEP* s)
-{
-    if (!hwaccel_enabled()) { return; }
-
-    s->dma_pending      = g_array_new(false, false, sizeof(AppleSEPDMARange));
-    s->dma_windows      = g_ptr_array_new();
-    s->dma_shadow_pages = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, apple_sep_shadow_free);
-    s->dma_rebuild_bh   = qemu_bh_new(apple_sep_dma_rebuild, s);
-
-    iommu_notifier_init(&s->dma_notifier, apple_sep_dma_notify, IOMMU_NOTIFIER_ALL, 0, HWADDR_MAX, 0);
-    memory_region_register_iommu_notifier(s->ool_mr, &s->dma_notifier, &error_fatal);
-}
-
-static void apple_sep_tz0_window(AppleSEP* s, MemoryRegion* win, MemoryRegion* mirror, const char* name,
-                                 MemoryRegion* dram, hwaddr base, hwaddr offset, uint64_t size)
+static void apple_sep_tz0_window(AppleSEP* s, MemoryRegion* win, const char* name, MemoryRegion* dram, hwaddr base,
+                                 hwaddr offset, uint64_t size)
 {
     if (s->tz0_wins_inited) {
         memory_region_set_alias_offset(win, offset);
         memory_region_set_size(win, size);
-
-        if (hwaccel_enabled()) {
-            memory_region_set_alias_offset(mirror, offset);
-            memory_region_set_size(mirror, size);
-        }
     }
     else {
-        g_autofree char* mirror_name = g_strdup_printf("%s_mirror", name);
-
         memory_region_init_alias(win, OBJECT(s), name, dram, offset, size);
         memory_region_add_subregion(apple_sep_cpu_memory(s), base, win);
-
-        if (hwaccel_enabled()) {
-            memory_region_init_alias(mirror, OBJECT(s), mirror_name, dram, offset, size);
-            memory_region_add_subregion(get_system_memory(), base, mirror);
-        }
     }
 }
 
@@ -419,10 +182,8 @@ void apple_sep_setup_tz0(AppleSEP* s, MemoryRegion* dram, hwaddr tz0_off, hwaddr
     r3_size = tz0_end <= r3_off ? 0 : (tz0_end - r3_off) & ~0x3FFFULL;
 
     memory_region_transaction_begin();
-    apple_sep_tz0_window(s, &s->tz0_win_r2, &s->tz0_mirror_r2, "sep_tz0_r2", dram, SEP_APERTURE_REGION2, tz0_off,
-                         SEP_REGION2_SIZE);
-    apple_sep_tz0_window(s, &s->tz0_win_r3, &s->tz0_mirror_r3, "sep_tz0_r3", dram, SEP_APERTURE_REGION3, r3_off,
-                         r3_size);
+    apple_sep_tz0_window(s, &s->tz0_win_r2, "sep_tz0_r2", dram, SEP_APERTURE_REGION2, tz0_off, SEP_REGION2_SIZE);
+    apple_sep_tz0_window(s, &s->tz0_win_r3, "sep_tz0_r3", dram, SEP_APERTURE_REGION3, r3_off, r3_size);
     s->tz0_wins_inited = true;
     memory_region_transaction_commit();
 }
@@ -460,11 +221,9 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
         object_property_set_bool(OBJECT(s->cpu), "aarch64", false, NULL);
     }
 
-    if (tcg_enabled()) {
-        MemoryRegion* mr0 = g_new0(MemoryRegion, 1);
-        memory_region_init_alias(mr0, OBJECT(s), "sep_dma", s->ool_mr, 0, SEP_DMA_MAPPING_SIZE);
-        memory_region_add_subregion(apple_sep_cpu_memory(s), 0, mr0);
-    }
+    MemoryRegion* mr0 = g_new0(MemoryRegion, 1);
+    memory_region_init_alias(mr0, OBJECT(s), "sep_dma", s->ool_mr, 0, SEP_DMA_MAPPING_SIZE);
+    memory_region_add_subregion(apple_sep_cpu_memory(s), 0, mr0);
 
     object_property_set_uint(OBJECT(s->cpu), "rvbar", s->base & ~0xFFF, NULL);
     object_property_add_child(OBJECT(s), DEVICE(s->cpu)->id, OBJECT(s->cpu));
@@ -566,8 +325,6 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
     assert_nonnull(s->ool_as);
     address_space_init(s->ool_as, s->ool_mr, "sep.ool");
 #endif
-
-    apple_sep_dma_init(s);
 
     s->mailbox = s->parent_obj.iop_mailbox;
 
