@@ -22,6 +22,10 @@
 #include "qemu/lockable.h"
 #include "qemu/main-loop.h"
 #include "hw/arm/sep/private.h"
+#include <nettle/ecc-curve.h>
+#include <nettle/ecc.h>
+#include <nettle/ecdsa.h>
+#include <nettle/sha2.h>
 
 // T8030, but there's no overlap when the size is bigger
 // #define PKA_BASE_REG_SIZE (0x4000)
@@ -44,6 +48,7 @@ struct AppleSEPPKAState
     uint32_t     command;                    // 0x0
     uint32_t     status0;                    // 0x4
     uint32_t     status_in0;                 // 0x8
+    bool         output_ready;               // level "output ready" gate for reg[8]
     uint32_t     img4out_dgst_locked;        // 0x40
     uint8_t      img4out_dgst[32];           // 0x60
     uint8_t      output0[32];                // 0x60 ; read_cmd_0x2
@@ -63,12 +68,80 @@ struct AppleSEPPKAState
     uint8_t      pka_tmm_regs[PKA_TMM_REG_SIZE];
 };
 
+#define P256_ORDER_HEX "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551"
+
+static void pka_mpz_export_be(uint8_t* out, size_t len, const mpz_t v)
+{
+    size_t n = (mpz_sizeinbase(v, 2) + 7) / 8;
+
+    memset(out, 0, len);
+    if (n > len) { n = len; }
+    mpz_export(out + (len - n), NULL, 1, 1, 1, 0, v);
+}
+
+static void pka_fill_attest_output(AppleSEPPKAState* s)
+{
+    const struct ecc_curve* ecc = nettle_get_secp_256r1();
+    struct sha256_ctx       sctx;
+    uint8_t                 digest[SHA256_DIGEST_SIZE];
+    uint8_t                 pubkey[64];
+    static const char       label[] = "Inferno SEP SIK v1";
+    mpz_t                   h, order_m1, d, x, y;
+    struct ecc_scalar       priv;
+    struct ecc_point        pub;
+
+    sha256_init(&sctx);
+    sha256_update(&sctx, sizeof(label), (const uint8_t*)label);
+    sha256_update(&sctx, sizeof(s->ecid_chipid_misc), (const uint8_t*)s->ecid_chipid_misc);
+#if NETTLE_VERSION_MAJOR >= 4
+    sha256_digest(&sctx, digest);
+#else
+    sha256_digest(&sctx, SHA256_DIGEST_SIZE, digest);
+#endif
+
+    mpz_inits(h, order_m1, d, x, y, NULL);
+    mpz_import(h, sizeof(digest), 1, 1, 1, 0, digest);
+    mpz_set_str(order_m1, P256_ORDER_HEX, 16);
+    mpz_sub_ui(order_m1, order_m1, 1);
+    mpz_mod(d, h, order_m1);    // [0, n - 2]
+    mpz_add_ui(d, d, 1);        // [1, n - 1]
+
+    ecc_scalar_init(&priv, ecc);
+    ecc_scalar_set(&priv, d);
+    ecc_point_init(&pub, ecc);
+    ecc_point_mul_g(&pub, &priv);
+    ecc_point_get(&pub, x, y);
+
+    pka_mpz_export_be(pubkey, 32, x);
+    pka_mpz_export_be(pubkey + 32, 32, y);
+    memcpy(&s->pka_base_regs[0x100], pubkey, sizeof(pubkey));
+
+    sha256_init(&sctx);
+    sha256_update(&sctx, sizeof(pubkey), pubkey);
+#if NETTLE_VERSION_MAJOR >= 4
+    sha256_digest(&sctx, &s->pka_base_regs[0x180]);
+#else
+    sha256_digest(&sctx, SHA256_DIGEST_SIZE, &s->pka_base_regs[0x180]);
+#endif
+
+    ecc_scalar_clear(&priv);
+    ecc_point_clear(&pub);
+    mpz_clears(h, order_m1, d, x, y, NULL);
+
+    s->output_ready = true;
+}
+
 static void pka_handle_cmd(AppleSEPPKAState* s)
 {
     AppleSEP* sep = s->sep;
+    // just randomly tested some pka commands with 0xaa times 0x20 for offset 0x60, and 0x55 times 0x20 for offset 0x80, and commands 0x4/0x20/0x40/0x80/0x100 cause interrupt_status bit3, while 0x8/0x10 cause bit 30
 
     // values: 0x4/0x8/0x10/0x20/0x40/0x80/0x100
-    if (s->command == 0x40) {    // migrate data with PKA
+    if (s->command == 0x80 || s->command == 0x100) {    // MPKA_ECPUB_ATTEST/ECDSA_ATTEST
+        pka_fill_attest_output(s);
+    }
+
+    if (s->command == 0x40 || s->command == 0x80 || s->command == 0x100) {
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
         // apple_a7iop_interrupt_status_push(sep->mailbox,
@@ -76,7 +149,8 @@ static void pka_handle_cmd(AppleSEPPKAState* s)
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000C);    // ack third interrupt/0xC
     }
-    else if (s->command == 0x80) {    // MPKA_ECPUB_ATTEST
+    if (s->command == 0x04) {
+        s->output_ready = true;
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
         // apple_a7iop_interrupt_status_push(sep->mailbox,
@@ -105,6 +179,7 @@ static void pka_base_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
     switch (addr) {
         case 0x0:    // maybe command
             s->command = data;
+            s->output_ready = false;
             // PKA commands get executed directly, without additional trigger
             pka_handle_cmd(s);
             // qemu_bh_schedule(s->command_bh);
@@ -169,17 +244,13 @@ static uint64_t pka_base_reg_read(void* opaque, hwaddr addr, unsigned size)
     cpu_dump_state(CPU(sep->cpu), stderr, CPU_DUMP_CODE);
 #endif
     switch (addr) {
-        case 0x8:    // maybe status_in0/interrupt_status
-#if 1
-                     // if (s->status0 == 0x1)
-            if (s->status_in0 == 0x1) {
-                ret = 0x1;    // this means mod_PKA_read output ready
-            }
-#endif
-#if 1
-            ret = s->status_in0;
+        case 0x8:    // status_in0/interrupt_status; reg[8]==1 means output ready
+            // 0x8/bit3, missing data from AESS?
+            // 0x4/bit2, invalid input data?
+            // only bit30, then only bit0, success?
+            // bit30, pending?
+            ret = s->status_in0 | (s->output_ready ? 1 : 0);
             if (s->status_in0 == 1) { s->status_in0 = 0; }
-#endif
             goto jump_log;
         case 0x40:    // img4out DGST locked
             ret = s->img4out_dgst_locked;
@@ -294,6 +365,7 @@ static void apple_sep_pka_reset_enter(Object* obj, ResetType type)
     s->command                 = 0;
     s->status0                 = 0;
     s->status_in0              = 0;
+    s->output_ready            = false;
     s->img4out_dgst_locked     = 0;
     s->chip_revision_locked    = 0;
     s->ecid_chipid_misc_locked = 0;
