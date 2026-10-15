@@ -198,6 +198,7 @@ static void apple_a13_cluster_realize(DeviceState* dev, Error** errp)
 {
     AppleA13Cluster* cluster = APPLE_A13_CLUSTER(dev);
     object_child_foreach_recursive(OBJECT(cluster), add_cpu_to_cluster, dev);
+    qemu_register_resettable(OBJECT(dev));
 }
 
 static void apple_a13_cluster_tick(AppleA13Cluster* c)
@@ -612,6 +613,12 @@ static void apple_a13_cluster_reset_enter(Object* obj, ResetType type)
     AppleA13Cluster* cluster = APPLE_A13_CLUSTER(obj);
     memset(cluster->deferredIPI, 0, sizeof(cluster->deferredIPI));
     memset(cluster->noWakeIPI, 0, sizeof(cluster->noWakeIPI));
+    cluster->A13_CPREG_VAR_NAME(CTRR_A_LWR_EL1) = 0;
+    cluster->A13_CPREG_VAR_NAME(CTRR_A_UPR_EL1) = 0;
+    cluster->A13_CPREG_VAR_NAME(CTRR_B_LWR_EL1) = 0;
+    cluster->A13_CPREG_VAR_NAME(CTRR_B_UPR_EL1) = 0;
+    cluster->A13_CPREG_VAR_NAME(CTRR_CTL_EL1)   = 0;
+    cluster->A13_CPREG_VAR_NAME(CTRR_LOCK_EL1)  = 0;
 }
 
 static void apple_a13_cluster_class_init(ObjectClass* klass, const void* data)
