@@ -136,6 +136,8 @@
 #define PREBOOT_DEVICETREE  "usr/standalone/firmware/devicetree.img4"
 #define PREBOOT_TRUSTCACHE  "usr/standalone/firmware/FUD/StaticTrustCache.img4"
 #define PREBOOT_ROOT_HASH   "usr/standalone/firmware/root_hash.img4"
+#define PREBOOT_SPTM        "usr/standalone/firmware/FUD/Ap,SecurePageTableMonitor.img4"
+#define PREBOOT_TXM         "usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4"
 
 #define GPIO_FORCE_DFU (161)
 
@@ -1052,6 +1054,21 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_u32(node, "low-power-enable", 1);
 }
 
+static void t8030_set_sptm(AppleT8030MachineState* t8030, const char* filename, uint8_t* data, gsize len)
+{
+    if (t8030->sptm != NULL) { g_free(apple_boot_get_macho_buffer(t8030->sptm)); }
+    t8030->sptm = apple_boot_load_monitor_data(filename, data, len, "sptm", "rspt");
+    if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->sptm); }
+}
+
+static void t8030_set_txm(AppleT8030MachineState* t8030, const char* filename, uint8_t* data, gsize len)
+{
+    if (t8030->txm != NULL) { g_free(apple_boot_get_macho_buffer(t8030->txm)); }
+    t8030->txm = apple_boot_load_monitor_data(filename, data, len, "trxm", "rtrx");
+    ck_patch_txm(t8030->txm);
+    if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->txm); }
+}
+
 /* What iBoot reads from Preboot. Images restored through DFU replace these. */
 static void t8030_load_preboot_files(AppleT8030MachineState* t8030)
 {
@@ -1072,6 +1089,10 @@ static void t8030_load_preboot_files(AppleT8030MachineState* t8030)
         t8030->trustcache =
             apple_boot_load_trustcache_data(PREBOOT_TRUSTCACHE, data, len, &t8030->boot_info.trustcache_size);
     }
+
+    if (t8030_load_preboot_file(PREBOOT_SPTM, &data, &len, NULL)) { t8030_set_sptm(t8030, PREBOOT_SPTM, data, len); }
+
+    if (t8030_load_preboot_file(PREBOOT_TXM, &data, &len, NULL)) { t8030_set_txm(t8030, PREBOOT_TXM, data, len); }
 }
 
 static void t8030_memory_setup(AppleT8030MachineState* t8030)
@@ -1314,16 +1335,9 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         t8030->trustcache = apple_boot_load_trustcache_data("DFU trust cache", data, len, &info->trustcache_size);
     }
 
-    if (apple_dfu_copy_image(t8030->dfu, "rspt", &data, &len)) {
-        t8030->sptm = apple_boot_load_monitor_data("DFU SPTM", data, len, "sptm", "rspt");
-        if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->sptm); }
-    }
+    if (apple_dfu_copy_image(t8030->dfu, "rspt", &data, &len)) { t8030_set_sptm(t8030, "DFU SPTM", data, len); }
 
-    if (apple_dfu_copy_image(t8030->dfu, "rtrx", &data, &len)) {
-        t8030->txm = apple_boot_load_monitor_data("DFU TXM", data, len, "trxm", "rtrx");
-        ck_patch_txm(t8030->txm);
-        if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->txm); }
-    }
+    if (apple_dfu_copy_image(t8030->dfu, "rtrx", &data, &len)) { t8030_set_txm(t8030, "DFU TXM", data, len); }
 
     hdr = t8030->kernel;
     if (hdr == NULL) {
