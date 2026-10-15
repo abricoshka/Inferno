@@ -567,6 +567,14 @@ static bool ck_kp_amx_new_callback(void* ctx, uint8_t* buffer)
 
 static bool ck_kp_amx_newer_callback(void* ctx, uint8_t* buffer) { return ck_kp_amx_common(buffer, true); }
 
+static bool ck_kp_amx_imm_callback(void* ctx, uint8_t* buffer)
+{
+    uint32_t insn = ldl_le_p(buffer);
+    if (((insn >> 5) & 0x1F) == 31) { return false; }
+    stl_le_p(buffer, 0x32150000 | (insn & 0x3FF));    // orr w?, w?, #0x800
+    return true;
+}
+
 static bool ck_kp_amx_cap_callback(void* ctx, uint8_t* buffer)
 {
     uint8_t* lsl = ck_patcher_find_prev_insn(buffer, 8, 0x53051000, 0xFFFFFC00, 0);    // lsl w?, w?, #0x1b
@@ -612,6 +620,15 @@ static void ck_kp_amx_patch(CKPatcherRange* range)
         if (!ck_patcher_find_callback(range, "disable AMX", pattern, mask, sizeof(pattern), sizeof(uint32_t), 1,
                                       ck_kp_amx_callback))
         {
+            static const uint8_t pattern_imm[] = {0x00, 0x80, 0x05, 0x32};    // orr w?, w?, #0x8000800
+            static const uint8_t mask_imm[]    = {0x00, 0xFC, 0xFF, 0xFF};
+            QEMU_BUILD_BUG_ON(sizeof(pattern_imm) != sizeof(mask_imm));
+            if (ck_patcher_find_callback(range, "disable AMX (imm)", pattern_imm, mask_imm, sizeof(pattern_imm),
+                                         sizeof(uint32_t), 1, ck_kp_amx_imm_callback))
+            {
+                return;
+            }
+
             static const uint8_t pattern_newer[] = {
                 0x0A, 0xF1, 0x1C, 0xD5,    // msr amx_config_el1, x?
                 0xDF, 0x3F, 0x03, 0xD5,    // isb
