@@ -1314,7 +1314,10 @@ static int hvf_sysreg_write(CPUState* cpu, uint32_t reg, uint64_t val)
         case SYSREG_ICC_SRE_EL1:
             if (hvf_sysreg_write_cp(cpu, "unknown", reg, val)) { return 0; }
             break;
-        case SYSREG_MDSCR_EL1   : env->cp15.mdscr_el1 = val; return 0;
+        case SYSREG_MDSCR_EL1:
+            if (cur_hw_bps > 0 || cur_hw_wps > 0) { val = deposit64(val, MDSCR_EL1_MDE_SHIFT, 1, 1); }
+            env->cp15.mdscr_el1 = val;
+            return 0;
         case SYSREG_DBGBVR0_EL1 :
         case SYSREG_DBGBVR1_EL1 :
         case SYSREG_DBGBVR2_EL1 :
