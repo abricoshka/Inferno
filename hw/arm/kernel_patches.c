@@ -848,6 +848,7 @@ void ck_patch_kernel(MachoHeader64* hdr)
     g_autofree CKPatcherRange* amfi_text;
     g_autofree CKPatcherRange* sep_mgr_text;
     g_autofree CKPatcherRange* img4_text;
+    g_autofree CKPatcherRange* fwupdate_text;
     g_autofree CKPatcherRange* kernel_text;
     g_autofree CKPatcherRange* kernel_const;
     g_autofree CKPatcherRange* kernel_ppltext;
@@ -865,6 +866,9 @@ void ck_patch_kernel(MachoHeader64* hdr)
 
     img4_text = ck_kp_find_image_text(hdr, "com.apple.security.AppleImage4");
     ck_kp_img4_patches(img4_text);
+
+    fwupdate_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleFirmwareUpdateKext");
+    if (fwupdate_text != NULL) { ck_kp_img4_patches(fwupdate_text); }
 
     kernel_text = ck_kp_get_kernel_section(hdr, "__TEXT_EXEC", "__text");
     ck_kp_mac_mount_patch(kernel_text);
