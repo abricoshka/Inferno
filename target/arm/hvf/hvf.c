@@ -40,6 +40,7 @@
 #include "gdbstub/enums.h"
 
 #include "emulate/aarch64.h"
+#include "apple-virt.h"
 
 #define MDSCR_EL1_SS_SHIFT  0
 #define MDSCR_EL1_MDE_SHIFT 15
@@ -484,7 +485,9 @@ int hvf_arch_get_registers(CPUState* cpu)
 
         arm_cpu->cpreg_values[i] = val;
     }
+    apple_virt_sync_begin(cpu);
     success = write_list_to_cpustate(arm_cpu);
+    apple_virt_sync_end(cpu);
     assert(success);
 
     aarch64_restore_sp(env, arm_current_el(env));
@@ -525,7 +528,9 @@ int hvf_arch_put_registers(CPUState* cpu)
 
     aarch64_save_sp(env, arm_current_el(env));
 
+    apple_virt_sync_begin(cpu);
     success = write_cpustate_to_list(arm_cpu, false);
+    apple_virt_sync_end(cpu);
     assert(success);
     for (i = 0, n = arm_cpu->cpreg_array_len; i < n; i++) {
         uint64_t kvm_id = arm_cpu->cpreg_indexes[i];
@@ -1183,6 +1188,33 @@ static void pmswinc_write(CPUARMState* env, uint64_t value)
     }
 }
 
+/*
+ * Writing an IMPDEF register that is a plain field of `env` or backed by a device (IPIs, cluster state) doesn't depend
+ * on the rest of the vCPU state, so it doesn't need a full sync; XNU writes IPI and performance-counter registers
+ * often.
+ */
+static bool hvf_sysreg_write_impdef(CPUState* cpu, uint32_t reg, uint64_t val)
+{
+    ARMCPU*             arm_cpu = ARM_CPU(cpu);
+    CPUARMState*        env     = &arm_cpu->env;
+    const ARMCPRegInfo* ri;
+
+    if (SYSREG_OP0(reg) != 3 || SYSREG_CRN(reg) != 15) { return false; }
+    ri = ARMCPRegTable_cget(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
+    if (ri == NULL || ri->accessfn != NULL || (ri->type & ARM_CP_SPECIAL_MASK) || !cp_access_ok(1, ri, false)) {
+        return false;
+    }
+    if (ri->type & ARM_CP_CONST) { return true; }
+    if (ri->writefn == NULL) { raw_write(env, ri, val); }
+    else if (ri->type & ARM_CP_IO) {
+        ri->writefn(env, ri, val);
+    }
+    else {
+        return false;
+    }
+    return true;
+}
+
 static int hvf_sysreg_write(CPUState* cpu, uint32_t reg, uint64_t val)
 {
     ARMCPU*      arm_cpu = ARM_CPU(cpu);
@@ -1191,6 +1223,7 @@ static int hvf_sysreg_write(CPUState* cpu, uint32_t reg, uint64_t val)
     trace_hvf_sysreg_write(reg, SYSREG_OP0(reg), SYSREG_OP1(reg), SYSREG_CRN(reg), SYSREG_CRM(reg), SYSREG_OP2(reg),
                            val);
 
+    if (hvf_sysreg_write_impdef(cpu, reg, val)) { return 0; }
     cpu_synchronize_state(cpu);
 
     if (arm_feature(env, ARM_FEATURE_PMU)) {
@@ -1487,6 +1520,7 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
 
     switch (ec) {
         case EC_SOFTWARESTEP: {
+            if (apple_virt_handle_step(cpu)) { break; }
             ret = EXCP_DEBUG;
 
             if (!cpu->singlestep_enabled) { error_report("EC_SOFTWARESTEP but single-stepping not enabled"); }
@@ -1531,9 +1565,17 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
             uint32_t len     = 1 << sas;
             uint32_t srt     = (syndrome >> 16) & 0x1f;
             uint32_t cm      = (syndrome >> 8) & 0x1;
+            bool     perm    = (syndrome & 0x3c) == 0xc;
             uint64_t val     = 0;
 
             trace_hvf_data_abort(excp->virtual_address, excp->physical_address, isv, iswrite, s1ptw, len, srt);
+
+            // A store to a write-protected guest page table, rather than to MMIO.
+            if (iswrite && !cm && perm
+                && apple_virt_handle_write_fault(cpu, excp->virtual_address, excp->physical_address))
+            {
+                break;
+            }
 
             if (cm) {
                 /* We don't cache MMIO regions */
@@ -1578,6 +1620,13 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
             uint64_t val;
             int      sysreg_ret = 0;
 
+            if (apple_virt_handle_sysreg_fast(cpu, SYSREG_OP0(reg), SYSREG_OP1(reg), SYSREG_CRN(reg), SYSREG_CRM(reg),
+                                              SYSREG_OP2(reg), isread, rt))
+            {
+                advance_pc = true;
+                break;
+            }
+
             if (isread) {
                 sysreg_ret = hvf_sysreg_read(cpu, reg, &val);
                 if (!sysreg_ret) {
@@ -1589,6 +1638,12 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
             else {
                 val        = hvf_get_reg(cpu, rt);
                 sysreg_ret = hvf_sysreg_write(cpu, reg, val);
+                if (!sysreg_ret
+                    && apple_virt_sysreg_written(cpu, SYSREG_OP0(reg), SYSREG_OP1(reg), SYSREG_CRN(reg),
+                                                 SYSREG_CRM(reg), SYSREG_OP2(reg)))
+                {
+                    break;
+                }
             }
 
             advance_pc = !sysreg_ret;
@@ -1599,7 +1654,9 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
             if (!(syndrome & WFX_IS_WFE)) { ret = hvf_wfi(cpu); }
             break;
         case EC_AA64_HVC:
+            if (apple_virt_handle_hvc_fast(cpu, syndrome & 0xFFFF)) { break; }
             cpu_synchronize_state(cpu);
+            if (apple_virt_handle_hvc(cpu, syndrome & 0xFFFF)) { break; }
             trace_hvf_unknown_hvc(env->pc, env->xregs[0]);
             hvf_raise_exception(cpu, EXCP_UDEF, syn_uncategorized(), 1);
             break;
@@ -1725,8 +1782,98 @@ static void hvf_vm_state_change(void* opaque, bool running, RunState state)
     }
 }
 
+static hv_sys_reg_t hvf_virt_sys_reg(AppleVirtReg reg)
+{
+    switch (reg) {
+        case APPLE_VIRT_REG_SP_EL0       : return HV_SYS_REG_SP_EL0;
+        case APPLE_VIRT_REG_SP_EL1       : return HV_SYS_REG_SP_EL1;
+        case APPLE_VIRT_REG_TPIDR_EL1    : return HV_SYS_REG_TPIDR_EL1;
+        case APPLE_VIRT_REG_VBAR_EL1     : return HV_SYS_REG_VBAR_EL1;
+        case APPLE_VIRT_REG_SPSR_EL1     : return HV_SYS_REG_SPSR_EL1;
+        case APPLE_VIRT_REG_ELR_EL1      : return HV_SYS_REG_ELR_EL1;
+        case APPLE_VIRT_REG_ESR_EL1      : return HV_SYS_REG_ESR_EL1;
+        case APPLE_VIRT_REG_FAR_EL1      : return HV_SYS_REG_FAR_EL1;
+        case APPLE_VIRT_REG_SCTLR_EL1    : return HV_SYS_REG_SCTLR_EL1;
+        case APPLE_VIRT_REG_TCR_EL1      : return HV_SYS_REG_TCR_EL1;
+        case APPLE_VIRT_REG_TTBR0_EL1    : return HV_SYS_REG_TTBR0_EL1;
+        case APPLE_VIRT_REG_TTBR1_EL1    : return HV_SYS_REG_TTBR1_EL1;
+        case APPLE_VIRT_REG_APIAKEYLO_EL1: return HV_SYS_REG_APIAKEYLO_EL1;
+        case APPLE_VIRT_REG_APIAKEYHI_EL1: return HV_SYS_REG_APIAKEYHI_EL1;
+        case APPLE_VIRT_REG_APIBKEYLO_EL1: return HV_SYS_REG_APIBKEYLO_EL1;
+        case APPLE_VIRT_REG_APIBKEYHI_EL1: return HV_SYS_REG_APIBKEYHI_EL1;
+        case APPLE_VIRT_REG_APDAKEYLO_EL1: return HV_SYS_REG_APDAKEYLO_EL1;
+        case APPLE_VIRT_REG_APDAKEYHI_EL1: return HV_SYS_REG_APDAKEYHI_EL1;
+        case APPLE_VIRT_REG_APDBKEYLO_EL1: return HV_SYS_REG_APDBKEYLO_EL1;
+        case APPLE_VIRT_REG_APDBKEYHI_EL1: return HV_SYS_REG_APDBKEYHI_EL1;
+        case APPLE_VIRT_REG_APGAKEYLO_EL1: return HV_SYS_REG_APGAKEYLO_EL1;
+        case APPLE_VIRT_REG_APGAKEYHI_EL1: return HV_SYS_REG_APGAKEYHI_EL1;
+        default                          : assert_not_reached();
+    }
+}
+
+static uint64_t hvf_virt_get_xreg(CPUState* cs, int n)
+{
+    uint64_t value;
+
+    assert_hvf_ok(hv_vcpu_get_reg(cs->accel->fd, HV_REG_X0 + n, &value));
+    return value;
+}
+
+static void hvf_virt_set_xreg(CPUState* cs, int n, uint64_t value)
+{ assert_hvf_ok(hv_vcpu_set_reg(cs->accel->fd, HV_REG_X0 + n, value)); }
+
+static void hvf_virt_get_qreg(CPUState* cs, int n, uint64_t value[2])
+{
+    hv_simd_fp_uchar16_t q;
+
+    assert_hvf_ok(hv_vcpu_get_simd_fp_reg(cs->accel->fd, HV_SIMD_FP_REG_Q0 + n, &q));
+    memcpy(value, &q, sizeof(q));
+}
+
+static uint64_t hvf_virt_get_reg(CPUState* cs, AppleVirtReg reg)
+{
+    uint64_t value;
+
+    switch (reg) {
+        case APPLE_VIRT_REG_PC  : assert_hvf_ok(hv_vcpu_get_reg(cs->accel->fd, HV_REG_PC, &value)); break;
+        case APPLE_VIRT_REG_CPSR: assert_hvf_ok(hv_vcpu_get_reg(cs->accel->fd, HV_REG_CPSR, &value)); break;
+        default: assert_hvf_ok(hv_vcpu_get_sys_reg(cs->accel->fd, hvf_virt_sys_reg(reg), &value)); break;
+    }
+    return value;
+}
+
+static void hvf_virt_set_reg(CPUState* cs, AppleVirtReg reg, uint64_t value)
+{
+    switch (reg) {
+        case APPLE_VIRT_REG_PC  : assert_hvf_ok(hv_vcpu_set_reg(cs->accel->fd, HV_REG_PC, value)); break;
+        case APPLE_VIRT_REG_CPSR: assert_hvf_ok(hv_vcpu_set_reg(cs->accel->fd, HV_REG_CPSR, value)); break;
+        default: assert_hvf_ok(hv_vcpu_set_sys_reg(cs->accel->fd, hvf_virt_sys_reg(reg), value)); break;
+    }
+}
+
+static bool hvf_virt_protect(hwaddr page, uint64_t size, bool writable)
+{
+    hv_memory_flags_t flags = HV_MEMORY_READ | HV_MEMORY_EXEC | (writable ? HV_MEMORY_WRITE : 0);
+
+    return hv_vm_protect(page, size, flags) == HV_SUCCESS;
+}
+
+static void hvf_virt_trap_debug(CPUState* cs, bool enable)
+{ assert_hvf_ok(hv_vcpu_set_trap_debug_exceptions(cs->accel->fd, enable || cs->accel->guest_debug_enabled)); }
+
+static const AppleVirtOps hvf_apple_virt_ops = {
+    .get_xreg   = hvf_virt_get_xreg,
+    .set_xreg   = hvf_virt_set_xreg,
+    .get_qreg   = hvf_virt_get_qreg,
+    .get_reg    = hvf_virt_get_reg,
+    .set_reg    = hvf_virt_set_reg,
+    .protect    = hvf_virt_protect,
+    .trap_debug = hvf_virt_trap_debug,
+};
+
 int hvf_arch_init(void)
 {
+    apple_virt_set_ops(&hvf_apple_virt_ops);
     hvf_state->vtimer_offset = mach_absolute_time();
     qemu_add_vm_change_state_handler(hvf_vm_state_change, &vtimer);
 

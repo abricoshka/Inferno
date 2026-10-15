@@ -22,6 +22,11 @@
 #include "hw/arm/boot.h"
 
 void ck_patch_kernel(MachoHeader64* hdr);
-void ck_patch_virt(MachoHeader64* hdr, bool enable_pac);
+/// Rewrite the GXF transitions, lower-EL exception entries, exception returns and PAC key/SCTLR accesses of an image a
+/// hardware accelerator runs to `hvc`.
+void ck_patch_virt(MachoHeader64* hdr);
+/// `ck_patch_virt`, and also rewrite the GXF/SPRR/MMU register accesses and ASID invalidations of an image that runs on
+/// a guarded monitor's shadow tables (SPTM, TXM and the kernel under them) to `hvc`.
+void ck_patch_virt_monitor(MachoHeader64* hdr);
 /// Patch `libimg4.dylib` in an HFS+ restore ramdisk in place; other ramdisks are left alone.
 void ck_patch_ramdisk(uint8_t* image, uint64_t size);

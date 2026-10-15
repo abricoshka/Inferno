@@ -83,6 +83,7 @@
 #include "system/tcg.h"
 #include "arm-powerctl.h"
 #include "target/arm/internals.h"
+#include "target/arm/apple-virt.h"
 #include <pixman.h>
 #ifdef CONFIG_PNG
     #include <png.h>
@@ -221,14 +222,11 @@ static void t8030_start_cpus(AppleT8030MachineState* t8030, uint64_t cpu_mask)
     }
 }
 
-static void t8030_patch_kernel(MachoHeader64* header, uint32_t build_version, const bool enable_pac)
+static void t8030_patch_kernel(MachoHeader64* header, uint32_t build_version)
 {
     ck_patch_kernel(header);
 
-    if (hwaccel_enabled()) { ck_patch_virt(header, enable_pac); }
-    else if (enable_pac) {
-        error_report("You have specified the PAC enablement property on TCG.");
-    }
+    if (hwaccel_enabled()) { ck_patch_virt(header); }
 }
 
 static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kernel)
@@ -262,7 +260,7 @@ static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kerne
 
         g_phys_base = (hwaddr)apple_boot_get_macho_buffer(kernel);
 
-        t8030_patch_kernel(kernel, build_version, t8030->enable_pac);
+        t8030_patch_kernel(kernel, build_version);
     }
 }
 
@@ -321,7 +319,8 @@ static void get_kaslr_slides(AppleT8030MachineState* t8030, hwaddr* phys_slide_o
 // 256 MiB doesn't seem to work properly with sepos 18.5
 // SEP's MPIDR influences stack/sp address
 // #define T8030_TZ0_SIZE (300 * MiB)
-#define T8030_TZ0_SIZE (240 * MiB)    // FIXME: workaround for sepos >= 16
+#define T8030_TZ0_SIZE        (240 * MiB)    // FIXME: workaround for sepos >= 16
+#define T8030_GXF_SHADOW_SIZE (64 * MiB)
 
 // for booting sepfw 26 without opcode17:
 // tz0_addr must be, at least, aligned to 32 MiB
@@ -1315,10 +1314,12 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     if (apple_dfu_copy_image(t8030->dfu, "rspt", &data, &len)) {
         t8030->sptm = apple_boot_load_monitor_data("DFU SPTM", data, len, "sptm", "rspt");
+        if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->sptm); }
     }
 
     if (apple_dfu_copy_image(t8030->dfu, "rtrx", &data, &len)) {
         t8030->txm = apple_boot_load_monitor_data("DFU TXM", data, len, "trxm", "rtrx");
+        if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->txm); }
     }
 
     hdr = t8030->kernel;
@@ -1340,6 +1341,11 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         apple_boot_allocate_sptm_records(memory_map);
         t8030_sptm_assign_dart_ids(t8030->device_tree);
 
+        if (hwaccel_enabled()) {
+            ck_patch_virt_monitor(hdr);
+            apple_virt_init(carveout_alloc_mem(ca, T8030_GXF_SHADOW_SIZE), T8030_GXF_SHADOW_SIZE);
+        }
+
         // SPTM types every frame below the top of kernel data, so TZ0 is carved out like on hardware.
         info->tz0_size = T8030_TZ0_SIZE;
         info->tz0_addr = ROUND_UP(carveout_alloc_mem(ca, info->tz0_size + T8030_TZ0_ALIGN), T8030_TZ0_ALIGN);
@@ -1347,6 +1353,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     }
     else {
         apple_boot_allocate_segment_records(memory_map, hdr);
+        if (hwaccel_enabled()) { apple_virt_reset(); }
     }
 
     t8030_update_device_tree(t8030);
@@ -2047,6 +2054,7 @@ static void t8030_init(MachineState* machine)
         object_property_add_child(OBJECT(&t8030->clusters[cluster_id]), DEVICE(t8030->cpus[i])->id,
                                   OBJECT(t8030->cpus[i]));
         qdev_realize(DEVICE(t8030->cpus[i]), NULL, &error_fatal);
+        if (hwaccel_enabled()) { apple_virt_manage_cpu(CPU(t8030->cpus[i])); }
     }
 
     for (i = 0; i < A13_MAX_CLUSTER; ++i) { qdev_realize(DEVICE(&t8030->clusters[i]), NULL, &error_fatal); }
@@ -2578,7 +2586,6 @@ PROP_STR_GETTER_SETTER(mlb_serial_number);
 PROP_STR_GETTER_SETTER(regulatory_model);
 PROP_VISIT_GETTER_SETTER(uint32, disp_width);
 PROP_VISIT_GETTER_SETTER(uint32, disp_height);
-PROP_GETTER_SETTER(bool, enable_pac);
 
 static void t8030_class_init(ObjectClass* klass, const void* data)
 {
@@ -2640,9 +2647,6 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     oprop = object_class_property_add(klass, "disp-height", "uint32", t8030_get_disp_height, t8030_set_disp_height,
                                       NULL, NULL);
     object_property_set_default_uint(oprop, 1792);
-    object_class_property_add_bool(klass, "enable-pac", t8030_get_enable_pac, t8030_set_enable_pac);
-    object_class_property_set_description(klass, "enable-pac",
-                                          "Enable PAC with virtualisation (supports arm64e binaries only).");
 }
 
 static const TypeInfo t8030_info = {

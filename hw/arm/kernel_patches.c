@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/kernel_patches.h"
+#include "hw/arm/apple_virt_hvc.h"
 #include "fs/apfs.h"
 #include "fs/hfs.h"
 #include "hw/arm/patcher.h"
@@ -982,172 +983,142 @@ void ck_patch_ramdisk(uint8_t* image, uint64_t size)
     }
 }
 
-#define MOVK_IMM16_SHIFT 5
+#define CK_KP_HVC(imm) (0xD4000002 | ((uint32_t)(imm) << 5))
 
-static bool ck_kp_virt_boot_sctlr_callback(void* ctx, uint8_t* buffer)
+// What `ck_kp_virt_patch` rewrites to `hvc`, for a hardware accelerator to emulate.
+typedef enum
 {
-    uint32_t insns[5];
-    uint32_t reg;
-    size_t   i;
+    // genter and gexit.
+    CK_KP_VIRT_GXF = BIT(0),
+    // GXF/SPRR/MMU system-register accesses and ASID invalidations, to run on a guarded monitor's shadow tables.
+    CK_KP_VIRT_MONITOR = BIT(1),
+    // Lower-EL exception entries, exception returns and PAC key/SCTLR accesses, to give each EL Apple's PAC keys.
+    CK_KP_VIRT_PAC = BIT(2),
+} CKKPVirtFlags;
 
-    for (i = 0; i < ARRAY_SIZE(insns); ++i) { insns[i] = ldl_le_p(buffer + i * sizeof(uint32_t)); }
-
-    reg = insns[0] & 0x1F;
-    for (i = 1; i < ARRAY_SIZE(insns); ++i) {
-        if ((insns[i] & 0x1F) != reg) { return false; }
-    }
-    if (extract32(insns[4], 5, 5) != reg) { return false; }
-
-    insns[2] |= (uint32_t)0xC800 << MOVK_IMM16_SHIFT;    // SCTLR_EL1.EnIA (31), .EnIB (30) and .EnDA (27)
-    insns[3] |= (uint32_t)0x2000 << MOVK_IMM16_SHIFT;    // SCTLR_EL1.EnDB (13)
-    stl_le_p(buffer + 2 * sizeof(uint32_t), insns[2]);
-    stl_le_p(buffer + 3 * sizeof(uint32_t), insns[3]);
-
-    return true;
-}
-
-static void ck_kp_virt_boot_sctlr_patch(CKPatcherRange* range)
+// What a register access is rewritten for.
+static CKKPVirtFlags ck_kp_virt_vreg_flags(int vreg)
 {
-    static const uint8_t pattern[] = {
-        0x00, 0x00, 0xE0, 0xF2,    // movk x?, #0, lsl #0x30
-        0x00, 0x00, 0xC0, 0xF2,    // movk x?, #0, lsl #0x20
-        0x00, 0x00, 0xA0, 0xF2,    // movk x?, #?, lsl #0x10
-        0x00, 0x00, 0x80, 0xF2,    // movk x?, #?
-        0x00, 0x00, 0x62, 0xB2,    // orr x?, x?, #0x40000000
-    };
-    static const uint8_t mask[] = {
-        0xE0, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
-        0xE0, 0xFF, 0x00, 0x00, 0xE0, 0xFF, 0x00, 0xFC, 0xFF, 0xFF,
-    };
-    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    // `common_start` builds the value twice: once for `msr sctlr_el1` and once
-    // to compare the result against, spinning forever on a mismatch.
-    ck_patcher_find_callback(range, "enable all PAC keys in the boot SCTLR_EL1", pattern, mask, sizeof(pattern),
-                             sizeof(uint32_t), 2, ck_kp_virt_boot_sctlr_callback);
-}
-
-static bool ck_kp_pac_jop_toggle_callback(void* ctx, uint8_t* buffer)
-{
-    // msr sctlr_el1, x?
-    uint8_t* msr = ck_patcher_find_next_insn(buffer, 24, 0xD5181000, 0xFFFFFFE0, 0);
-    if (msr == NULL) {
-        error_report("%s: failed to find the SCTLR_EL1 write", __func__);
-        return false;
-    }
-
-    stl_le_p(msr, NOP);
-
-    return true;
-}
-
-static void ck_kp_virt_jop_toggle_patch(CKPatcherRange* range)
-{
-    // in pmap_switch_user_ttb_internal
-    static const uint8_t pattern[] = {
-        0x00, 0x00, 0x84, 0x52,    // mov w?, #0x2000
-        0x00, 0x00, 0xB1, 0x72,    // movk w?, #0x8800/#0xc800, lsl #0x10
-        0x00, 0x10, 0x38, 0xD5,    // mrs x?, sctlr_el1
-    };
-    static const uint8_t mask[] = {0xE0, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0xF7, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF};
-    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    ck_patcher_find_callback(range, "keep the per-pmap JOP toggle from disabling PAC keys", pattern, mask,
-                             sizeof(pattern), sizeof(uint32_t), 1, ck_kp_pac_jop_toggle_callback);
-}
-
-static bool ck_kp_disable_ppl_locked_down(void* ctx, uint8_t* buffer)
-{
-    // mov w?, #1
-    uint8_t* mov = ck_patcher_find_next_insn(buffer + 2 * sizeof(uint32_t), 2, 0x52800020, 0xFFFFFFE0, 0);
-    if (mov == NULL) { return false; }
-
-    // str w?, pmap_ppl_locked_down
-    uint8_t* str = ck_patcher_find_next_insn(mov + sizeof(uint32_t), 2, 0xB9000000, 0xFF000000, 0);
-    if (str == NULL) { return false; }
-
-    // bl #?
-    if ((ldl_le_p(str + sizeof(uint32_t)) & 0xFC000000) != 0x94000000) { return false; }
-
-    stl_le_p(str, NOP);
-    return true;
-}
-
-static void ck_kp_disable_ppl(CKPatcherRange* range)
-{
-    static const uint8_t gxf_pattern[] = {
-        0x20, 0x00, 0x80, 0xD2,    // mov x0, #1
-        0x40, 0xF1, 0x1E, 0xD5,    // msr gxf_config_el1, x0
-    };
-    static const uint8_t gxf_replace[] = {
-        RET_BYTES,
-    };
-    if (ck_patcher_find_replace(range, "neutralise gxf_enable", gxf_pattern, NULL, sizeof(gxf_pattern),
-                                sizeof(uint32_t), 1, gxf_replace, NULL, 0, sizeof(gxf_replace)))
-    {
-        static const uint8_t ppl_pattern[]        = {0xDF, 0x47, 0x03, 0xD5};    // msr daifset, #7/#0xf
-        static const uint8_t ppl_mask[]           = {0xFF, 0xF7, 0xFF, 0xFF};
-        static const uint8_t ppl_masked_pattern[] = {
-            0x1F, 0x0C, 0x7A, 0xF2,    // tst x?, #0x3c0
-            0x01, 0x00, 0x00, 0x54,    // b.ne ?
-        };
-        static const uint8_t ppl_masked_mask[] = {0x1F, 0xFC, 0xFF, 0xFF, 0x1F, 0x00, 0x00, 0xFF};
-        QEMU_BUILD_BUG_ON(sizeof(ppl_masked_pattern) != sizeof(ppl_masked_mask));
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down", ppl_pattern, ppl_mask, sizeof(ppl_pattern),
-                                 sizeof(uint32_t), 0, ck_kp_disable_ppl_locked_down);
-        ck_patcher_find_callback(range, "neutralise pmap_ppl_locked_down (interrupts already masked)",
-                                 ppl_masked_pattern, ppl_masked_mask, sizeof(ppl_masked_pattern), sizeof(uint32_t), 1,
-                                 ck_kp_disable_ppl_locked_down);
+    switch (vreg) {
+        case APPLE_VIRT_VREG_APIAKEYLO_EL1 ... APPLE_VIRT_VREG_APGAKEYHI_EL1: return CK_KP_VIRT_PAC;
+        // SCTLR_EL1 holds both the MMU's and the PAC keys' enables.
+        case APPLE_VIRT_VREG_SCTLR_EL1    : return CK_KP_VIRT_PAC | CK_KP_VIRT_MONITOR;
+        case APPLE_VIRT_VREG_APCTL_EL1    :
+        case APPLE_VIRT_VREG_KERNKEYLO_EL1:
+        case APPLE_VIRT_VREG_KERNKEYHI_EL1: return 0;
+        default                           : return CK_KP_VIRT_MONITOR;
     }
 }
 
-static bool ck_kp_virt_has_ppl_callback(void* ctx, uint8_t* buffer)
+// Makes the lower-EL AArch64 slots of the vector tables in `range`, mapped at `va`, trap before branching to their
+// handlers; returns how many.
+static uint32_t ck_kp_virt_vectors(CKPatcherRange* range, vaddr va)
 {
-    uint8_t* has_ppl = buffer + (int64_t)sextract32(ldl_le_p(buffer), 0, 26) * sizeof(uint32_t);
+    static const int used[]  = {0, 4, 8, 9, 10, 11};
+    uint32_t         entries = 0;
 
-    // mov w0, #1; ret
-    if ((uint32_t)ldl_le_p(has_ppl) != 0x52800020 || (uint32_t)ldl_le_p(has_ppl + sizeof(uint32_t)) != RET) {
-        return false;
+    // Vector tables are 2KiB aligned and each AArch64 slot in use is `b <handler>; nop; ...`; the synchronous
+    // exception slots of the current and the lower EL are always in use. XNU's low vectors are `b .` and never taken.
+    for (vaddr off = -va & 0x7FF; off + 0x800 <= range->length; off += 0x800) {
+        bool table = true;
+
+        for (int i = 0; i < ARRAY_SIZE(used) && table; i++) {
+            uint32_t insn = ldl_le_p(range->ptr + off + used[i] * 0x80);
+
+            table = (insn & 0xFC000000) == 0x14000000 && (insn & 0x3FFFFFF) != 0
+                    && (uint32_t)ldl_le_p(range->ptr + off + used[i] * 0x80 + 4) == NOP;
+        }
+        if (!table) { continue; }
+
+        // The branch moves one instruction down.
+        for (int slot = 8; slot < 12; slot++) {
+            uint8_t* insn = range->ptr + off + slot * 0x80;
+
+            stl_le_p(insn + 4, 0x14000000 | ((ldl_le_p(insn) - 1) & 0x3FFFFFF));
+            stl_le_p(insn, CK_KP_HVC(APPLE_VIRT_HVC_LOWER_ENTRY));
+            ++entries;
+        }
+    }
+    return entries;
+}
+
+static void ck_kp_virt_range(CKPatcherRange* range, vaddr va, CKKPVirtFlags flags)
+{
+    uint32_t transitions = 0;
+    uint32_t tlbis       = 0;
+    uint32_t entries     = (flags & CK_KP_VIRT_PAC) ? ck_kp_virt_vectors(range, va) : 0;
+    uint32_t erets       = 0;
+    uint32_t sysregs     = 0;
+
+    for (vaddr i = 0; i + sizeof(uint32_t) <= range->length; i += sizeof(uint32_t)) {
+        uint8_t* ptr  = range->ptr + i;
+        uint32_t insn = ldl_le_p(ptr);
+        bool     read = extract32(insn, 21, 1);
+        uint32_t rt   = extract32(insn, 0, 5);
+        int      vreg;
+
+        // genter #?, gexit
+        if ((flags & CK_KP_VIRT_GXF) && (insn & 0xFFFFFFC0) == 0x00201400) {
+            stl_le_p(ptr, CK_KP_HVC(insn & 0xFFFF));
+            ++transitions;
+            continue;
+        }
+
+        // tlbi aside1{,is,os}{,nxs}, x?
+        if ((flags & CK_KP_VIRT_MONITOR) && (insn & 0xFFFFE0E0) == 0xD5088040
+            && (extract32(insn, 8, 4) == 1 || extract32(insn, 8, 4) == 3 || extract32(insn, 8, 4) == 7))
+        {
+            stl_le_p(ptr, CK_KP_HVC(APPLE_VIRT_HVC_TLBI_ASID | rt));
+            ++tlbis;
+            continue;
+        }
+
+        // eret
+        if ((flags & CK_KP_VIRT_PAC) && insn == 0xD69F03E0) {
+            stl_le_p(ptr, CK_KP_HVC(APPLE_VIRT_HVC_ERET));
+            ++erets;
+            continue;
+        }
+
+        // msr/mrs (register)
+        if ((insn & 0xFFD00000) != 0xD5100000) { continue; }
+        vreg = apple_virt_vreg(2 + extract32(insn, 19, 1), extract32(insn, 16, 3), extract32(insn, 12, 4),
+                               extract32(insn, 8, 4), extract32(insn, 5, 3));
+        if (vreg < 0 || !(flags & ck_kp_virt_vreg_flags(vreg))) { continue; }
+
+        // `mrs xzr, ?` only serialises.
+        if (read && rt == 31) { stl_le_p(ptr, NOP); }
+        else {
+            stl_le_p(ptr, CK_KP_HVC(APPLE_VIRT_HVC_SYSREG | (vreg << 6) | (read << 5) | rt));
+        }
+        ++sysregs;
     }
 
-    stl_le_p(has_ppl, MOV_W0_0);
-    return true;
+    if (transitions + tlbis + entries + erets + sysregs == 0) { return; }
+    info_report("`trap to the hypervisor` rewrote %u GXF transitions, %u TLBIs, %u exception entries, %u erets and %u "
+                "sysregs in `%s`.",
+                transitions, tlbis, entries, erets, sysregs, range->name);
 }
 
-static void ck_kp_virt_has_ppl_patch(CKPatcherRange* range)
+static void ck_kp_virt_patch(MachoHeader64* hdr, CKKPVirtFlags flags)
 {
-    // in the AppleImage4 nonce accessors
-    static const uint8_t pattern[] = {
-        0x00, 0x00, 0x00, 0x94,    // bl pmap_has_ppl
-        0x60, 0x00, 0x00, 0x34,    // cbz w0, #0xc
-        0x00, 0x00, 0x00, 0x94,    // bl pmap_in_ppl
-        0x00, 0x00, 0x00, 0x36,    // tbz w0, #0, ?
-    };
-    static const uint8_t mask[] = {
-        0x00, 0x00, 0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF,
-    };
-    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    ck_patcher_find_callback(range, "make pmap_has_ppl return false", pattern, mask, sizeof(pattern), sizeof(uint32_t),
-                             1, ck_kp_virt_has_ppl_callback);
-}
+    static const char* const exec_segs[] = {"__TEXT_EXEC", "__TEXT_BOOT_EXEC", "__PPLTEXT"};
+    vaddr                    base;
 
-void ck_patch_virt(MachoHeader64* hdr, const bool enable_pac)
-{
-    g_autofree CKPatcherRange* kernel_text    = NULL;
-    g_autofree CKPatcherRange* kernel_ppltext = NULL;
-    g_autofree CKPatcherRange* img4_text      = NULL;
+    apple_boot_get_kc_bounds(hdr, NULL, &base, NULL, NULL, NULL);
 
-    kernel_text = ck_kp_get_kernel_section(hdr, "__TEXT_EXEC", "__text");
-    if (kernel_text == NULL) {
-        error_report("Failed to find `__TEXT_EXEC.__text`.");
-        return;
+    for (size_t i = 0; i < ARRAY_SIZE(exec_segs); i++) {
+        MachoSegmentCommand64*     seg   = apple_boot_get_segment(hdr, exec_segs[i]);
+        g_autofree CKPatcherRange* range = NULL;
+
+        if (seg == NULL) { continue; }
+        range =
+            ck_patcher_range_from_ptr(exec_segs[i], apple_boot_get_macho_buffer(hdr) + seg->vmaddr - base, seg->vmsize);
+        ck_kp_virt_range(range, seg->vmaddr, flags);
     }
-
-    if (enable_pac) { ck_kp_virt_boot_sctlr_patch(kernel_text); }
-
-    kernel_ppltext = ck_kp_find_section_range(hdr, "__PPLTEXT", "__text");
-    ck_kp_virt_jop_toggle_patch(kernel_ppltext == NULL ? kernel_text : kernel_ppltext);
-
-    ck_kp_disable_ppl(kernel_text);
-
-    img4_text = ck_kp_find_image_text(hdr, "com.apple.security.AppleImage4");
-    ck_kp_virt_has_ppl_patch(img4_text);
 }
+
+void ck_patch_virt(MachoHeader64* hdr) { ck_kp_virt_patch(hdr, CK_KP_VIRT_GXF | CK_KP_VIRT_PAC); }
+
+void ck_patch_virt_monitor(MachoHeader64* hdr)
+{ ck_kp_virt_patch(hdr, CK_KP_VIRT_GXF | CK_KP_VIRT_PAC | CK_KP_VIRT_MONITOR); }
