@@ -658,31 +658,6 @@ static void ck_kp_hactivation_patch(CKPatcherRange* range)
                             sizeof(repl));
 }
 
-static void ck_kp_sep_mgr_patches(CKPatcherRange* range)
-{
-    static const uint8_t pattern[] = {
-        0x00, 0x04, 0x00, 0xF9,    // str x?, [x?, #0x8]
-        0x08, 0x04, 0x80, 0x52,    // mov w8, #0x20
-        0x08, 0x10, 0x00, 0xB9,    // str w8, [x?, #0x10]
-    };
-    static const uint8_t mask[] = {0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, 0xFC, 0xFF, 0xFF};
-    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    static const uint8_t repl[] = {0x28, 0x00, 0xA0, 0x52};    // mov w8, #0x10000
-    if (!ck_patcher_find_replace(range, "increase SCOT size to 0x10000 to use it as TRAC", pattern, mask,
-                                 sizeof(pattern), sizeof(uint32_t), 1, repl, NULL, 4, sizeof(repl)))
-    {
-        static const uint8_t pattern_new[] = {
-            0x00, 0x00, 0x1E, 0xF8,    // stur x?, [x?, #-0x20]
-            0x08, 0x04, 0x80, 0x52,    // mov w8, #0x20
-            0x08, 0x80, 0x1E, 0xB8,    // stur w8, [x?, #-0x18]
-        };
-        static const uint8_t mask_new[] = {0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, 0xFC, 0xFF, 0xFF};
-        QEMU_BUILD_BUG_ON(sizeof(pattern_new) != sizeof(mask_new));
-        ck_patcher_find_replace(range, "increase SCOT size to 0x10000 to use it as TRAC (new)", pattern_new, mask_new,
-                                sizeof(pattern_new), sizeof(uint32_t), 1, repl, NULL, 4, sizeof(repl));
-    }
-}
-
 static bool ck_kp_img4_callback(void* ctx, uint8_t* buffer)
 {
     uint8_t* start = ck_patcher_find_prev_insn(buffer, 200, PACIBSP, 0xFFFFFFFF, 0);
@@ -887,9 +862,6 @@ void ck_patch_kernel(MachoHeader64* hdr)
 
     amfi_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleMobileFileIntegrity");
     ck_kp_amfi_patches(amfi_text);
-
-    sep_mgr_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleSEPManager");
-    ck_kp_sep_mgr_patches(sep_mgr_text);
 
     img4_text = ck_kp_find_image_text(hdr, "com.apple.security.AppleImage4");
     ck_kp_img4_patches(img4_text);
