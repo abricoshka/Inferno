@@ -581,6 +581,9 @@ AppleA13State* apple_a13_create(const char* name, uint32_t cpu_id, uint32_t phys
         default: break;
     }
 
+    // 8-bit ASIDs
+    SET_IDREG(&cpu->isar, ID_AA64MMFR0, REG_FIELD_DP64(GET_IDREG(&cpu->isar, ID_AA64MMFR0), ID_AA64MMFR0, ASIDBITS, 0));
+
     object_property_set_uint(obj, "mp-affinity", mpidr, &error_fatal);
     object_property_set_bool(obj, "start-powered-off", true, NULL);
     object_property_set_bool(obj, "has_el3", false, NULL);
