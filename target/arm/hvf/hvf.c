@@ -879,8 +879,18 @@ int hvf_arch_init_vcpu(CPUState* cpu)
     assert_hvf_ok(ret);
 
     /* We're limited to underlying hardware caps, override internal versions */
+    uint64_t model_mmfr0 = GET_IDREG(&arm_cpu->isar, ID_AA64MMFR0);
     ret = hv_vcpu_get_sys_reg(cpu->accel->fd, HV_SYS_REG_ID_AA64MMFR0_EL1, &arm_cpu->isar.idregs[ID_AA64MMFR0_EL1_IDX]);
     assert_hvf_ok(ret);
+
+    /* ...but the model may advertise fewer ASID bits than the host has. */
+    if (REG_FIELD_EX64(model_mmfr0, ID_AA64MMFR0, ASIDBITS)
+        < REG_FIELD_EX64(GET_IDREG(&arm_cpu->isar, ID_AA64MMFR0), ID_AA64MMFR0, ASIDBITS))
+    {
+        SET_IDREG(&arm_cpu->isar, ID_AA64MMFR0,
+                  REG_FIELD_DP64(GET_IDREG(&arm_cpu->isar, ID_AA64MMFR0), ID_AA64MMFR0, ASIDBITS,
+                                 REG_FIELD_EX64(model_mmfr0, ID_AA64MMFR0, ASIDBITS)));
+    }
 
     clamp_id_aa64mmfr0_parange_to_ipa_size(&arm_cpu->isar);
     ret = hv_vcpu_set_sys_reg(cpu->accel->fd, HV_SYS_REG_ID_AA64MMFR0_EL1, arm_cpu->isar.idregs[ID_AA64MMFR0_EL1_IDX]);
