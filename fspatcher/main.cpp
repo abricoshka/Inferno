@@ -211,53 +211,6 @@ namespace
         }
     };
 
-    class LibTelephonyUtilDynamicPatches
-    {
-        CacheAnalyser::Image image;
-        Assembler&           assembler;
-        Patcher&             patcher;
-        const CacheAnalyser& analyser;
-
-    public:
-        LibTelephonyUtilDynamicPatches(const CacheAnalyser& analyser, Assembler& assembler, Patcher& patcher) :
-            image(analyser.find_image(ImageMatch("/usr/lib/libTelephonyUtilDynamic.dylib"))),
-            assembler(assembler),
-            patcher(patcher),
-            analyser(analyser)
-        { }
-
-        void apply_zeroes(const char* sym)
-        {
-            const std::array<std::uint8_t, 4> u32_zeroes = {0, 0, 0, 0};
-            const auto                        vm_addr    = this->image.resolve_sym(sym);
-            const auto& [off, entry]                     = this->analyser.find_entry_from_vm_addr(vm_addr);
-            this->patcher.write(entry.first, off, u32_zeroes);
-        }
-
-        void apply_zeroes_64(const char* sym)
-        {
-            const std::array<std::uint8_t, 8> u64_zeroes = {0, 0, 0, 0, 0, 0, 0, 0};
-            const auto                        vm_addr    = this->image.resolve_sym(sym);
-            const auto& [off, entry]                     = this->analyser.find_entry_from_vm_addr(vm_addr);
-            this->patcher.write(entry.first, off, u64_zeroes);
-        }
-
-        void apply()
-        {
-            // Neutralise hardcoded expectations for Baseband.
-            this->assembler.write_ret(this->image.path, this->image.header,
-                                      this->image.resolve_sym("__TelephonyRadiosDetermineRadio"));
-            try {
-                this->apply_zeroes("_sTelephonyProduct");
-                this->apply_zeroes("_sTelephonyRadio");
-                this->apply_zeroes("_sTelephonyRadioVendor");
-            }
-            catch (const std::exception& e) {
-                this->apply_zeroes_64("__MergedGlobals");
-            }
-        }
-    };
-
     class NeutrinoCorePatches
     {
         CacheAnalyser::Image objc_image;
@@ -415,7 +368,6 @@ namespace
                 std::cerr << "Warning: Failed to apply PosterBoard patches: " << e.what() << ".\n";
             }
         }
-        LibTelephonyUtilDynamicPatches(analyser, assembler, patcher).apply();
         if (unredactLogs) { LibSystemTracePatches(analyser, assembler).apply(); }
         std::cout << "Patches built successfully.\n";
 
