@@ -173,7 +173,11 @@ rule("inferno.bundle")
 			local dstfile = dstfiles[index]
 			os.tryrm(dstfile)
 			os.mkdir(path.directory(dstfile))
-			os.ln(path.absolute(srcfile), dstfile)
+			if target:is_plat("windows", "mingw") then
+				os.vcp(path.absolute(srcfile), dstfile)
+			else
+				os.ln(path.absolute(srcfile), dstfile)
+			end
 		end
 	end)
 rule_end()

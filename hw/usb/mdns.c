@@ -101,6 +101,9 @@ void mdns_service_unregister(MDNSService* svc)
 #elif defined(CONFIG_WIN32)
 
     #include <windns.h>
+    #ifndef DNS_REQUEST_PENDING
+        #define DNS_REQUEST_PENDING 9506L
+    #endif
 
 struct MDNSService
 {

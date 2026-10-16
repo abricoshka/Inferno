@@ -1292,7 +1292,7 @@ static CPAccessResult gt_stimer_access(CPUARMState* env, const ARMCPRegInfo* ri,
         case 0 :
         case 2 : return CP_ACCESS_UNDEFINED;
         case 3 : return CP_ACCESS_OK;
-        default: qemu_build_not_reached();
+        default: assert_not_reached();
     }
 }
 
@@ -1327,7 +1327,7 @@ static CPAccessResult gt_sel2timer_access(CPUARMState* env, const ARMCPRegInfo* 
             else {
                 return CP_ACCESS_UNDEFINED;
             }
-        default: qemu_build_not_reached();
+        default: assert_not_reached();
     }
 }
 
@@ -1406,7 +1406,7 @@ static uint64_t gt_indirect_access_timer_offset(CPUARMState* env, int timeridx)
         case GTIMER_HYPVIRT   :
         case GTIMER_S_EL2_PHYS:
         case GTIMER_S_EL2_VIRT: return 0;
-        default               : qemu_build_not_reached();
+        default               : assert_not_reached();
     }
 }
 
@@ -8286,7 +8286,7 @@ static void add_cpreg_to_hashtable(ARMCPU* cpu, const ARMCPRegInfo* r, void* opa
             if (cp == 0 || r->state == ARM_CP_STATE_BOTH) { cp = CP_REG_ARM64_SYSREG_CP; }
             key = ENCODE_AA64_CP_REG(cp, r->crn, crm, r->opc0, opc1, opc2);
             break;
-        default: qemu_build_not_reached();
+        default: assert_not_reached();
     }
 
     /* Overriding of an existing definition must be explicitly requested. */
