@@ -920,6 +920,44 @@ void ck_patch_txm(MachoHeader64* hdr)
     QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(repl));
     ck_patcher_find_replace(text, "accept code signature slot mismatch (TXM)", pattern, NULL, sizeof(pattern),
                             sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl));
+
+    static const uint8_t img4_pattern[] = {
+        0x5F, 0x24, 0x03, 0xD5,    // bti c
+        0x7F, 0x23, 0x03, 0xD5,    // pacibsp
+        0xFF, 0x43, 0x03, 0xD1,    // sub sp, sp, #0xd0
+        0xF4, 0x4F, 0x0B, 0xA9,    // stp x20, x19, [sp, #0xb0]
+        0xFD, 0x7B, 0x0C, 0xA9,    // stp x29, x30, [sp, #0xc0]
+        0xFD, 0x03, 0x03, 0x91,    // add x29, sp, #0xc0
+        0x08, 0x00, 0x40, 0xF9,    // ldr x8, [x0]
+        0xBF, 0x0F, 0x3B, 0xA9,    // stp xzr, x3, [x29, #-0x50]
+    };
+    static const uint8_t img4_repl[] = {
+        MOV_W0_0_BYTES,    // mov w0, #0  (over pacibsp)
+        RET_BYTES,         // ret         (over sub sp), leaving `bti c`
+    };
+    ck_patcher_find_replace(text, "img4 payload signature bypass (TXM)", img4_pattern, NULL, sizeof(img4_pattern),
+                            sizeof(uint32_t), 1, img4_repl, NULL, 4, sizeof(img4_repl));
+
+    static const uint8_t cs_pattern[] = {
+        0x08, 0x25, 0x43, 0x39,    // ldrb w8, [x8, #0xc9]
+        0x08, 0x00, 0x00, 0x36,    // tbz w8, #0, <reject (0x32202)>   (offset masked out)
+        0x48, 0x01, 0x80, 0x52,    // mov w8, #0xa
+        0x00, 0x00, 0x00, 0x14,    // b <accept>                       (target masked out)
+        0x40, 0x40, 0x84, 0x52,    // movz w0, #0x2202
+        0x60, 0x00, 0xA0, 0x72,    // movk w0, #3, lsl #16
+    };
+    static const uint8_t cs_pattern_mask[] = {
+        0xFF, 0xFF, 0xFF, 0xFF,    //
+        0x1F, 0x00, 0xF8, 0xFF,    // tbz: match op/reg/bit, ignore branch offset
+        0xFF, 0xFF, 0xFF, 0xFF,    //
+        0x00, 0x00, 0x00, 0xFC,    // b: match opcode only
+        0xFF, 0xFF, 0xFF, 0xFF,    //
+        0xFF, 0xFF, 0xFF, 0xFF,    //
+    };
+    QEMU_BUILD_BUG_ON(sizeof(cs_pattern) != sizeof(cs_pattern_mask));
+    static const uint8_t cs_repl[] = {NOP_BYTES};
+    ck_patcher_find_replace(text, "code signature bypass (TXM)", cs_pattern, cs_pattern_mask, sizeof(cs_pattern),
+                            sizeof(uint32_t), 1, cs_repl, NULL, 4, sizeof(cs_repl));
 }
 
 /// Patch `buffer` and find the span that changed; returns false if nothing did.
