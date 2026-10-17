@@ -342,7 +342,9 @@ static void t8030_lock_regions(AppleT8030MachineState* t8030, hwaddr ro_lower, h
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_BASE(i), (info->tz0_addr - info->dram_base) >> 12);
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_END(i), ((info->tz0_addr + info->tz0_size - 1) - info->dram_base) >> 12);
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_LOCK(i), 1);
-        AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i), ((info->dram_size >> 27) - 1) << 1);
+        AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i),
+                    ((info->dram_size >> 27) - 1) << 1
+                        | (info->dram_size < 4 * GiB ? AMCC_PLANE_BLK_MCC_CHANNEL_DEC_STACKED : 0));
     }
 
     if (t8030->sep_rom_filename != NULL) {
