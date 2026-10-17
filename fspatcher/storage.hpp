@@ -132,16 +132,15 @@ public:
     ~File() override                     = default;
 };
 
-/// Host files, or files in the System volume or OS cryptex of a disk image.
+/// Host files, or files in the System volume of a disk image.
 class Storage
 {
     std::filesystem::path                      disk_path;
     BlockBackend*                              disk{nullptr};
-    ApfsFile*                                  cryptex{nullptr};
     std::unordered_map<std::string, ApfsFile*> files;
 
 public:
-    explicit Storage(const std::filesystem::path& disk_path, const bool cryptex) :
+    explicit Storage(const std::filesystem::path& disk_path) :
         disk_path(disk_path)
     {
         if (disk_path.empty()) { return; }
@@ -149,14 +148,6 @@ public:
         char* err  = nullptr;
         this->disk = disk_open(disk_path.string().c_str(), &err);
         if (this->disk == nullptr) { throw_disk_error(err); }
-
-        if (cryptex) {
-            this->cryptex = disk_cryptex_open(this->disk, &err);
-            if (this->cryptex == nullptr) {
-                disk_close(this->disk);
-                throw_disk_error(err);
-            }
-        }
     }
 
     Storage(const Storage&)                    = delete;
@@ -167,9 +158,12 @@ public:
     ~Storage()
     {
         for (const auto& file : this->files) { disk_file_close(file.second); }
-        if (this->cryptex != nullptr) { disk_file_close(this->cryptex); }
         if (this->disk != nullptr) { disk_close(this->disk); }
     }
+
+    [[nodiscard]]
+    auto backend() const -> BlockBackend*
+    { return this->disk; }
 
     auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File
     {
@@ -183,10 +177,8 @@ public:
 
         auto file = this->files.find(path.string());
         if (file == this->files.end()) {
-            char*       err  = nullptr;
-            auto* const apfs = this->cryptex == nullptr ?
-                                   disk_file_open(this->disk, path.string().c_str(), &err) :
-                                   disk_image_file_open(this->cryptex, path.string().c_str(), &err);
+            char* err  = nullptr;
+            auto* apfs = disk_file_open(this->disk, path.string().c_str(), &err);
             if (apfs == nullptr) { throw_disk_error(err); }
             file = this->files.emplace(path.string(), apfs).first;
         }
@@ -205,4 +197,53 @@ public:
         ret      += path.filename();
         return ret;
     }
+};
+
+/// Files in the OS cryptex of a disk image, or in the underlying `Storage` itself. Must not outlive it.
+class DyldStorage
+{
+    Storage&                                   storage;
+    ApfsFile*                                  cryptex{nullptr};
+    std::unordered_map<std::string, ApfsFile*> files;
+
+public:
+    explicit DyldStorage(Storage& storage) :
+        storage(storage)
+    {
+        if (storage.backend() == nullptr) { return; }
+
+        char* err     = nullptr;
+        this->cryptex = disk_cryptex_open(storage.backend(), &err);
+        if (this->cryptex == nullptr && err != nullptr) { disk_error_free(err); }
+    }
+
+    DyldStorage(const DyldStorage&)                    = delete;
+    DyldStorage(DyldStorage&&)                         = delete;
+    auto operator=(const DyldStorage&) -> DyldStorage& = delete;
+    auto operator=(DyldStorage&&) -> DyldStorage&      = delete;
+
+    ~DyldStorage()
+    {
+        for (const auto& file : this->files) { disk_file_close(file.second); }
+        if (this->cryptex != nullptr) { disk_file_close(this->cryptex); }
+    }
+
+    auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File
+    {
+        if (this->cryptex == nullptr) { return this->storage.open(path, mode); }
+
+        auto file = this->files.find(path.string());
+        if (file == this->files.end()) {
+            char* err  = nullptr;
+            auto* apfs = disk_image_file_open(this->cryptex, path.string().c_str(), &err);
+            if (apfs == nullptr) { throw_disk_error(err); }
+            file = this->files.emplace(path.string(), apfs).first;
+        }
+
+        return File(std::make_unique<DiskFileBuf>(file->second));
+    }
+
+    [[nodiscard]]
+    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path
+    { return this->storage.host_path(path); }
 };

@@ -100,7 +100,7 @@ namespace
     {
         CacheAnalyser::Image image;
         Assembler&           assembler;
-        Storage&             storage;
+        DyldStorage&         dyld_storage;
 
         void fix_async_dispatcher(std::istream& stream, const std::uint64_t renderer, const char* sym)
         {
@@ -135,7 +135,7 @@ namespace
         QuartzCorePatches(const CacheAnalyser& analyser, Assembler& assembler) :
             image(analyser.find_image(FrameworkMatch("QuartzCore"))),
             assembler(assembler),
-            storage(analyser.storage)
+            dyld_storage(analyser.dyld_storage)
         { }
 
         void apply(const bool opengles)
@@ -148,7 +148,7 @@ namespace
                 // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
                 const auto asyncDispatchRenderer =
                     this->image.resolve_sym("__ZN2CA3OGL22AsynchronousDispatcher8rendererEv");
-                auto cache_file = this->storage.open(this->image.path);
+                auto cache_file = this->dyld_storage.open(this->image.path);
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
                                      "__ZN2CA3OGL22AsynchronousDispatcher10stop_timerEv");
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
@@ -302,45 +302,40 @@ namespace
 
     auto run(const int argc, char* argv[])
     {
-        std::filesystem::path diskPath;
-        std::filesystem::path cachePath;
-        bool                  cryptex      = false;
-        bool                  revertOnly   = false;
-        bool                  dryRun       = false;
-        bool                  unredactLogs = false;
-        bool                  opengles     = false;
-        bool                  metal        = false;
+        std::filesystem::path disk_path;
+        bool                  revert_only   = false;
+        bool                  dryRun        = false;
+        bool                  unredact_logs = false;
+        bool                  opengles      = false;
+        bool                  metal         = false;
 
         CLI::App app{"Inferno Filesystem Patcher"};
         argv = app.ensure_utf8(argv);
 
-        app.add_option("-d,--disk", diskPath, "Patch DYLD_CACHE_PATH in the System volume of the disk image IMAGE")
-            ->check(CLI::ExistingFile);
-        app.add_flag("-c,--cryptex", cryptex, "With --disk, patch DYLD_CACHE_PATH in the OS cryptex instead");
-        const auto revertOnlyOpt =
-            app.add_flag("-r,--revert", revertOnly, "Revert bytes to the original state, without reapplying patches");
-        const auto dryRunOpt = app.add_flag("-n,--dry-run", dryRun,
-                                              "Revert bytes and run patcher, but do not apply the patch modifications");
+        app.add_option("-d,--disk", disk_path, "Patch the disk image IMAGE")->check(CLI::ExistingFile);
+        const auto revertOnlyOpt = app.add_flag("-r,--revert", revert_only, "Revert any modifications");
+        const auto dryRunOpt     = app.add_flag(
+            "-n,--dry-run", dryRun, "Revert any modifications then run patcher, without flushing patches to the disk");
         revertOnlyOpt->excludes(dryRunOpt);
         dryRunOpt->excludes(revertOnlyOpt);
-        app.add_flag("--unredact-logs", unredactLogs, "Patch libsystem_trace.dylib to unredact logs");
+        app.add_flag("--unredact-logs", unredact_logs, "Patch libsystem_trace.dylib to unredact logs");
         const auto openglesOpt =
             app.add_flag("--opengles", opengles, "Apply minimal patches necessary for the lack of Metal rendering");
         const auto metalOpt = app.add_flag("--metal", metal, "Apply no rendering patches");
         openglesOpt->excludes(metalOpt);
         metalOpt->excludes(openglesOpt);
-        app.add_option("dyld_cache_path", cachePath, "Path to the main dyld_shared_cache_arm64e file")->required();
 
         CLI11_PARSE(app, argc, argv);
 
-        Storage             storage(diskPath, cryptex);
-        const CacheAnalyser analyser(storage, cachePath);
+        Storage             storage(disk_path);
+        DyldStorage         dyld_storage(storage);
+        const CacheAnalyser analyser(dyld_storage);
 
         for (const auto& cache : analyser.caches) {
-            if (Patcher::revert(storage, cache.first)) { std::cout << "Reverted `" << cache.first << "`.\n"; }
+            if (Patcher::revert(storage, cache.first)) { std::cout << "Reverted " << cache.first << ".\n"; }
         }
 
-        if (revertOnly) {
+        if (revert_only) {
             std::cout << "Revert completed successfully.\n";
             return 0;
         }
@@ -368,7 +363,7 @@ namespace
                 std::cerr << "Warning: Failed to apply PosterBoard patches: " << e.what() << ".\n";
             }
         }
-        if (unredactLogs) { LibSystemTracePatches(analyser, assembler).apply(); }
+        if (unredact_logs) { LibSystemTracePatches(analyser, assembler).apply(); }
         std::cout << "Patches built successfully.\n";
 
         patcher.rehash();

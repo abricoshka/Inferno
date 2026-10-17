@@ -179,13 +179,15 @@ struct CacheAnalyser
 
     using Entry = std::pair<std::filesystem::path, DyldCacheHeader>;
 
-    Storage&               storage;
+    DyldStorage&           dyld_storage;
     std::vector<Entry>     caches;
     std::unique_ptr<Entry> symbols_cache;
 
-    explicit CacheAnalyser(Storage& storage, const std::filesystem::path& base_path) :
-        storage(storage)
+    explicit CacheAnalyser(DyldStorage& storage) :
+        dyld_storage(storage)
     {
+        static const std::filesystem::path base_path("/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e");
+
         auto main_file = storage.open(base_path);
 
         DyldCacheHeader temp_main_header(main_file, DyldCacheHeader::Type::Main);
@@ -260,7 +262,7 @@ struct CacheAnalyser
     auto read_ptr_at(const std::uint64_t image_base, const std::uint64_t vm_addr) const -> std::uint64_t
     {
         const auto [off, entry] = this->find_entry_from_vm_addr(vm_addr);
-        auto cache_file         = this->storage.open(entry.first);
+        auto cache_file         = this->dyld_storage.open(entry.first);
         return this->read_ptr_at(cache_file, image_base, off);
     }
 
@@ -277,7 +279,7 @@ struct CacheAnalyser
 
         SymbolMap symbols;
 
-        auto image_cache_file = this->storage.open(image_cache_entry.first);
+        auto image_cache_file = this->dyld_storage.open(image_cache_entry.first);
 
         seek_stream(image_cache_file, image_off);
         const MachHeader image_header(image_cache_file);
@@ -289,9 +291,9 @@ struct CacheAnalyser
             const auto& symtab                    = *image_header.symtab;
             const auto [symtab_off, symtab_entry] = this->find_entry_from_vm_addr(linkedit_base + symtab.sym_off);
             const auto [str_off, str_entry]       = this->find_entry_from_vm_addr(linkedit_base + symtab.str_off);
-            auto symtab_file                      = this->storage.open(symtab_entry.first);
+            auto symtab_file                      = this->dyld_storage.open(symtab_entry.first);
             seek_stream(symtab_file, symtab_off);
-            auto str_file = this->storage.open(str_entry.first);
+            auto str_file = this->dyld_storage.open(str_entry.first);
 
             symbols.reserve(symtab.sym_count);
             for (std::uint32_t sym_i = 0; sym_i < symtab.sym_count; ++sym_i) {
@@ -316,7 +318,7 @@ struct CacheAnalyser
         const auto  symbols_entry        = local_symbols.entries.find(image->base);
         if (symbols_entry != local_symbols.entries.end()) {
             symbols.reserve(symbols.size() + symbols_entry->second.nlist_count);
-            auto symbols_file = this->storage.open(symbols_cache.first);
+            auto symbols_file = this->dyld_storage.open(symbols_cache.first);
             seek_stream(symbols_file, symbols_off + local_symbols.nlist_off
                                           + std::streamoff(symbols_entry->second.nlist_start_index * sizeof(NList)));
             const auto strings_off = local_symbols.strings_off;
@@ -342,7 +344,7 @@ struct CacheAnalyser
         if (with_objc_classes) {
             const auto& class_list = image_header.find_section("__DATA_CONST", "__objc_classlist");
             const auto [class_list_off, class_list_entry] = this->find_entry_from_vm_addr(class_list.vm_addr);
-            auto       class_list_cache_file              = this->storage.open(class_list_entry.first);
+            auto       class_list_cache_file              = this->dyld_storage.open(class_list_entry.first);
             const auto end_off                            = class_list_off + std::streamoff(class_list.vm_size);
             for (std::streamoff cur_off = class_list_off; cur_off < end_off; cur_off += 8) {
                 const auto class_addr    = this->read_ptr_at(class_list_cache_file, image->base, cur_off);
@@ -352,7 +354,7 @@ struct CacheAnalyser
                     this->read_ptr_at(class_list_cache_file, image->base,
                                       class_list_entry.second.vm_addr_to_file_off(class_ro_addr + 0x18));
                 const auto [class_name_file_off, class_name_entry] = this->find_entry_from_vm_addr(class_name_addr);
-                auto class_name_file                               = this->storage.open(class_name_entry.first);
+                auto class_name_file                               = this->dyld_storage.open(class_name_entry.first);
                 seek_stream(class_name_file, class_name_file_off);
                 auto class_name = read_cstr(class_name_file);
                 objc_classes.emplace(std::move(class_name), class_addr);
