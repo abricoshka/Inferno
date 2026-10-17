@@ -19,7 +19,7 @@ target("system")
 	end
 	if has_package("gtk") then
 		add_files("gtk.c")
-		if is_plat("mingw") then
+		if is_plat("windows", "mingw") then
 			add_files("win32-kbd-hook.c")
 		end
 		if has_config("gtk_clipboard") then

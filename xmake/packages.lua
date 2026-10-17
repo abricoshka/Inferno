@@ -38,7 +38,7 @@ package("libyuv")
 		package:add("links", "yuv")
 		package:add("syslinks", package:is_plat("macosx") and "c++" or "stdc++")
 	end)
-	on_install("macosx", "linux", "mingw", function (package)
+	on_install("macosx", "linux", "mingw", "windows", function (package)
 		import("package.tools.cmake").install(package, {
 			"-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"),
 			"-DBUILD_SHARED_LIBS=OFF",

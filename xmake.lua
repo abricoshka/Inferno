@@ -43,7 +43,7 @@ includes("xmake/dependencies.lua")
 includes("xmake/devices.lua")
 includes("xmake/rules/*.lua")
 
-if is_plat("mingw") then
+if is_plat("windows", "mingw") then
 	inferno_coroutine_backend = "windows"
 elseif is_plat("wasm") then
 	inferno_coroutine_backend = "wasm"
@@ -120,7 +120,7 @@ if not has_config("__openbsd") then
 end
 if is_plat("linux", "bsd", "haiku") then
 	add_ldflags("-Wl,-z,relro", "-Wl,-z,now")
-elseif is_plat("mingw") then
+elseif is_plat("windows", "mingw") then
 	add_ldflags("-Wl,--no-seh", "-Wl,--nxcompat", "-Wl,--dynamicbase", "-Wl,--high-entropy-va")
 end
 
@@ -181,7 +181,7 @@ target("qemuutil")
 	add_packages("glib", "gnutls", "linux_io_uring", "ust", {public = true})
 	add_syslinks("pthread", {public = true})
 	add_options("libm", "librt", "libsocket")
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_syslinks("winmm", "pathcch", "synchronization", {public = true})
 	elseif is_plat("bsd") then
 		add_options("libutil", "libinotify")
@@ -342,10 +342,13 @@ if has_package("xkbcommon") then
 	target("inferno-keymap")
 		set_kind("binary")
 		add_deps("genh", "qemuutil")
+		if is_plat("windows", "mingw") then
+			add_rules("inferno.dlls")
+		end
 		add_rules("inferno.keymaps")
 		add_files("qemu-keymap.c", "ui/input-keymap.c")
 		add_packages("xkbcommon")
-		if is_plat("mingw") then
+		if is_plat("windows", "mingw") then
 			add_files("version.rc")
 		end
 		for name, args in table.orderpairs(inferno_keymaps) do
@@ -390,8 +393,9 @@ local function emulator(name, gui)
 			if has_config("vmnet") then
 				add_frameworks("vmnet")
 			end
-		elseif is_plat("mingw") then
+		elseif is_plat("windows", "mingw") then
 			add_files("version.rc")
+			add_rules("inferno.dlls")
 			if gui then
 				add_ldflags("-mwindows", {force = true})
 			end
@@ -429,7 +433,7 @@ local function emulator(name, gui)
 end
 
 emulator("inferno-aarch64")
-if is_plat("mingw") and (has_package("sdl") or has_package("gtk")) then
+if is_plat("windows", "mingw") and (has_package("sdl") or has_package("gtk")) then
 	emulator("inferno-aarch64w", true)
 end
 
@@ -441,8 +445,9 @@ if has_config("tools") then
 		tapsets("inferno-img")
 		if is_plat("macosx") then
 			add_frameworks("CoreFoundation", "IOKit")
-		elseif is_plat("mingw") then
+		elseif is_plat("windows", "mingw") then
 			add_files("version.rc")
+			add_rules("inferno.dlls")
 		end
 	target_end()
 
@@ -450,8 +455,9 @@ if has_config("tools") then
 		set_kind("binary")
 		add_deps("genh", "qemuutil")
 		add_files("qemu-edid.c", "hw/display/edid-generate.c")
-		if is_plat("mingw") then
+		if is_plat("windows", "mingw") then
 			add_files("version.rc")
+			add_rules("inferno.dlls")
 		end
 	target_end()
 
@@ -477,7 +483,7 @@ target("blockdev")
 	add_files("blockdev.c", "iothread.c", "job-qmp.c")
 	if is_plat("wasm") then
 		add_files("os-wasm.c")
-	elseif not is_plat("mingw") then
+	elseif not is_plat("windows", "mingw") then
 		add_files("os-posix.c")
 	end
 target_end()
@@ -488,7 +494,7 @@ target_end()
 
 target("system")
 	add_files("cpu-target.c")
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_files("os-win32.c")
 	end
 target_end()

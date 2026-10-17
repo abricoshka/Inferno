@@ -1,7 +1,7 @@
 target("system")
 	add_files("announce.c", "checksum.c", "dgram.c", "eth.c", "hub.c", "net-hmp-cmds.c", "net.c", "queue.c", "socket.c",
 		"stream.c", "stream_data.c", "util.c")
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_files("tap-win32.c")
 	elseif is_plat("linux") then
 		add_files("tap.c", "tap-linux.c")

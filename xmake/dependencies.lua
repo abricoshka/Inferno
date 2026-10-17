@@ -266,13 +266,13 @@ option_end()
 
 option("libsocket")
 	set_showmenu(false)
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_syslinks("ws2_32")
 	elseif is_plat("haiku") then
 		add_links("posix_error_mapper", "network", "bsd")
 	end
 	after_check(function (option)
-		option:enable(is_plat("mingw", "haiku"), {force = true})
+		option:enable(is_plat("windows", "mingw", "haiku"), {force = true})
 	end)
 option_end()
 
@@ -287,14 +287,14 @@ option("dsound")
 	set_description("DirectSound audio backend (Windows)")
 	add_cincludes("dsound.h")
 	add_syslinks("ole32", "dxguid")
-	after_check(inferno_restrict_host("mingw"))
+	after_check(inferno_restrict_host("windows") or inferno_restrict_host("mingw"))
 option_end()
 
 option("dnsapi")
 	set_showmenu(false)
 	add_syslinks("dnsapi")
 	add_cincludes("windows.h", "windns.h")
-	after_check(inferno_restrict_host("mingw"))
+	after_check(inferno_restrict_host("windows") or inferno_restrict_host("mingw"))
 option_end()
 
 for flavour, macro in pairs({freebsd = "__FreeBSD__", netbsd = "__NetBSD__", openbsd = "__OpenBSD__"}) do

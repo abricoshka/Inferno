@@ -58,7 +58,7 @@ rule("inferno.genh")
 			end
 		end
 		local coroutine_backend = target:values("inferno.coroutine_backend")
-		local supported_backends = target:is_plat("mingw") and {"windows"} or target:is_plat("wasm") and {"wasm"} or
+		local supported_backends = target:is_plat("windows", "mingw") and {"windows"} or target:is_plat("wasm") and {"wasm"} or
 			table.join(config.get("__ucontext") and {"ucontext"} or {}, "sigaltstack")
 		if not table.contains(supported_backends, coroutine_backend) then
 			raise("coroutine backend %s is not available, available backends: %s", coroutine_backend,
@@ -74,7 +74,7 @@ rule("inferno.genh")
 				raise("cannot enable AVX512 optimizations due to missing intrinsics")
 			end
 		end
-		if target:is_plat("mingw") and cpu == "aarch64" and not config.get("__mingw_setjmp") then
+		if target:is_plat("windows", "mingw") and cpu == "aarch64" and not config.get("__mingw_setjmp") then
 			raise("mingw must provide setjmp/longjmp for windows-arm64")
 		end
 
@@ -182,8 +182,21 @@ rule("inferno.bundle")
 	end)
 rule_end()
 
+rule("inferno.dlls")
+	after_build(function (target)
+		if target:is_plat("windows", "mingw") then
+			import("inferno.dlls").bundle(target, target:targetdir())
+		end
+	end)
+	after_install(function (target)
+		if target:is_plat("windows", "mingw") then
+			import("inferno.dlls").bundle(target, path.join(target:installdir(), "bin"))
+		end
+	end)
+rule_end()
+
 rule("inferno.entitlement")
-	after_link(function (target)
+	after_build(function (target)
 		import("inferno.codegen")
 		if target:is_plat("macosx") then
 			codegen.entitle(target:targetfile())

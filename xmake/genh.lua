@@ -122,7 +122,7 @@ target("genh")
 	if not has_config("__nettle_xts") then
 		define("CONFIG_QEMU_PRIVATE_XTS")
 	end
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		define("CONFIG_WIN32")
 		probe_header("HAVE_AFUNIX_H", "afunix.h")
 		probe_links("HAVE__LOCK_FILE", [[
@@ -252,7 +252,7 @@ int main(void) {
 	probe_symbol("CONFIG_SYSMACROS", "sys/sysmacros.h", {"makedev"})
 	probe_symbol("HAVE_IPPROTO_MPTCP", "netinet/in.h", {"IPPROTO_MPTCP"})
 	probe_symbol("HAVE_OPTRESET", "getopt.h", {"optreset"})
-	local tcp_header = is_plat("mingw") and "ws2tcpip.h" or "netinet/tcp.h"
+	local tcp_header = is_plat("windows", "mingw") and "ws2tcpip.h" or "netinet/tcp.h"
 	probe_symbol("HAVE_TCP_KEEPCNT", tcp_header, {"TCP_KEEPCNT"})
 	probe_symbol("HAVE_TCP_KEEPINTVL", tcp_header, {"TCP_KEEPINTVL"})
 	probe_compiles("HAVE_TCP_KEEPIDLE", "#include <" .. tcp_header .. ">\n" .. [[
@@ -505,7 +505,7 @@ int main(void)
     return val;
 }]], {configvar = false})
 	end
-	if not is_plat("mingw", "wasm", "macosx") then
+	if not is_plat("windows", "mingw", "wasm", "macosx") then
 		probe_links("ucontext", [[
 #include <ucontext.h>
 #ifdef __stub_makecontext

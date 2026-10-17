@@ -14,7 +14,7 @@ target("block")
 		"progress_meter.c", "qapi.c", "qcow2.c", "qcow2-bitmap.c", "qcow2-cache.c", "qcow2-cluster.c",
 		"qcow2-refcount.c", "qcow2-snapshot.c", "qcow2-threads.c", "quorum.c", "raw-format.c", "reqlist.c",
 		"snapshot.c", "snapshot-access.c", "write-threshold.c", "stream.c")
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_files("file-win32.c", "win32-aio.c")
 	else
 		add_files("file-posix.c")

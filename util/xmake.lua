@@ -3,7 +3,7 @@ target("qemuutil")
 	if not has_config("__CONFIG_ATOMIC64") then
 		add_files("atomic64.c")
 	end
-	if is_plat("mingw") then
+	if is_plat("windows", "mingw") then
 		add_files("aio-win32.c", "event_notifier-win32.c", "oslib-win32.c", "qemu-thread-win32.c")
 	else
 		add_files("aio-posix.c", "fdmon-poll.c", "compatfd.c", "event_notifier-posix.c", "oslib-posix.c",
