@@ -111,11 +111,51 @@ struct MDNSService
     DNS_SERVICE_CANCEL    cancel;
 };
 
+typedef struct DnsApi
+{
+    typeof(&DnsServiceConstructInstance) construct_instance;
+    typeof(&DnsServiceFreeInstance)      free_instance;
+    typeof(&DnsServiceRegister)          register_service;
+    typeof(&DnsServiceDeRegister)        deregister_service;
+} DnsApi;
+
+static DnsApi dnsapi;
+
+static bool mdns_load_dnsapi(Error** errp)
+{
+    DnsApi  loaded;
+    HMODULE module;
+
+    if (dnsapi.register_service != NULL) { return true; }
+
+    module = LoadLibraryW(L"dnsapi.dll");
+    if (module == NULL) {
+        error_setg(errp, "Failed to load dnsapi.dll: error %lu", GetLastError());
+        return false;
+    }
+
+    loaded.construct_instance = (void*)GetProcAddress(module, "DnsServiceConstructInstance");
+    loaded.free_instance      = (void*)GetProcAddress(module, "DnsServiceFreeInstance");
+    loaded.register_service   = (void*)GetProcAddress(module, "DnsServiceRegister");
+    loaded.deregister_service = (void*)GetProcAddress(module, "DnsServiceDeRegister");
+
+    if (loaded.construct_instance == NULL || loaded.free_instance == NULL || loaded.register_service == NULL
+        || loaded.deregister_service == NULL)
+    {
+        error_setg(errp, "dnsapi.dll lacks the DNS-SD functions; Windows 10 version 1809 or later is required");
+        FreeLibrary(module);
+        return false;
+    }
+
+    dnsapi = loaded;
+    return true;
+}
+
 static void WINAPI mdns_registered(DWORD status, void* opaque, DNS_SERVICE_INSTANCE* instance)
 {
     if (status != ERROR_SUCCESS) { warn_report("mdns: the DNS Client rejected the service: error %lu", status); }
 
-    if (instance != NULL) { DnsServiceFreeInstance(instance); }
+    if (instance != NULL) { dnsapi.free_instance(instance); }
 }
 
 MDNSService* mdns_service_register(const char* name, const char* type, uint16_t port, const char* txt, Error** errp)
@@ -131,14 +171,16 @@ MDNSService* mdns_service_register(const char* name, const char* type, uint16_t 
     MDNSService*                 svc;
     DWORD                        status;
 
+    if (!mdns_load_dnsapi(errp)) { return NULL; }
+
     if (winstance == NULL || whost == NULL || (txt != NULL && wtxt == NULL)) {
         error_setg(errp, "Service name is not valid UTF-8");
         return NULL;
     }
 
     svc           = g_new0(MDNSService, 1);
-    svc->instance = DnsServiceConstructInstance((PCWSTR)winstance, (PCWSTR)whost, NULL, NULL, port, 0, 0,
-                                                txt != NULL ? 1 : 0, keys, values);
+    svc->instance = dnsapi.construct_instance((PCWSTR)winstance, (PCWSTR)whost, NULL, NULL, port, 0, 0,
+                                              txt != NULL ? 1 : 0, keys, values);
     if (svc->instance == NULL) {
         error_setg(errp, "DnsServiceConstructInstance failed: error %lu", GetLastError());
         g_free(svc);
@@ -151,10 +193,10 @@ MDNSService* mdns_service_register(const char* name, const char* type, uint16_t 
     req.pQueryContext               = svc;
     req.unicastEnabled              = FALSE;
 
-    status = DnsServiceRegister(&req, &svc->cancel);
+    status = dnsapi.register_service(&req, &svc->cancel);
     if (status != DNS_REQUEST_PENDING && status != ERROR_SUCCESS) {
         error_setg(errp, "DnsServiceRegister failed: error %lu", status);
-        DnsServiceFreeInstance(svc->instance);
+        dnsapi.free_instance(svc->instance);
         g_free(svc);
         return NULL;
     }
@@ -170,9 +212,9 @@ void mdns_service_unregister(MDNSService* svc)
 
     req.Version          = DNS_QUERY_REQUEST_VERSION1;
     req.pServiceInstance = svc->instance;
-    DnsServiceDeRegister(&req, NULL);
+    dnsapi.deregister_service(&req, NULL);
 
-    DnsServiceFreeInstance(svc->instance);
+    dnsapi.free_instance(svc->instance);
     g_free(svc);
 }
 

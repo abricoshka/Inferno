@@ -292,7 +292,6 @@ option_end()
 
 option("dnsapi")
 	set_showmenu(false)
-	add_syslinks("dnsapi")
 	add_cincludes("windows.h", "windns.h")
 	after_check(inferno_restrict_host("windows") or inferno_restrict_host("mingw"))
 option_end()
