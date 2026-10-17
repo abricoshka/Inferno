@@ -210,7 +210,7 @@ static void disable_aslr_SYS_ACC_PWR_DN_SAVE(AppleSEP* s)
     DPRINTF("SEP_BOOT_MONITOR_JUMP: Disable ASLR SYS_ACC_PWR_DN_SAVE\n");
     AppleA13State* acpu        = APPLE_A13(s->cpu);
     hwaddr         pwr_dn_save = acpu->A13_CPREG_VAR_NAME(SYS_ACC_PWR_DN_SAVE);
-    AddressSpace*  nsas        = &address_space_memory;
+    AddressSpace*  nsas        = cpu_get_address_space(CPU(acpu), ARMASIdx_NS);
     address_space_set(nsas, pwr_dn_save + 0x80, 0, 0x40, MEMTXATTRS_UNSPECIFIED);
 }
 #endif
