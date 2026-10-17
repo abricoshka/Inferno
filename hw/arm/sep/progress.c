@@ -22,6 +22,7 @@
 #include "hw/arm/sep/core.h"
 #include "hw/irq.h"
 #include "system/address-spaces.h"
+#include "cpu.h"
 
 #define PROGRESS_REG_SIZE (0x4000)    // ?
 
