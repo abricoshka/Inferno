@@ -39,7 +39,7 @@ struct AppleSEPProgressState
 static void disable_aslr(AppleSEPProgressState* s)
 {
     DPRINTF("SEP_PROGRESS: Disable ASLR\n");
-    AddressSpace* nsas = &address_space_memory;
+    AddressSpace* nsas = cpu_get_address_space(CPU(s->sep->cpu), ARMASIdx_NS);
 
     hwaddr phys_addr = 0x0;
     // easy way of retrieving the sepb random_0 address
@@ -140,7 +140,7 @@ static void progress_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
 #endif
             if (data == 0x23BFDFE7 && (s->sep->chip_id == 0x8015)) {
 #define LVL3_BASE_COPYFROM 0x24090C000ULL
-                AddressSpace* nsas          = &address_space_memory;
+                AddressSpace* nsas          = cpu_get_address_space(CPU(s->sep->cpu), ARMASIdx_NS);
                 uint64_t      pagetable_val = 0;
                 for (uint64_t page_addr = 0x340000000ULL; page_addr < 0x342000000ULL; page_addr += 0x4000) {
                     pagetable_val = page_addr | 0x603;
