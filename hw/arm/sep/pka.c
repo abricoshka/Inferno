@@ -174,6 +174,7 @@ static void pka_base_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
     QEMU_LOCK_GUARD(&s->lock);
 
 #ifdef ENABLE_CPU_DUMP_STATE
+    DPRINTF("\n");
     cpu_dump_state(CPU(sep->cpu), stderr, CPU_DUMP_CODE);
 #endif
     switch (addr) {
@@ -241,6 +242,7 @@ static uint64_t pka_base_reg_read(void* opaque, hwaddr addr, unsigned size)
     QEMU_LOCK_GUARD(&s->lock);
 
 #ifdef ENABLE_CPU_DUMP_STATE
+    DPRINTF("\n");
     cpu_dump_state(CPU(sep->cpu), stderr, CPU_DUMP_CODE);
 #endif
     switch (addr) {

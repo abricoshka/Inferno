@@ -369,6 +369,9 @@ static uint64_t aes_security_reg_read(void* opaque, hwaddr addr, unsigned size)
         case REG_AES_V3_SECURITY_MCC_BOOTROM_DIS:
             // normally 0x0 for SecureROM, but it only checks after writing to it
             return AES_V3_SECURITY_MCC_BOOTROM_DIS;    // for iBoot (and SecureROM)
+        case 0x4040: // PKA_SECU 0xd4040
+        case 0x4084: // PKA_SECU 0xd4084
+            return 0x10000; // prevent (e.g. SEPOS 18.5) PKA panic
         default: return 0xFF;
     }
 }
@@ -646,7 +649,8 @@ static void apple_aes_init(Object* obj)
     sysbus_init_mmio(sbd, &s->iomems[0]);
 
     // also called PKA_SECU, but with size 0x8000 instead of 0x4000
-    memory_region_init_io(&s->iomems[1], obj, &aes_security_reg_ops, s, TYPE_APPLE_AES ".security.mmio", 0x4000);
+    // PKA (e.g. SEPOS 18.5) starts to really require it to be 0x8000
+    memory_region_init_io(&s->iomems[1], obj, &aes_security_reg_ops, s, TYPE_APPLE_AES ".security.mmio", 0x8000);
     sysbus_init_mmio(sbd, &s->iomems[1]);
 
     sysbus_init_irq(sbd, &s->irq);
