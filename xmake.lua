@@ -85,16 +85,12 @@ add_mxflags("-fno-strict-aliasing", "-fno-common", "-fwrapv", "-fno-objc-arc", {
 if is_mode("debug") then
 	set_symbols("debug")
 	set_optimize("none")
-	set_strip("none")
 elseif is_mode("releasedbg") then
 	set_symbols("debug")
 	set_optimize("faster")
-	set_strip("all")
 else
-	set_symbols("debug", "hidden")
 	set_optimize("fastest")
 	add_defines("NDEBUG", "G_DISABLE_ASSERT")
-	set_strip("all")
 end
 if is_mode("debug", "releasedbg") then
 	add_cxflags("-fno-omit-frame-pointer", {force = true})
