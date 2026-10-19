@@ -981,14 +981,6 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/spi1/multi-touch");
-    assert_nonnull(node);
-    apple_dt_set_prop_null(node, "function-power_ana");
-    // FIXME: is deleting auth-required really necessary for iOS 18.5?
-    apple_dt_del_prop_named(node, "auth-required");
-    apple_dt_set_prop_null(node, "force-supported");
-    apple_dt_set_prop_null(node, "maintain-power");
-
     node = apple_dt_get_node(t8030->device_tree, "cpus");
     assert_nonnull(node);
 
