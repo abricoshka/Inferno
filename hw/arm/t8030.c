@@ -933,10 +933,6 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     assert_nonnull(node);
     apple_dt_set_prop_u32(node, "lcd-panel-id", 0xA1C432D1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/i2c1/mic-temp-sens2");
-    assert_nonnull(node);
-    apple_dt_del_prop_named(node, "function-micbias-enable");    // FIXME: Why??
-
     node = apple_dt_get_node(t8030->device_tree, "arm-io/bluetooth");
     assert_nonnull(node);
     apple_dt_set_prop(node, "local-mac-address", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x42});
