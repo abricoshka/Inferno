@@ -41,15 +41,15 @@ namespace
         void patch_ret_false(const char* sym)
         {
             auto addr = this->image.resolve_sym(sym);
-            this->assembler.write_movz_incr(this->image.path, this->image.header, addr, GPReg::R0, false, 0);
-            this->assembler.write_ret(this->image.path, this->image.header, addr);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, addr, GPReg::R0, false, 0);
+            this->assembler.write_ret(this->image.file, this->image.header, addr);
         }
 
         void patch_ret_true(const char* sym)
         {
             auto addr = this->image.resolve_sym(sym);
-            this->assembler.write_movz_incr(this->image.path, this->image.header, addr, GPReg::R0, false, 1);
-            this->assembler.write_ret(this->image.path, this->image.header, addr);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, addr, GPReg::R0, false, 1);
+            this->assembler.write_ret(this->image.file, this->image.header, addr);
         }
 
         void apply(const bool opengles)
@@ -100,7 +100,6 @@ namespace
     {
         CacheAnalyser::Image image;
         Assembler&           assembler;
-        DyldStorage&         dyld_storage;
 
         void fix_async_dispatcher(std::istream& stream, const std::uint64_t renderer, const char* sym)
         {
@@ -112,19 +111,19 @@ namespace
                 std::cout << "Detected fixed `CA::OGL::AsynchronousDispatcher` logic, skipping `" << sym << "`.\n";
             }
             catch (std::out_of_range& e) {
-                this->assembler.write_nop_incr(this->image.path, this->image.header, renderer_call);
-                this->assembler.write_nop_incr(this->image.path, this->image.header, renderer_call);
-                this->assembler.write_nop_incr(this->image.path, this->image.header, renderer_call);
+                this->assembler.write_nop_incr(this->image.file, this->image.header, renderer_call);
+                this->assembler.write_nop_incr(this->image.file, this->image.header, renderer_call);
+                this->assembler.write_nop_incr(this->image.file, this->image.header, renderer_call);
                 this->assembler.write_nop(
-                    this->image.path, this->image.header,
+                    this->image.file, this->image.header,
                     Assembler::find_blra(stream, this->image.header, renderer_call, true, false, false, 4));
             }
         }
 
         void nullify(std::uint64_t addr)
         {
-            this->assembler.write_movz_incr(this->image.path, this->image.header, addr, GPReg::R0, true, 0);
-            this->assembler.write_ret(this->image.path, this->image.header, addr);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, addr, GPReg::R0, true, 0);
+            this->assembler.write_ret(this->image.file, this->image.header, addr);
         }
 
         template<typename... T>
@@ -134,21 +133,20 @@ namespace
     public:
         QuartzCorePatches(const CacheAnalyser& analyser, Assembler& assembler) :
             image(analyser.find_image(FrameworkMatch("QuartzCore"))),
-            assembler(assembler),
-            dyld_storage(analyser.dyld_storage)
+            assembler(assembler)
         { }
 
         void apply(const bool opengles)
         {
             // Neutralise CIF10 support which also neutralises framebuffer compression.
-            this->assembler.write_ret(this->image.path, this->image.header,
+            this->assembler.write_ret(this->image.file, this->image.header,
                                       this->image.resolve_sym("___CADeviceSupportsCIF10_block_invoke"));
 
             if (!opengles) {
                 // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
                 const auto asyncDispatchRenderer =
                     this->image.resolve_sym("__ZN2CA3OGL22AsynchronousDispatcher8rendererEv");
-                auto cache_file = this->dyld_storage.open(this->image.path);
+                auto cache_file = this->image.file.open();
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
                                      "__ZN2CA3OGL22AsynchronousDispatcher10stop_timerEv");
                 fix_async_dispatcher(cache_file, asyncDispatchRenderer,
@@ -178,9 +176,9 @@ namespace
             // Force return true, fixes wallpaper settings crash due to missing Metal rendering support.
             auto should_use_xpc_service_for_rendering =
                 this->image.resolve_sym("+[SBFCARenderer shouldUseXPCServiceForRendering]");
-            this->assembler.write_movz_incr(this->image.path, this->image.header, should_use_xpc_service_for_rendering,
+            this->assembler.write_movz_incr(this->image.file, this->image.header, should_use_xpc_service_for_rendering,
                                             GPReg::R0, false, 1);
-            this->assembler.write_ret(this->image.path, this->image.header, should_use_xpc_service_for_rendering);
+            this->assembler.write_ret(this->image.file, this->image.header, should_use_xpc_service_for_rendering);
         }
     };
 
@@ -199,9 +197,9 @@ namespace
         {
             // Neutralise shader precompilation, which requires Metal support.
             try {
-                this->assembler.write_ret(this->image.path, this->image.header,
+                this->assembler.write_ret(this->image.file, this->image.header,
                                           this->image.resolve_sym("_FigPreloadShaders", "_FigCapturePreloadShaders"));
-                this->assembler.write_ret(this->image.path, this->image.header,
+                this->assembler.write_ret(this->image.file, this->image.header,
                                           this->image.resolve_sym("_FigWaitForPreloadShadersCompletion",
                                                                   "_FigCaptureWaitForPreloadShadersCompletion"));
             }
@@ -231,12 +229,12 @@ namespace
             const auto nu_sw_renderer  = this->image.resolve_objc_class("NUSoftwareRenderer");
             auto       address = this->image.resolve_sym("-[NUDevice_iOS _newRendererWithCIContextOptions:error:]",
                                                          "-[NUDevice_iOS _newRendererWithOptions:error:]");
-            this->assembler.write_adrp_add_incr(this->image.path, this->image.header, address, nu_sw_renderer,
+            this->assembler.write_adrp_add_incr(this->image.file, this->image.header, address, nu_sw_renderer,
                                                 GPReg::R0);
-            this->assembler.write_adrp_add_incr(this->image.path, this->image.header, address, objc_alloc_init,
+            this->assembler.write_adrp_add_incr(this->image.file, this->image.header, address, objc_alloc_init,
                                                 GPReg::R1);
-            this->assembler.write_blr_incr(this->image.path, this->image.header, address, GPReg::R1);
-            this->assembler.write_ret(this->image.path, this->image.header, address);
+            this->assembler.write_blr_incr(this->image.file, this->image.header, address, GPReg::R1);
+            this->assembler.write_ret(this->image.file, this->image.header, address);
         }
     };
 
@@ -255,8 +253,8 @@ namespace
         {
             // Stop it from using Metal/NanoUniverse and crashing.
             auto address = this->image.resolve_sym("-[CLKUIMetalQuadView snapshotInRect:scale:time:]");
-            this->assembler.write_movz_incr(this->image.path, this->image.header, address, GPReg::R0, true, 0);
-            this->assembler.write_ret(this->image.path, this->image.header, address);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, address, GPReg::R0, true, 0);
+            this->assembler.write_ret(this->image.file, this->image.header, address);
         }
     };
 
@@ -276,8 +274,8 @@ namespace
         {
             // Stop it from using Metal and crashing.
             auto address = this->image.resolve_sym("-[PBFHomeScreenPreviewImageBuilder _imageForView:]");
-            this->assembler.write_movz_incr(this->image.path, this->image.header, address, GPReg::R0, true, 0);
-            this->assembler.write_ret(this->image.path, this->image.header, address);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, address, GPReg::R0, true, 0);
+            this->assembler.write_ret(this->image.file, this->image.header, address);
         }
     };
 
@@ -295,8 +293,8 @@ namespace
         void apply()
         {
             auto address = this->image.resolve_sym("__os_trace_is_development_build");
-            this->assembler.write_movz_incr(this->image.path, this->image.header, address, GPReg::R0, false, 1);
-            this->assembler.write_ret(this->image.path, this->image.header, address);
+            this->assembler.write_movz_incr(this->image.file, this->image.header, address, GPReg::R0, false, 1);
+            this->assembler.write_ret(this->image.file, this->image.header, address);
         }
     };
 
@@ -331,8 +329,13 @@ namespace
         DyldStorage         dyld_storage(storage);
         const CacheAnalyser analyser(dyld_storage);
 
-        for (const auto& cache : analyser.caches) {
-            if (Patcher::revert(storage, cache.first)) { std::cout << "Reverted " << cache.first << ".\n"; }
+        std::vector<FileRef> targets;
+        targets.reserve(analyser.caches.size());
+        for (const auto& cache : analyser.caches) { targets.emplace_back(dyld_storage, cache.first); }
+        if (analyser.symbols_cache) { targets.emplace_back(dyld_storage, analyser.symbols_cache->first); }
+
+        for (const auto& target : targets) {
+            if (Patcher::revert(target)) { std::cout << "Reverted " << target.string() << ".\n"; }
         }
 
         if (revert_only) {
@@ -340,7 +343,7 @@ namespace
             return 0;
         }
 
-        Patcher   patcher(storage);
+        Patcher   patcher;
         Assembler assembler(patcher);
 
         std::cout << "Building patches...\n";

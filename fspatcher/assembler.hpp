@@ -72,14 +72,12 @@ class Assembler
                           std::uint8_t((value >> 16) & 0xFF), std::uint8_t((value >> 24) & 0xFF)};
     }
 
-    void write_inst(const std::filesystem::path& path, const DyldCacheHeader& header, const std::uint64_t target,
-                    const INST inst)
-    { this->patcher.write(path, header.vm_addr_to_file_off(target), u32_to_bytes(inst)); }
+    void write_inst(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target, const INST inst)
+    { this->patcher.write(file, header.vm_addr_to_file_off(target), u32_to_bytes(inst)); }
 
-    void write_inst_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& target,
-                         const INST inst)
+    void write_inst_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target, const INST inst)
     {
-        this->write_inst(path, header, target, inst);
+        this->write_inst(file, header, target, inst);
         target += sizeof(INST_BYTES);
     }
 
@@ -152,26 +150,25 @@ public:
         patcher(patcher)
     { }
 
-    void write_movz(const std::filesystem::path& path, const DyldCacheHeader& header, const std::uint64_t target,
-                    const GPReg reg, const bool wide, const std::uint16_t imm, const MOVZShift shift = MOVZShift::_0)
-    { this->write_inst(path, header, target, make_movz(reg, wide, imm, shift)); }
+    void write_movz(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target, const GPReg reg,
+                    const bool wide, const std::uint16_t imm, const MOVZShift shift = MOVZShift::_0)
+    { this->write_inst(file, header, target, make_movz(reg, wide, imm, shift)); }
 
-    void write_movz_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& target,
-                         const GPReg reg, const bool wide, const std::uint16_t imm,
-                         const MOVZShift shift = MOVZShift::_0)
-    { this->write_inst_incr(path, header, target, make_movz(reg, wide, imm, shift)); }
+    void write_movz_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target, const GPReg reg,
+                         const bool wide, const std::uint16_t imm, const MOVZShift shift = MOVZShift::_0)
+    { this->write_inst_incr(file, header, target, make_movz(reg, wide, imm, shift)); }
 
-    void write_nop(const std::filesystem::path& path, const DyldCacheHeader& header, const std::uint64_t target)
-    { this->write_inst(path, header, target, make_nop()); }
+    void write_nop(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target)
+    { this->write_inst(file, header, target, make_nop()); }
 
-    void write_nop_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& target)
-    { this->write_inst_incr(path, header, target, make_nop()); }
+    void write_nop_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target)
+    { this->write_inst_incr(file, header, target, make_nop()); }
 
-    void write_ret(const std::filesystem::path& path, const DyldCacheHeader& header, const std::uint64_t target)
-    { this->write_inst(path, header, target, make_ret()); }
+    void write_ret(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target)
+    { this->write_inst(file, header, target, make_ret()); }
 
-    void write_ret_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& target)
-    { this->write_inst_incr(path, header, target, make_ret()); }
+    void write_ret_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target)
+    { this->write_inst_incr(file, header, target, make_ret()); }
 
     static auto find_cbz(std::istream& stream, const DyldCacheHeader& header, const std::uint64_t start_addr,
                          const bool wide, const bool rev = false, const std::uint32_t inst_limit = 0x400)
@@ -235,7 +232,7 @@ public:
                                 + " zero=" + std::to_string(zero) + " key_b=" + std::to_string(key_b));
     }
 
-    void write_adrp_add_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& address,
+    void write_adrp_add_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& address,
                              const std::uint64_t target, const GPReg reg)
     {
         const auto pc_page     = address & ~0xFFFULL;
@@ -245,22 +242,20 @@ public:
         if (target_page > pc_page) {
             const auto off_pages = (target_page - pc_page);
             if (off_pages > ADRP_MAX) { throw std::invalid_argument("target too far away"); }
-            this->write_inst_incr(path, header, address, make_adrp(std::int32_t(off_pages >> 0xC), reg));
+            this->write_inst_incr(file, header, address, make_adrp(std::int32_t(off_pages >> 0xC), reg));
         }
         else {
             const auto off_pages = pc_page - target_page;
             if (off_pages > ADRP_MAX) { throw std::invalid_argument("target too far away"); }
-            this->write_inst_incr(path, header, address, make_adrp(std::int32_t(-(off_pages >> 0xC)), reg));
+            this->write_inst_incr(file, header, address, make_adrp(std::int32_t(-(off_pages >> 0xC)), reg));
         }
 
-        this->write_inst_incr(path, header, address, make_add(low12, true, reg, reg));
+        this->write_inst_incr(file, header, address, make_add(low12, true, reg, reg));
     }
 
-    void write_blr(const std::filesystem::path& path, const DyldCacheHeader& header, const std::uint64_t address,
-                   const GPReg reg)
-    { this->write_inst(path, header, address, make_blr(reg)); }
+    void write_blr(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t address, const GPReg reg)
+    { this->write_inst(file, header, address, make_blr(reg)); }
 
-    void write_blr_incr(const std::filesystem::path& path, const DyldCacheHeader& header, std::uint64_t& address,
-                        const GPReg reg)
-    { this->write_inst_incr(path, header, address, make_blr(reg)); }
+    void write_blr_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& address, const GPReg reg)
+    { this->write_inst_incr(file, header, address, make_blr(reg)); }
 };

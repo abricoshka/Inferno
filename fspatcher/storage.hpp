@@ -23,10 +23,12 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 [[noreturn]]
@@ -120,10 +122,7 @@ public:
     explicit File(std::unique_ptr<std::streambuf> streambuf) :
         std::iostream(streambuf.get()),
         buf(std::move(streambuf))
-    {
-        // Rethrow the buffer's errors instead of only setting badbit.
-        this->exceptions(std::ios::badbit);
-    }
+    { this->exceptions(std::ios::badbit); }
 
     File(const File&)                    = delete;
     File(File&&)                         = delete;
@@ -132,8 +131,74 @@ public:
     ~File() override                     = default;
 };
 
-/// Host files, or files in the System volume of a disk image.
-class Storage
+class FileSystem
+{
+public:
+    static constexpr std::string_view ORIG_BYTE_FILE_EXT = ".InfernoOriginalBytes";
+
+    FileSystem()                                     = default;
+    FileSystem(const FileSystem&)                    = delete;
+    FileSystem(FileSystem&&)                         = delete;
+    auto operator=(const FileSystem&) -> FileSystem& = delete;
+    auto operator=(FileSystem&&) -> FileSystem&      = delete;
+    virtual ~FileSystem()                            = default;
+
+    virtual auto open(const std::filesystem::path& path, std::ios::openmode mode = std::ios::in) -> File = 0;
+
+    [[nodiscard]]
+    virtual auto host_path(const std::filesystem::path& path) const -> std::filesystem::path = 0;
+
+    [[nodiscard]]
+    virtual auto name() const -> std::string_view = 0;
+
+    [[nodiscard]]
+    virtual auto canonical() -> FileSystem&
+    { return *this; }
+};
+
+class FileRef
+{
+    FileSystem*           fs;
+    std::filesystem::path file_path;
+
+public:
+    FileRef(FileSystem& fs, std::filesystem::path path) :
+        fs(&fs.canonical()),
+        file_path(std::move(path))
+    { }
+
+    [[nodiscard]]
+    auto path() const -> const std::filesystem::path&
+    { return this->file_path; }
+
+    [[nodiscard]]
+    auto storage() const -> FileSystem&
+    { return *this->fs; }
+
+    [[nodiscard]]
+    auto open(const std::ios::openmode mode = std::ios::in) const -> File
+    { return this->fs->open(this->file_path, mode); }
+
+    [[nodiscard]]
+    auto orig_bytes_path() const -> std::filesystem::path
+    {
+        auto ret  = this->fs->host_path(this->file_path);
+        ret      += FileSystem::ORIG_BYTE_FILE_EXT;
+        return ret;
+    }
+
+    [[nodiscard]]
+    auto string() const -> std::string
+    { return '[' + std::string(this->fs->name()) + "] " + this->file_path.string(); }
+
+    friend auto operator<(const FileRef& lhs, const FileRef& rhs) -> bool
+    {
+        if (lhs.file_path != rhs.file_path) { return lhs.file_path < rhs.file_path; }
+        return std::less<const FileSystem*>()(lhs.fs, rhs.fs);
+    }
+};
+
+class Storage : public FileSystem
 {
     std::filesystem::path                      disk_path;
     BlockBackend*                              disk{nullptr};
@@ -155,7 +220,7 @@ public:
     auto operator=(const Storage&) -> Storage& = delete;
     auto operator=(Storage&&) -> Storage&      = delete;
 
-    ~Storage()
+    ~Storage() override
     {
         for (const auto& file : this->files) { disk_file_close(file.second); }
         if (this->disk != nullptr) { disk_close(this->disk); }
@@ -165,7 +230,7 @@ public:
     auto backend() const -> BlockBackend*
     { return this->disk; }
 
-    auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File
+    auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File override
     {
         if (this->disk == nullptr) {
             auto buf = std::make_unique<std::filebuf>();
@@ -186,21 +251,31 @@ public:
         return File(std::make_unique<DiskFileBuf>(file->second));
     }
 
-    /// Where host-side files belonging to `path` go, since files cannot be created in the disk image.
     [[nodiscard]]
-    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path
+    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path override
+    { return this->host_path(path, {}); }
+
+    [[nodiscard]]
+    auto host_path(const std::filesystem::path& path, const std::string_view tag) const -> std::filesystem::path
     {
         if (this->disk == nullptr) { return path; }
 
         auto ret  = this->disk_path;
         ret      += '.';
-        ret      += path.filename();
+        if (!tag.empty()) {
+            ret += tag;
+            ret += '.';
+        }
+        ret += path.filename();
         return ret;
     }
+
+    [[nodiscard]]
+    auto name() const -> std::string_view override
+    { return this->disk == nullptr ? "host" : "system volume"; }
 };
 
-/// Files in the OS cryptex of a disk image, or in the underlying `Storage` itself. Must not outlive it.
-class DyldStorage
+class DyldStorage : public FileSystem
 {
     Storage&                                   storage;
     ApfsFile*                                  cryptex{nullptr};
@@ -222,13 +297,13 @@ public:
     auto operator=(const DyldStorage&) -> DyldStorage& = delete;
     auto operator=(DyldStorage&&) -> DyldStorage&      = delete;
 
-    ~DyldStorage()
+    ~DyldStorage() override
     {
         for (const auto& file : this->files) { disk_file_close(file.second); }
         if (this->cryptex != nullptr) { disk_file_close(this->cryptex); }
     }
 
-    auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File
+    auto open(const std::filesystem::path& path, const std::ios::openmode mode = std::ios::in) -> File override
     {
         if (this->cryptex == nullptr) { return this->storage.open(path, mode); }
 
@@ -244,6 +319,14 @@ public:
     }
 
     [[nodiscard]]
-    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path
-    { return this->storage.host_path(path); }
+    auto host_path(const std::filesystem::path& path) const -> std::filesystem::path override
+    { return this->cryptex == nullptr ? this->storage.host_path(path) : this->storage.host_path(path, "cryptex"); }
+
+    [[nodiscard]]
+    auto name() const -> std::string_view override
+    { return this->cryptex == nullptr ? this->storage.name() : "OS cryptex"; }
+
+    [[nodiscard]]
+    auto canonical() -> FileSystem& override
+    { return this->cryptex == nullptr ? this->storage.canonical() : static_cast<FileSystem&>(*this); }
 };

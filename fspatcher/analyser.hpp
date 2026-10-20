@@ -136,16 +136,16 @@ struct CacheAnalyser
 
     struct Image
     {
-        const std::filesystem::path& path;
-        const DyldCacheHeader&       header;
-        std::streamoff               file_off{0};
-        std::uint64_t                vm_addr{0};
-        SymbolMap                    symbols;
-        ObjCClassMap                 objc_classes;
+        FileRef                file;
+        const DyldCacheHeader& header;
+        std::streamoff         file_off{0};
+        std::uint64_t          vm_addr{0};
+        SymbolMap              symbols;
+        ObjCClassMap           objc_classes;
 
-        explicit Image(const std::filesystem::path& path, const DyldCacheHeader& header, const std::streamoff file_off,
+        explicit Image(FileRef file, const DyldCacheHeader& header, const std::streamoff file_off,
                        const std::uint64_t vm_addr, SymbolMap&& symbols, ObjCClassMap&& objc_classes) :
-            path(path),
+            file(std::move(file)),
             header(header),
             file_off(file_off),
             vm_addr(vm_addr),
@@ -361,7 +361,7 @@ struct CacheAnalyser
             }
         }
 
-        return Image(image_cache_entry.first, image_cache_entry.second, image_off, image->base, std::move(symbols),
-                     std::move(objc_classes));
+        return Image(FileRef(this->dyld_storage, image_cache_entry.first), image_cache_entry.second, image_off,
+                     image->base, std::move(symbols), std::move(objc_classes));
     }
 };

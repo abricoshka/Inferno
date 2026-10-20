@@ -28,17 +28,12 @@
 #include <map>
 #include <set>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 class Patcher
 {
-    Storage&                                                                                       storage;
-    std::unordered_map<std::filesystem::path, std::map<std::streamoff, std::vector<std::uint8_t>>> write_queue;
-
-    static constexpr std::string_view ORIG_BYTE_FILE_EXT = ".InfernoOriginalBytes";
+    std::map<FileRef, std::map<std::streamoff, std::vector<std::uint8_t>>> write_queue;
 
     static constexpr std::uint32_t CS_MAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0;
     static constexpr std::uint32_t CS_MAGIC_CODEDIRECTORY      = 0xFADE0C02;
@@ -76,13 +71,11 @@ class Patcher
         return digest;
     }
 
-    /// Queue new page hashes in the code directory at `cd_off` of `path` for every page that has queued writes.
-    void rehash_code_directory(const std::filesystem::path& path, std::iostream& file,
-                               const std::vector<std::uint8_t>& sig, const std::streamoff sig_off,
-                               const std::size_t                                                  cd_off,
+    void rehash_code_directory(const FileRef& ref, std::iostream& file, const std::vector<std::uint8_t>& sig,
+                               const std::streamoff sig_off, const std::size_t cd_off,
                                std::vector<std::pair<std::streamoff, std::vector<std::uint8_t>>>& out)
     {
-        const auto& entries    = this->write_queue.at(path);
+        const auto& entries    = this->write_queue.at(ref);
         const auto  version    = be32(sig, cd_off + 0x8);
         const auto  hash_off   = be32(sig, cd_off + 0x10);
         const auto  code_slots = be32(sig, cd_off + 0x1C);
@@ -99,7 +92,7 @@ class Patcher
             const auto start = std::uint64_t(entry.first);
             const auto end   = start + entry.second.size();
             if (end > code_limit) {
-                throw std::runtime_error("write at " + std::to_string(start) + " in `" + path.string()
+                throw std::runtime_error("write at " + std::to_string(start) + " in `" + ref.string()
                                          + "` is not covered by its code signature");
             }
             for (auto page = start / page_size; page * page_size < end; ++page) { pages.emplace(page); }
@@ -117,7 +110,7 @@ class Patcher
             auto old_hash = page_hash(hash_type, data);
             old_hash.resize(hash_size);
             if (!std::equal(old_hash.begin(), old_hash.end(), sig.begin() + std::ptrdiff_t(slot_off))) {
-                throw std::runtime_error("page " + std::to_string(page) + " of `" + path.string()
+                throw std::runtime_error("page " + std::to_string(page) + " of `" + ref.string()
                                          + "` does not match its code directory hash");
             }
 
@@ -137,14 +130,9 @@ class Patcher
     }
 
 public:
-    explicit Patcher(Storage& storage) :
-        storage(storage)
-    { }
-
-    static bool revert(Storage& storage, const std::filesystem::path& path)
+    static bool revert(const FileRef& file)
     {
-        auto orig_bytes_path  = storage.host_path(path);
-        orig_bytes_path      += ORIG_BYTE_FILE_EXT;
+        const auto orig_bytes_path = file.orig_bytes_path();
 
         if (!std::filesystem::exists(orig_bytes_path)) { return false; }
 
@@ -153,50 +141,43 @@ public:
             throw std::runtime_error("failed to open orig bytes file at `" + orig_bytes_path.string() + '`');
         }
 
-        auto file = storage.open(path, std::ios::in | std::ios::out);
+        auto stream = file.open(std::ios::in | std::ios::out);
 
         bool        changed = false;
         std::string line;
         while (orig_bytes_file >> line) {
             if (line.back() == ':') {
-                file.seekp(std::stoll(line.substr(0, line.size() - 1), nullptr, 16));
-                if (!file) { throw std::runtime_error("failed to seek to offset (malformed revert file?)"); }
+                stream.seekp(std::stoll(line.substr(0, line.size() - 1), nullptr, 16));
+                if (!stream) { throw std::runtime_error("failed to seek to offset (malformed revert file?)"); }
                 continue;
             }
             const auto value = std::stoi(line, nullptr, 16);
             const auto byte  = std::uint8_t(value & 0xFF);
             if (byte != value) { throw std::runtime_error("malformed revert file; byte too large"); }
-            file.write(reinterpret_cast<const char*>(&byte), sizeof(byte));
-            if (!file) { throw std::runtime_error("failed to restore a byte (malformed revert file?)"); }
+            stream.write(reinterpret_cast<const char*>(&byte), sizeof(byte));
+            if (!stream) { throw std::runtime_error("failed to restore a byte (malformed revert file?)"); }
             changed = true;
         }
 
-        file.flush();
+        stream.flush();
         orig_bytes_file.close();
         std::filesystem::remove(orig_bytes_path);
 
         return changed;
     }
 
-    void write(const std::filesystem::path& path, const std::streamoff file_off, const std::uint8_t* bytes,
-               const std::size_t nbytes)
-    {
-        this->write_queue.try_emplace(path);
-        this->write_queue[path].emplace(file_off, std::vector(bytes, bytes + nbytes));
-    }
+    void write(const FileRef& file, const std::streamoff file_off, const std::uint8_t* bytes, const std::size_t nbytes)
+    { this->write_queue[file].emplace(file_off, std::vector(bytes, bytes + nbytes)); }
 
     template<const std::size_t N>
-    void write(const std::filesystem::path& path, const std::streamoff file_off,
-               const std::array<std::uint8_t, N> bytes)
-    { this->write(path, file_off, bytes.data(), N); }
+    void write(const FileRef& file, const std::streamoff file_off, const std::array<std::uint8_t, N> bytes)
+    { this->write(file, file_off, bytes.data(), N); }
 
-    /// Update the code directory page hashes of every page with queued writes, so the pages still validate.
     void rehash()
     {
         for (auto& cache_entries : this->write_queue) {
-            auto file = this->storage.open(cache_entries.first);
+            auto file = cache_entries.first.open();
 
-            // dyld_cache_header.codeSignatureOffset and codeSignatureSize.
             const auto                sig_off  = std::streamoff(read_u64_le(seek_stream(file, 0x28)));
             const auto                sig_size = read_u64_le(file);
             std::vector<std::uint8_t> sig(sig_size);
@@ -222,7 +203,7 @@ public:
     void print_changes() const
     {
         for (const auto& cache_entries : this->write_queue) {
-            std::cout << "  " << cache_entries.first << ":\n";
+            std::cout << "  " << cache_entries.first.string() << ":\n";
             for (const auto& entry : cache_entries.second) {
                 std::cout << "    " << entry.first << ": ";
                 for (const auto byte : entry.second) { std::cout << std::uint16_t(byte) << ' '; }
@@ -234,9 +215,8 @@ public:
     void flush() const
     {
         for (const auto& cache_entries : this->write_queue) {
-            auto cache_file       = this->storage.open(cache_entries.first, std::ios::in | std::ios::out);
-            auto orig_bytes_path  = this->storage.host_path(cache_entries.first);
-            orig_bytes_path      += ORIG_BYTE_FILE_EXT;
+            auto          cache_file      = cache_entries.first.open(std::ios::in | std::ios::out);
+            const auto    orig_bytes_path = cache_entries.first.orig_bytes_path();
             std::ofstream diff_file(orig_bytes_path, std::ios::out | std::ios::trunc);
             if (!diff_file.is_open()) {
                 throw std::runtime_error("failed to open orig bytes file suffix=" + cache_entries.first.string());
