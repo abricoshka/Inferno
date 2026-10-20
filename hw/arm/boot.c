@@ -309,7 +309,7 @@ static void apple_boot_process_dt_node(AppleDTNode* node, AppleDTNode* parent)
     }
 
     for (iter = node->children; iter != NULL;) {
-        child = (AppleDTNode*)iter->data;
+        child = iter->data;
 
         // iter might get invalidated
         iter = iter->next;

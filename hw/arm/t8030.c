@@ -988,7 +988,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
         AppleDTNode* child;
 
         next  = iter->next;
-        child = (AppleDTNode*)iter->data;
+        child = iter->data;
         if (i >= t8030_real_cpu_count(t8030)) {
             apple_dt_del_node(node, child);    // FIXME: Might not be sufficient
             continue;

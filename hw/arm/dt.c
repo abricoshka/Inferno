@@ -354,7 +354,7 @@ AppleDTNode* apple_dt_get_node(AppleDTNode* node, const char* path)
         found = false;
 
         for (iter = node->children; iter; iter = iter->next) {
-            child = (AppleDTNode*)iter->data;
+            child = iter->data;
 
             prop = apple_dt_get_prop(child, "name");
 
