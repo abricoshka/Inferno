@@ -847,8 +847,6 @@ TranslationBlock* tb_link_page(TranslationBlock* tb)
 /*
  * @p must be non-NULL.
  * Call with all @pages locked.
- * (@cpu, @retaddr) may be (NULL, 0) outside of a cpu context,
- * in which case precise_smc need not be detected.
  */
 static void tb_invalidate_phys_page_range__locked(CPUState* cpu, struct page_collection* pages, PageDesc* p,
                                                   tb_page_addr_t start, tb_page_addr_t last, uintptr_t retaddr)
@@ -860,8 +858,6 @@ static void tb_invalidate_phys_page_range__locked(CPUState* cpu, struct page_col
 
     /* Range may not cross a page. */
     tcg_debug_assert(((start ^ last) & TARGET_PAGE_MASK) == 0);
-
-    if (retaddr && cpu && cpu->cc->tcg_ops->precise_smc) { current_tb = tcg_tb_lookup(retaddr); }
 
     /*
      * We remove all the TBs in the range [start, last].
