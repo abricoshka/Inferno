@@ -612,10 +612,11 @@ static uint64_t apple_aic_timebase_read(void* opaque, hwaddr addr, unsigned size
 {
     AppleAICCPU* o = opaque;
 
-    // FIXME: Low and high bits here will differ due to separated call per read!!!
     switch (addr) {
-        case 0x20: return extract64(apple_aic_emulate_timer(), 0, 32);
-        case 0x28: return extract64(apple_aic_emulate_timer(), 32, 32);
+        case 0x20:
+            qatomic_set(&o->timebase_value, apple_aic_emulate_timer());
+            return extract64(qatomic_read(&o->timebase_value), 0, 32);
+        case 0x28: return extract64(qatomic_read(&o->timebase_value), 32, 32);
         default:
             qemu_log_mask(LOG_UNIMP, "AIC Timebase: Read from unsupported reg 0x" HWADDR_FMT_plx " cpu: %u\n", addr,
                           o->cpu_id);

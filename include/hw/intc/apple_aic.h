@@ -44,6 +44,7 @@ typedef struct
     uint32_t       tmr_state;
     uint64_t       tmr_deadline;
     QEMUTimer*     tmr;
+    uint64_t       timebase_value;
 } AppleAICCPU;
 
 struct AppleAICState
