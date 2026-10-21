@@ -22,7 +22,7 @@
 #include "qemu/osdep.h"
 #include "exec/vaddr.h"
 
-#define MOV_W0_0_BYTES 0x00, 0x00, 0x80, 0x52
+#define MOV_W0_WZR_BYTES 0xE0, 0x03, 0x1F, 0x2A
 
 typedef struct
 {

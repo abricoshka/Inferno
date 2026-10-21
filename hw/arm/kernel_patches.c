@@ -27,13 +27,13 @@
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
 
-#define NOP       (0xD503201F)
-#define MOV_W0_0  (0x52800000)
-#define NOP_BYTES 0x1F, 0x20, 0x03, 0xD5
-#define RET       (0xD65F03C0)
-#define RET_BYTES 0xC0, 0x03, 0x5F, 0xD6
-#define RETAB     (0xD65F0FFF)
-#define PACIBSP   (0xD503237F)
+#define NOP        (0xD503201F)
+#define MOV_W0_WZR (0x2A1F03E0)
+#define NOP_BYTES  0x1F, 0x20, 0x03, 0xD5
+#define RET        (0xD65F03C0)
+#define RET_BYTES  0xC0, 0x03, 0x5F, 0xD6
+#define RETAB      (0xD65F0FFF)
+#define PACIBSP    (0xD503237F)
 
 static CKPatcherRange* ck_kp_range_from_va(const char* name, vaddr base, vaddr size)
 {
@@ -168,10 +168,10 @@ static bool ck_kp_root_auth_callback(void* ctx, uint8_t* buffer)
             error_report("%s: neither variants matched", __func__);
             return false;
         }
-        stl_le_p(ret - 4, MOV_W0_0);
+        stl_le_p(ret - 4, MOV_W0_WZR);
         return true;
     }
-    stl_le_p(func_start, MOV_W0_0);
+    stl_le_p(func_start, MOV_W0_WZR);
     stl_le_p(func_start + 4, RET);
 
     return true;
@@ -184,7 +184,7 @@ static bool ck_kp_root_hash_callback(void* ctx, uint8_t* buffer)
         error_report("%s: failed to find pacibsp", __func__);
         return false;
     }
-    stl_le_p(func_start, MOV_W0_0);
+    stl_le_p(func_start, MOV_W0_WZR);
     stl_le_p(func_start + 4, RET);
 
     return true;
@@ -214,7 +214,7 @@ static void ck_kp_apfs_patches(CKPatcherRange* range)
         0xFE, 0xFF, 0x00, 0xFC, 0xFF, 0xFF, 0xA0, 0x03, 0xC0, 0xFF,
     };
     QEMU_BUILD_BUG_ON(sizeof(root_rw_pattern) != sizeof(root_rw_mask));
-    static const uint8_t root_rw_repl[] = {MOV_W0_0_BYTES};
+    static const uint8_t root_rw_repl[] = {MOV_W0_WZR_BYTES};
     if (!ck_patcher_find_replace(range, "allow mounting root as R/W", root_rw_pattern, root_rw_mask,
                                  sizeof(root_rw_pattern), sizeof(uint32_t), 1, root_rw_repl, NULL, 4,
                                  sizeof(root_rw_repl)))
@@ -253,7 +253,7 @@ static void ck_kp_apfs_patches(CKPatcherRange* range)
         0x1F, 0xFC, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFC,
     };
     QEMU_BUILD_BUG_ON(sizeof(data_hash_pattern) != sizeof(data_hash_mask));
-    static const uint8_t data_hash_repl[] = {MOV_W0_0_BYTES};
+    static const uint8_t data_hash_repl[] = {MOV_W0_WZR_BYTES};
     for (int i = 0; i < 2; ++i) {
         ck_patcher_find_replace(range, "bypass sealed volume data hash verification", data_hash_pattern, data_hash_mask,
                                 sizeof(data_hash_pattern), sizeof(uint32_t), 1, data_hash_repl, NULL, 12,
@@ -664,7 +664,7 @@ static bool ck_kp_img4_callback(void* ctx, uint8_t* buffer)
 
     if (start == NULL) { return false; }
 
-    stl_le_p(start, MOV_W0_0);
+    stl_le_p(start, MOV_W0_WZR);
     stl_le_p(start + 4, RET);
 
     return true;
@@ -740,7 +740,7 @@ static void ck_kp_pmap_cs_enforce_patch(CKPatcherRange* range)
         0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     };
     QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    static const uint8_t repl[] = {MOV_W0_0_BYTES};
+    static const uint8_t repl[] = {MOV_W0_WZR_BYTES};
     if (!ck_patcher_find_replace(range, "bypass pmap_cs_enforce", pattern, mask, sizeof(pattern), sizeof(uint32_t), 1,
                                  repl, NULL, 0, sizeof(repl)))
     {
@@ -789,7 +789,7 @@ static void ck_kp_apfs_data_hash_patch(CKPatcherRange* apfs, CKPatcherRange* cor
         0x1F, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0x00, 0xFF,
     };
     QEMU_BUILD_BUG_ON(sizeof(data_hash_pattern) != sizeof(data_hash_mask));
-    static const uint8_t stub_repl[] = {MOV_W0_0_BYTES};
+    static const uint8_t stub_repl[] = {MOV_W0_WZR_BYTES};
     if (ck_patcher_find_replace(apfs, "bypass sealed volume data hash verification (iOS 27)", data_hash_pattern,
                                 data_hash_mask, sizeof(data_hash_pattern), sizeof(uint32_t), 0, stub_repl, NULL,
                                 2 * sizeof(uint32_t), sizeof(stub_repl)))
@@ -842,7 +842,7 @@ static void ck_kp_apfs_data_hash_patch(CKPatcherRange* apfs, CKPatcherRange* cor
             }
         }
         if (reaches) {
-            stl_le_p(insn, MOV_W0_0);
+            stl_le_p(insn, MOV_W0_WZR);
             patched = true;
         }
     }
@@ -945,8 +945,8 @@ void ck_patch_txm(MachoHeader64* hdr)
         0xBF, 0x0F, 0x3B, 0xA9,    // stp xzr, x3, [x29, #-0x50]
     };
     static const uint8_t img4_repl[] = {
-        MOV_W0_0_BYTES,    // mov w0, #0  (over pacibsp)
-        RET_BYTES,         // ret         (over sub sp), leaving `bti c`
+        MOV_W0_WZR_BYTES,    // mov w0, wzr (over pacibsp)
+        RET_BYTES,           // ret         (over sub sp), leaving `bti c`
     };
     ck_patcher_find_replace(text, "img4 payload signature bypass (TXM)", img4_pattern, NULL, sizeof(img4_pattern),
                             sizeof(uint32_t), 1, img4_repl, NULL, 4, sizeof(img4_repl));

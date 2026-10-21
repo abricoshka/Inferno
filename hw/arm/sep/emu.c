@@ -126,7 +126,7 @@ void ck_sep_seprom_patches(CKPatcherRange* range)
     };
     QEMU_BUILD_BUG_ON(sizeof(memcmp_0x30) != sizeof(memcmp_mask));
     QEMU_BUILD_BUG_ON(sizeof(memcmp_0x14) != sizeof(memcmp_mask));
-    static const uint8_t repl[] = {MOV_W0_0_BYTES};
+    static const uint8_t repl[] = {MOV_W0_WZR_BYTES};
     ck_patcher_find_replace(range, "memcmp_validstrs30", memcmp_0x30, memcmp_mask, sizeof(memcmp_0x30),
                             sizeof(uint32_t), 1, repl, NULL, 8, sizeof(repl));
     ck_patcher_find_replace(range, "memcmp_validstrs14", memcmp_0x14, memcmp_mask, sizeof(memcmp_0x14),
