@@ -740,7 +740,7 @@ static void ck_kp_pmap_cs_enforce_patch(CKPatcherRange* range)
         0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     };
     QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
-    static const uint8_t repl[] = {MOV_W0_0_BYTES, NOP_BYTES};
+    static const uint8_t repl[] = {MOV_W0_0_BYTES};
     if (!ck_patcher_find_replace(range, "bypass pmap_cs_enforce", pattern, mask, sizeof(pattern), sizeof(uint32_t), 1,
                                  repl, NULL, 0, sizeof(repl)))
     {
@@ -756,9 +756,22 @@ static void ck_kp_pmap_cs_enforce_patch(CKPatcherRange* range)
             0x00, 0xFF, 0xE0, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
         };
         QEMU_BUILD_BUG_ON(sizeof(alt) != sizeof(mask_alt));
-        static const uint8_t repl_alt[] = {MOV_W0_0_BYTES};
-        ck_patcher_find_replace(range, "bypass pmap_cs_enforce (alt)", alt, mask_alt, sizeof(alt), sizeof(uint32_t), 1,
-                                repl_alt, NULL, 0, sizeof(repl_alt));
+        if (!ck_patcher_find_replace(range, "bypass pmap_cs_enforce (alt)", alt, mask_alt, sizeof(alt),
+                                     sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl)))
+        {
+            static const uint8_t alt2[] = {
+                0x00, 0x00, 0x00, 0x94,    // bl #?
+                0x00, 0x00, 0x00, 0x35,    // cbnz w0, #?
+                0xE0, 0x03, 0x00, 0xAA,    // mov x?, x?
+                0x88, 0x63, 0x80, 0x92,    // mov x8, #0xfffffffffffffce3
+            };
+            static const uint8_t mask_alt2[] = {
+                0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0x00, 0xFF, 0xE0, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            };
+            QEMU_BUILD_BUG_ON(sizeof(alt2) != sizeof(mask_alt2));
+            ck_patcher_find_replace(range, "bypass pmap_cs_enforce (alt 2)", alt2, mask_alt2, sizeof(alt2),
+                                    sizeof(uint32_t), 1, repl, NULL, 0, sizeof(repl));
+        }
     }
 }
 
