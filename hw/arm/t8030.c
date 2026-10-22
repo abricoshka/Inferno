@@ -1204,12 +1204,9 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         cmdline = g_strconcat("-restore rd=md0 nand-enable-reformat=1 ", machine->kernel_cmdline, NULL);
     }
 
-    // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass it under hwaccel.
-    cmdline = g_strconcat("-vm_compressor_wk_sw ", cmdline, NULL);
-
-    if (!apple_boot_contains_boot_arg(cmdline, "nvme-coastguard-disable=", true)) {
-        cmdline = g_strconcat("nvme-coastguard-disable=1 ", cmdline, NULL);
-    }
+    // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass the arg under hwaccel.
+    // FIXME: NVMe CoastGuard, see `boot.c`.
+    cmdline = g_strconcat("-vm_compressor_wk_sw nvme-coastguard-disable=1 agm-trusted=1 agm-genuine=1 agm-authentic=1 ", cmdline, NULL);
 
     info_report("Boot Args: [%s]", cmdline);
 
