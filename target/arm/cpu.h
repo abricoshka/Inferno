@@ -790,6 +790,9 @@ typedef struct CPUArchState
 
     /* Internal CPU feature flags.  */
     uint64_t features;
+
+    /* Per core mmu index, the ARM_SPRR_TLB_KEYs (as bits) that may be in the softmmu TLB. */
+    uint32_t sprr_tlb_keys[NB_MMU_MODES];
 } CPUARMState;
 
 static inline void set_feature(CPUARMState* env, int feature) { env->features |= 1ULL << feature; }

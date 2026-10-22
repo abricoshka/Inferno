@@ -144,11 +144,21 @@ static bool sprr_tlb_entry_is_stale(const CPUTLBEntryFull* full, uint64_t change
 
 static void sprr_perm_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value, MMUIdxMap idxmap, int select)
 {
-    uint32_t changed = sprr_changed_indices(raw_read(env, ri), value);
+    uint32_t  changed = sprr_changed_indices(raw_read(env, ri), value) << (select * 16);
+    MMUIdxMap stale   = 0;
 
     if (changed == 0) { return; }
     raw_write(env, ri, value);
-    tlb_flush_matching_by_mmuidx(env_cpu(env), idxmap, sprr_tlb_entry_is_stale, (uint64_t)changed << (select * 16));
+
+    for (MMUIdxMap work = idxmap; work != 0; work &= work - 1) {
+        int idx = ctz32(work);
+
+        if (env->sprr_tlb_keys[idx] & changed) {
+            env->sprr_tlb_keys[idx] &= ~changed;
+            stale                   |= 1U << idx;
+        }
+    }
+    if (stale != 0) { tlb_flush_matching_by_mmuidx(env_cpu(env), stale, sprr_tlb_entry_is_stale, changed); }
 }
 
 static void sprr_uperm_br0_write(CPUARMState* env, const ARMCPRegInfo* ri, uint64_t value)

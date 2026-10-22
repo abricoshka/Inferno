@@ -298,7 +298,10 @@ bool arm_cpu_tlb_fill_align(CPUState* cs, CPUTLBEntryFull* out, vaddr address, M
     {
         res.f.extra.arm.pte_attrs    = res.cacheattrs.attrs;
         res.f.extra.arm.shareability = res.cacheattrs.shareability;
-        *out                         = res.f;
+        if (res.f.extra.arm.sprr & ARM_SPRR_TLB_VALID) {
+            cpu->env.sprr_tlb_keys[mmu_idx] |= 1U << (res.f.extra.arm.sprr & ~ARM_SPRR_TLB_VALID);
+        }
+        *out = res.f;
         return true;
     }
     if (probe) { return false; }
