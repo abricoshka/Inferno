@@ -121,15 +121,28 @@ typedef struct
     GPtrArray* mirrors;
 } GXFPage;
 
+// The trees a world last ran on, which it holds active, and what they were loaded for.
+typedef struct
+{
+    bool            valid;
+    bool            mmu;
+    uint64_t        tcr;
+    uint64_t        ttbr[2];
+    const GXFPerms* perms[2];
+    GXFRoot*        roots[2];
+    uint64_t        hw_ttbr[2];
+} GXFWorldCache;
+
 typedef struct
 {
     // The vCPU runs the patched images; others (like the SEP's) are left alone.
-    bool     managed;
-    bool     shadowed;
-    bool     guarded;
-    GXFRoot* cur[2];
-    uint64_t guest_ttbr[2];
-    uint64_t hw_ttbr[2];
+    bool          managed;
+    bool          shadowed;
+    bool          guarded;
+    GXFWorldCache worlds[2];
+    GXFRoot*      cur[2];
+    uint64_t      guest_ttbr[2];
+    uint64_t      hw_ttbr[2];
     // A TLB flush the vCPU is running, and where it resumes after it.
     bool     flushing;
     uint64_t resume_pc;
@@ -151,8 +164,6 @@ typedef struct
     uint32_t step_pstate;
     // The machine was reset during a step, so debug exceptions still exit to the host.
     bool untrap_debug;
-    // An EL0 SPRR write changed the shadows' permissions, and the return to EL0 reloads them.
-    bool el0_sprr_reload;
 } AppleVirtCPU;
 
 static struct
@@ -486,14 +497,12 @@ static void gxf_evict_root(void)
         abort();
     }
     gxf_root_free(victim);
-    virt.evictions += 1;
+    qatomic_set(&virt.evictions, virt.evictions + 1);
 }
 
-static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t perm_el1)
+static void gxf_resolve_perms(bool guarded, uint64_t perm_el0, uint64_t perm_el1, GXFPerms* out)
 {
     const uint8_t* rwx = guarded ? gxf_gl_rwx : gxf_el_rwx;
-    GXFPerms       want;
-    GXFPerms*      p;
 
     // What can't be expressed is over-granted, like m1n1.
     for (int index = 0; index < 16; index++) {
@@ -502,7 +511,7 @@ static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t p
         uint64_t bits = 0;
 
         if (k == 0 && u == 0) {
-            want.leaf[index] = GXF_NO_ACCESS;
+            out->leaf[index] = GXF_NO_ACCESS;
             continue;
         }
         if (!(k & SPRR_X)) { bits |= PTE_PXN; }
@@ -511,9 +520,24 @@ static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t p
         // apply PAN like TCG would over-grant more.
         if (u & SPRR_R) { bits |= PTE_AP_EL0; }
         if (!((k | u) & SPRR_W)) { bits |= PTE_AP_RO; }
-        want.leaf[index] = bits;
+        out->leaf[index] = bits;
     }
+}
 
+static bool gxf_perms_match(const GXFPerms* p, bool guarded, uint64_t perm_el0, uint64_t perm_el1)
+{
+    GXFPerms want;
+
+    gxf_resolve_perms(guarded, perm_el0, perm_el1, &want);
+    return memcmp(p->leaf, want.leaf, sizeof(want.leaf)) == 0;
+}
+
+static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t perm_el1)
+{
+    GXFPerms  want;
+    GXFPerms* p;
+
+    gxf_resolve_perms(guarded, perm_el0, perm_el1, &want);
     for (guint i = 0; i < virt.perms->len; i++) {
         p = g_ptr_array_index(virt.perms, i);
         if (memcmp(p->leaf, want.leaf, sizeof(want.leaf)) == 0) { return p; }
@@ -561,17 +585,20 @@ static GXFRoot* gxf_get_root(uint64_t ttbr, uint32_t va_bits, const GXFPerms* pe
     return r;
 }
 
-static void gxf_set_cur(AppleVirtCPU* c, int idx, GXFRoot* r)
+static void gxf_world_drop(GXFWorldCache* wc)
 {
-    if (r != NULL) { r->active += 1; }
-    if (c->cur[idx] != NULL) { c->cur[idx]->active -= 1; }
-    c->cur[idx] = r;
+    for (int idx = 0; idx < 2; idx++) {
+        if (wc->roots[idx] != NULL) { wc->roots[idx]->active -= 1; }
+    }
+    *wc = (GXFWorldCache){0};
 }
 
 static void gxf_release(AppleVirtCPU* c)
 {
-    gxf_set_cur(c, 0, NULL);
-    gxf_set_cur(c, 1, NULL);
+    gxf_world_drop(&c->worlds[0]);
+    gxf_world_drop(&c->worlds[1]);
+    c->cur[0]   = NULL;
+    c->cur[1]   = NULL;
     c->shadowed = false;
 }
 
@@ -585,28 +612,50 @@ typedef struct
     bool     guarded;
 } GXFWorld;
 
-static void gxf_load_shadows(CPUARMState* env, AppleVirtCPU* c, const GXFWorld* w)
+static uint64_t gxf_env_ttbr(CPUARMState* env, int idx) { return idx ? env->cp15.ttbr1_el[1] : env->cp15.ttbr0_el[1]; }
+
+// Whether the trees `wc` holds are those of the guest's current TTBRs, TCR and SPRR permissions.
+static bool gxf_world_current(CPUARMState* env, const GXFWorldCache* wc, const GXFWorld* w)
 {
+    if (!wc->valid || wc->tcr != w->tcr || wc->mmu != !!(w->sctlr & SCTLR_M)) { return false; }
     for (int idx = 0; idx < 2; idx++) {
-        uint64_t ttbr = idx ? env->cp15.ttbr1_el[1] : env->cp15.ttbr0_el[1];
+        if (wc->ttbr[idx] != gxf_env_ttbr(env, idx)
+            || !gxf_perms_match(wc->perms[idx], w->guarded, env->sprr.sprr_uperm_br[idx], env->sprr.sprr_pperm_br[idx]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void gxf_world_fill(CPUARMState* env, GXFWorldCache* wc, const GXFWorld* w)
+{
+    gxf_world_drop(wc);
+    wc->valid = true;
+    wc->mmu   = w->sctlr & SCTLR_M;
+    wc->tcr   = w->tcr;
+
+    for (int idx = 0; idx < 2; idx++) {
+        uint64_t ttbr = gxf_env_ttbr(env, idx);
         uint32_t tsz  = extract64(w->tcr, idx ? 16 : 0, 6);
         bool     epd  = extract64(w->tcr, idx ? 23 : 7, 1);
         uint32_t tg   = extract64(w->tcr, idx ? 30 : 14, 2);
-        GXFRoot* r    = NULL;
 
+        wc->ttbr[idx]  = ttbr;
+        wc->perms[idx] = gxf_get_perms(w->guarded, env->sprr.sprr_uperm_br[idx], env->sprr.sprr_pperm_br[idx]);
         // The TCR may not be set up while the MMU is off; turning it on reloads the shadows.
-        if (!epd && (w->sctlr & SCTLR_M)) {
+        if (!epd && wc->mmu) {
             if (tg != (idx ? 1 : 2) || tsz < 16 || tsz > 50) {    // 16KiB granule
                 error_report("apple-virt: unsupported TCR_EL1 0x%" PRIx64 " for shadow paging", w->tcr);
                 abort();
             }
-            r = gxf_get_root(ttbr, 64 - tsz,
-                             gxf_get_perms(w->guarded, env->sprr.sprr_uperm_br[idx], env->sprr.sprr_pperm_br[idx]));
+            wc->roots[idx] = gxf_get_root(ttbr, 64 - tsz, wc->perms[idx]);
+            if (wc->roots[idx] != NULL) { wc->roots[idx]->active += 1; }
         }
 
         // The shadow shares the guest's ASID but has other permissions, so CnP must stay off.
-        c->hw_ttbr[idx] = (ttbr & ~(GXF_TTBR_BADDR | GXF_TTBR_CNP)) | (r != NULL ? r->top->shadow : virt.empty);
-        gxf_set_cur(c, idx, r);
+        wc->hw_ttbr[idx] = (ttbr & ~(GXF_TTBR_BADDR | GXF_TTBR_CNP))
+                           | (wc->roots[idx] != NULL ? wc->roots[idx]->top->shadow : virt.empty);
     }
 }
 
@@ -645,7 +694,7 @@ static void gxf_flush_tlb(AppleVirtCPU* c, GXFWorld* w, bool broadcast)
     c->resume_pc         = w->pc;
     c->resume_pstate     = w->pstate;
     c->resume_sctlr      = w->sctlr;
-    c->flushed_evictions = virt.evictions;
+    c->flushed_evictions = qatomic_read(&virt.evictions);
 
     w->sctlr &= ~SCTLR_M;
     if (extract32(w->pstate, 2, 2) == 0) { w->pstate = deposit32(w->pstate, 0, 4, PSTATE_MODE_EL1h); }
@@ -655,16 +704,25 @@ static void gxf_flush_tlb(AppleVirtCPU* c, GXFWorld* w, bool broadcast)
 
 static void gxf_update_world_regs(CPUARMState* env, AppleVirtCPU* c, GXFWorld* w, bool force_flush)
 {
-    bool want;
-    bool flush;
+    GXFWorldCache* wc   = &c->worlds[w->guarded];
+    bool           want = gxf_wants_shadows(env);
+    bool           flush;
 
-    QEMU_LOCK_GUARD(&virt.lock);
-
-    want  = gxf_wants_shadows(env);
-    flush = want != c->shadowed
-            || (want && (force_flush || w->guarded != c->guarded || c->flushed_evictions != virt.evictions));
-    if (want) { gxf_load_shadows(env, c, w); }
+    flush =
+        want != c->shadowed
+        || (want && (force_flush || w->guarded != c->guarded || c->flushed_evictions != qatomic_read(&virt.evictions)));
+    if (want) {
+        if (!gxf_world_current(env, wc, w)) {
+            QEMU_LOCK_GUARD(&virt.lock);
+            gxf_world_fill(env, wc, w);
+        }
+        for (int idx = 0; idx < 2; idx++) {
+            c->cur[idx]     = wc->roots[idx];
+            c->hw_ttbr[idx] = wc->hw_ttbr[idx];
+        }
+    }
     else if (c->shadowed) {
+        QEMU_LOCK_GUARD(&virt.lock);
         gxf_release(c);
     }
 
@@ -874,17 +932,31 @@ static void gxf_swap_bank(CPUState* cs, CPUARMState* env, bool from)
     }
 }
 
-static void gxf_switch_world_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, GXFWorld* w)
+static void gxf_switch_world_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, GXFWorld* w, bool force_flush)
 {
-    gxf_update_world_regs(env, c, w, false);
-    if (c->shadowed) {
-        virt.ops->set_reg(cs, APPLE_VIRT_REG_TTBR0_EL1, c->hw_ttbr[0]);
-        virt.ops->set_reg(cs, APPLE_VIRT_REG_TTBR1_EL1, c->hw_ttbr[1]);
-    }
+    gxf_update_world_regs(env, c, w, force_flush);
+    virt.ops->set_reg(cs, APPLE_VIRT_REG_TTBR0_EL1, c->shadowed ? c->hw_ttbr[0] : env->cp15.ttbr0_el[1]);
+    virt.ops->set_reg(cs, APPLE_VIRT_REG_TTBR1_EL1, c->shadowed ? c->hw_ttbr[1] : env->cp15.ttbr1_el[1]);
     pac_load(cs, env, c, extract32(w->pstate, 2, 2));
     virt.ops->set_reg(cs, APPLE_VIRT_REG_SCTLR_EL1, pac_hw_sctlr(env, w->sctlr, extract32(w->pstate, 2, 2)));
     virt.ops->set_reg(cs, APPLE_VIRT_REG_CPSR, w->pstate);
     virt.ops->set_reg(cs, APPLE_VIRT_REG_PC, w->pc);
+}
+
+// Reloads the shadows on the vCPU itself for the GXF state, TTBRs, TCR, SCTLR or SPRR permissions in `env`, resuming
+// after the instruction that changed them.
+static void gxf_reload_world_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, bool sprr)
+{
+    GXFWorld w = {
+        .pc      = virt.ops->get_reg(cs, APPLE_VIRT_REG_PC),
+        .pstate  = virt.ops->get_reg(cs, APPLE_VIRT_REG_CPSR),
+        .sctlr   = env->cp15.sctlr_el[1],
+        .tcr     = env->cp15.tcr_el[1],
+        .guarded = env->gxf.gxf_status_el[1] & 1,
+    };
+
+    // The shadows bake the permissions into the TLB entries, which stay valid if the leaves are the same.
+    gxf_switch_world_fast(cs, env, c, &w, sprr && c->shadowed && !gxf_world_current(env, &c->worlds[w.guarded], &w));
 }
 
 static bool virt_eret_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
@@ -945,10 +1017,18 @@ static bool virt_el0_sprr_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
         value = (env->sprr.sprr_uperm_br[0] & ~mask) | ((rt == 31 ? 0 : virt.ops->get_xreg(cs, rt)) & mask);
         if (value != env->sprr.sprr_uperm_br[0]) {
             env->sprr.sprr_uperm_br[0] = value;
-            if (c->shadowed && c->cur[0] != NULL) {
-                QEMU_LOCK_GUARD(&virt.lock);
-                c->el0_sprr_reload = gxf_get_perms(false, value, env->sprr.sprr_pperm_br[0]) != c->cur[0]->top->perms;
-                if (c->el0_sprr_reload) { return true; }
+            if (c->shadowed && c->cur[0] != NULL
+                && !gxf_perms_match(c->cur[0]->top->perms, false, value, env->sprr.sprr_pperm_br[0]))
+            {
+                GXFWorld w = {
+                    .pc      = elr + 4,
+                    .pstate  = spsr & aarch64_pstate_valid_mask(&env_archcpu(env)->isar) & ~PSTATE_SS,
+                    .sctlr   = env->cp15.sctlr_el[1],
+                    .tcr     = env->cp15.tcr_el[1],
+                    .guarded = false,
+                };
+                gxf_switch_world_fast(cs, env, c, &w, true);
+                return true;
             }
         }
     }
@@ -983,7 +1063,7 @@ static bool gxf_genter_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, uin
     w.guarded = true;
     if (cpu_isar_feature(aa64_ssbs, env_archcpu(env)) && (w.sctlr & SCTLR_DSSBS_64)) { w.pstate |= PSTATE_SSBS; }
 
-    gxf_switch_world_fast(cs, env, c, &w);
+    gxf_switch_world_fast(cs, env, c, &w, false);
     return true;
 }
 
@@ -1003,7 +1083,7 @@ static bool gxf_gexit_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
     w.pstate  = env->gxf.spsr_gl[1] & aarch64_pstate_valid_mask(&env_archcpu(env)->isar) & ~PSTATE_SS;
     w.guarded = false;
 
-    gxf_switch_world_fast(cs, env, c, &w);
+    gxf_switch_world_fast(cs, env, c, &w, false);
     return true;
 }
 
@@ -1021,7 +1101,9 @@ static void gxf_resume_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
 }
 
 // An `msr`/`mrs` of a register that is only in `env`, or that the vCPU holds as it is.
-static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, int vreg, bool read, uint32_t rt)
+// `after` is whether the vCPU is already after the instruction, which changes to the shadows need.
+static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, int vreg, bool read, uint32_t rt,
+                                    bool after)
 {
     uint64_t* field;
     uint64_t  value;
@@ -1058,7 +1140,8 @@ static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU
         // The vCPU holds the shadows, `env` the guest's tables.
         case APPLE_VIRT_VREG_TTBR0_EL1:
         case APPLE_VIRT_VREG_TTBR1_EL1:
-            if (!c->shadowed || !read) { return false; }
+        case APPLE_VIRT_VREG_TCR_EL1:
+            if (!read && !after) { return false; }
             break;
         default: return false;
     }
@@ -1075,7 +1158,12 @@ static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU
             int el = extract64(virt.ops->get_reg(cs, APPLE_VIRT_REG_CPSR), 2, 2);
 
             // The shadows are only loaded with the MMU on.
-            if (c->shadowed && (value & ~env->cp15.sctlr_el[1] & SCTLR_M)) { return false; }
+            if (c->shadowed && (value & ~env->cp15.sctlr_el[1] & SCTLR_M)) {
+                if (!after) { return false; }
+                env->cp15.sctlr_el[1] = value;
+                gxf_reload_world_fast(cs, env, c, false);
+                return true;
+            }
             env->cp15.sctlr_el[1] = value;
             virt.ops->set_reg(cs, APPLE_VIRT_REG_SCTLR_EL1, pac_hw_sctlr(env, value, el));
             return true;
@@ -1096,14 +1184,27 @@ static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU
             }
             return true;
         // Read-only.
-        case APPLE_VIRT_VREG_GXF_STATUS_EL1: return false;
-        // Changing these reloads the shadows, which needs the state synced.
+        case APPLE_VIRT_VREG_GXF_STATUS_EL1    : return false;
         case APPLE_VIRT_VREG_SPRR_CONFIG_EL1   :
         case APPLE_VIRT_VREG_SPRR_UPERM_BR0_EL0:
         case APPLE_VIRT_VREG_SPRR_UPERM_BR1_EL0:
         case APPLE_VIRT_VREG_SPRR_PPERM_BR0_EL1:
-        case APPLE_VIRT_VREG_SPRR_PPERM_BR1_EL1: return value == *field;
-        default                                : *field = value; return true;
+        case APPLE_VIRT_VREG_SPRR_PPERM_BR1_EL1:
+            if (value == *field) { return true; }
+            if (!after) { return false; }
+            *field = value;
+            gxf_reload_world_fast(cs, env, c, true);
+            return true;
+        case APPLE_VIRT_VREG_TTBR0_EL1:
+        case APPLE_VIRT_VREG_TTBR1_EL1:
+        case APPLE_VIRT_VREG_TCR_EL1:
+            if (value == *field) { return true; }
+            *field = value;
+            if (vreg == APPLE_VIRT_VREG_TCR_EL1) { virt.ops->set_reg(cs, APPLE_VIRT_REG_TCR_EL1, value); }
+            // The guest does its own TLB maintenance for a new translation.
+            gxf_reload_world_fast(cs, env, c, false);
+            return true;
+        default: *field = value; return true;
     }
 }
 
@@ -1120,7 +1221,7 @@ bool apple_virt_handle_hvc_fast(CPUState* cs, uint16_t imm)
         return true;
     }
     if (imm == APPLE_VIRT_HVC_LOWER_ENTRY) {
-        if (virt_el0_sprr_fast(cs, env, c)) { return !c->el0_sprr_reload; }
+        if (virt_el0_sprr_fast(cs, env, c)) { return true; }
         pac_load(cs, env, c, 1);
         return true;
     }
@@ -1131,7 +1232,7 @@ bool apple_virt_handle_hvc_fast(CPUState* cs, uint16_t imm)
     if ((imm & APPLE_VIRT_HVC_GXF_MASK) == APPLE_VIRT_HVC_GEXIT) { return gxf_gexit_fast(cs, env, c); }
     if (imm & APPLE_VIRT_HVC_SYSREG) {
         return virt_handle_sysreg_fast(cs, env, c, APPLE_VIRT_HVC_VREG(imm), APPLE_VIRT_HVC_READ(imm),
-                                       APPLE_VIRT_HVC_RT(imm));
+                                       APPLE_VIRT_HVC_RT(imm), true);
     }
     return false;
 }
@@ -1145,7 +1246,7 @@ bool apple_virt_handle_sysreg_fast(CPUState* cs, uint32_t op0, uint32_t op1, uin
     if (vreg < 0 || !c->managed || cs->vcpu_dirty) { return false; }
     // All of them are EL1 registers, except SPRR_UPERM_BR0_EL0, which is restricted at EL0.
     if (extract64(virt.ops->get_reg(cs, APPLE_VIRT_REG_CPSR), 2, 2) != 1) { return false; }
-    return virt_handle_sysreg_fast(cs, cpu_env(cs), c, vreg, read, rt);
+    return virt_handle_sysreg_fast(cs, cpu_env(cs), c, vreg, read, rt, false);
 }
 
 bool apple_virt_sysreg_written(CPUState* cs, uint32_t op0, uint32_t op1, uint32_t crn, uint32_t crm, uint32_t op2)
@@ -1209,14 +1310,6 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
 
     switch (imm) {
         case APPLE_VIRT_HVC_LOWER_ENTRY:
-            // Back to EL0 after an emulated SPRR write, through a TLB flush.
-            if (c->el0_sprr_reload) {
-                c->el0_sprr_reload = false;
-                gxf_env_set_pstate(env, env->banked_spsr[BANK_SVC] & aarch64_pstate_valid_mask(&env_archcpu(env)->isar)
-                                            & ~PSTATE_SS);
-                env->pc = env->elr_el[1];
-                gxf_update_world(env, c, true);
-            }
             // The keys of the new EL are installed when the state is put.
             return true;
         case APPLE_VIRT_HVC_ERET: {
@@ -1812,10 +1905,9 @@ static void gxf_reset(void)
         AppleVirtCPU* c = &virt.cpus[i];
 
         gxf_release(c);
-        c->untrap_debug    = c->nr_step_pages != 0;
-        c->nr_step_pages   = 0;
-        c->flushing        = false;
-        c->el0_sprr_reload = false;
+        c->untrap_debug  = c->nr_step_pages != 0;
+        c->nr_step_pages = 0;
+        c->flushing      = false;
     }
     while (virt.roots->len != 0) { gxf_root_free(g_ptr_array_index(virt.roots, 0)); }
     assert_cmpuint(g_hash_table_size(virt.mirrors), ==, 0);
