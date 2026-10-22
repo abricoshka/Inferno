@@ -21,7 +21,6 @@
 
 #include "exec/hwaddr.h"
 
-/// The vCPU registers GXF/PAC emulation accesses directly, besides the general-purpose ones.
 typedef enum
 {
     APPLE_VIRT_REG_PC,
@@ -50,8 +49,7 @@ typedef enum
     APPLE_VIRT_REG_APGAKEYHI_EL1,
 } AppleVirtReg;
 
-/// What an accelerator provides to run GXF/PAC emulation. The register accessors work on a vCPU whose state isn't
-/// dirty, straight on the accelerator, so that frequent exits don't need a full state sync.
+/// The register accessors work on a vCPU whose state isn't dirty, straight on the accelerator.
 typedef struct
 {
     uint64_t (*get_xreg)(CPUState* cs, int n);
@@ -65,14 +63,12 @@ typedef struct
     void (*trap_debug)(CPUState* cs, bool enable);
 } AppleVirtOps;
 
-/// Called by an accelerator that can run GXF/PAC emulation.
 void apple_virt_set_ops(const AppleVirtOps* ops);
 /// Lets GXF/PAC emulation manage a vCPU that runs the patched images.
 void apple_virt_manage_cpu(CPUState* cs);
-/// Enables GXF/SPRR shadow paging for a guarded monitor, with the shadow tables in guest memory at `base`, for the next
-/// boot.
+/// Enables GXF/SPRR shadow paging for the kernel about to boot, with the shadow tables in guest memory at `base`.
 void apple_virt_init(hwaddr base, hwaddr size);
-/// Disables it for the next boot, which has no guarded monitor.
+/// Drops the previous boot's shadow paging, before anything boots.
 void apple_virt_reset(void);
 
 /// Emulates an `hvc` the patcher left without syncing the vCPU state, if it can; returns false if

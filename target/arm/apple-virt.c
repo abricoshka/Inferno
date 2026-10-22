@@ -22,7 +22,9 @@
  * vCPU runs on shadows of the guest's page tables whose leaves carry the
  * SPRR-resolved permissions of the current world, the unguarded one (XNU) or
  * the guarded one (SPTM at GL1, TXM at GL0). Shadow tables are shared between
- * trees by guest table and permissions.
+ * trees by guest table and permissions, and only exist once one of their
+ * entries is valid; until then the entries that point at them are invalid,
+ * which no walk caches, so no TLB maintenance is needed when they appear.
  * Guest table pages are write-protected at stage 2 and a store to one is
  * emulated, then the entries it wrote are resynced, so the shadows are current
  * by the next instruction and the guest's own TLB maintenance applies to them.
@@ -33,7 +35,6 @@
  * regardless of SCTLR, so the vCPU holds the effective keys and enables of
  * the current EL, switched at lower-EL exception entries and exception
  * returns, while `env` holds the guest's own.
- * The accelerator provides register and stage 2 access through `AppleVirtOps`.
  */
 
 #include "qemu/osdep.h"
@@ -71,16 +72,11 @@
 #define SPRR_W 2
 #define SPRR_X 1
 
-// The leaf permissions of one world and one pair of SPRR permission registers.
 typedef struct
 {
-    bool     guarded;
-    uint64_t perm_el0;
-    uint64_t perm_el1;
     uint64_t leaf[16];
 } GXFPerms;
 
-// The shadow of one guest table, shared by every tree that reaches it with the same permissions.
 typedef struct GXFMirror
 {
     hwaddr             ipa;
@@ -93,7 +89,15 @@ typedef struct GXFMirror
     uint64_t*          shadow_host;
     uint64_t*          seen;
     struct GXFMirror** children;
+    // `GXFParent`s.
+    GArray* parents;
 } GXFMirror;
+
+typedef struct
+{
+    GXFMirror* mirror;
+    uint32_t   index;
+} GXFParent;
 
 typedef struct
 {
@@ -142,12 +146,14 @@ typedef struct
     uint32_t step_pstate;
     // The machine was reset during a step, so debug exceptions still exit to the host.
     bool untrap_debug;
+    // An EL0 SPRR write changed the shadows' permissions, and the return to EL0 reloads them.
+    bool el0_sprr_reload;
 } AppleVirtCPU;
 
 static struct
 {
     const AppleVirtOps* ops;
-    // A guarded monitor runs, so the vCPUs run on shadow tables once SPRR is on.
+    // A kernel boots, so the vCPUs run on shadow tables once SPRR is on.
     bool      monitor;
     QemuMutex lock;
     hwaddr    pool_base;
@@ -197,7 +203,6 @@ static AppleVirtCPU* virt_cpu(CPUState* cs)
 
 static bool gxf_protect(hwaddr page, bool writable) { return virt.ops->protect(page, GXF_PAGE_SIZE, writable); }
 
-// The host mapping of [pa, pa + size) of guest RAM, through which page tables are read and stores emulated.
 static uint8_t* gxf_host_ptr(hwaddr pa, hwaddr size)
 {
     MemoryRegion* mr;
@@ -211,6 +216,7 @@ static uint8_t* gxf_host_ptr(hwaddr pa, hwaddr size)
 }
 
 static void gxf_evict_root(void);
+static bool gxf_live_translate(CPUState* cs, uint64_t va, hwaddr* pa);
 
 static hwaddr gxf_pool_alloc(void)
 {
@@ -282,7 +288,6 @@ static void gxf_page_free(GXFPage* p)
     g_free(p);
 }
 
-// Drops the record of a page that neither a mirror nor a stepped store uses any more.
 static void gxf_page_put(GXFPage* p)
 {
     if (p->mirrors->len != 0 || p->steppers != 0) { return; }
@@ -298,21 +303,69 @@ static void gxf_untrack(GXFMirror* m)
     gxf_page_put(p);
 }
 
+static void gxf_mirror_unparent(GXFMirror* child, GXFMirror* m, uint32_t i)
+{
+    for (guint j = 0; j < child->parents->len; j++) {
+        GXFParent* p = &g_array_index(child->parents, GXFParent, j);
+
+        if (p->mirror == m && p->index == i) {
+            g_array_remove_index_fast(child->parents, j);
+            return;
+        }
+    }
+    assert_not_reached();
+}
+
 static void gxf_mirror_put(GXFMirror* m)
 {
     if (--m->refs != 0) { return; }
 
     if (m->children != NULL) {
         for (uint32_t i = 0; i < m->nents; i++) {
-            if (m->children[i] != NULL) { gxf_mirror_put(m->children[i]); }
+            if (m->children[i] != NULL) {
+                gxf_mirror_unparent(m->children[i], m, i);
+                gxf_mirror_put(m->children[i]);
+            }
         }
         g_free(m->children);
     }
     g_hash_table_remove(virt.mirrors, m);
     gxf_untrack(m);
-    gxf_pool_release(m->shadow);
+    if (m->shadow_host != NULL) { gxf_pool_release(m->shadow); }
+    g_array_free(m->parents, true);
     g_free(m->seen);
     g_free(m);
+}
+
+// SPRR ignores the hierarchical permission bits, so they are dropped.
+static uint64_t gxf_mirror_table_desc(GXFMirror* m)
+{ return m->shadow_host != NULL ? m->shadow | PTE_TABLE | PTE_VALID : 0; }
+
+static void gxf_mirror_materialise(GXFMirror* m)
+{
+    g_autoptr(GArray) parents = NULL;
+
+    m->shadow      = gxf_pool_alloc();
+    m->shadow_host = (uint64_t*)(virt.pool_host + (m->shadow - virt.pool_base));
+    if (m->children != NULL) {
+        for (uint32_t i = 0; i < m->nents; i++) {
+            if (m->children[i] != NULL) { m->shadow_host[i] = cpu_to_le64(gxf_mirror_table_desc(m->children[i])); }
+        }
+    }
+
+    // Allocating shadow tables can evict trees, so the parents are held.
+    parents = g_array_copy(m->parents);
+    for (guint j = 0; j < parents->len; j++) { g_array_index(parents, GXFParent, j).mirror->refs += 1; }
+    for (guint j = 0; j < parents->len; j++) {
+        GXFParent* p = &g_array_index(parents, GXFParent, j);
+
+        if (p->mirror->children[p->index] != m) { continue; }
+        if (p->mirror->shadow_host == NULL) { gxf_mirror_materialise(p->mirror); }
+        else {
+            qatomic_set(&p->mirror->shadow_host[p->index], cpu_to_le64(gxf_mirror_table_desc(m)));
+        }
+    }
+    for (guint j = 0; j < parents->len; j++) { gxf_mirror_put(g_array_index(parents, GXFParent, j).mirror); }
 }
 
 static GXFMirror* gxf_mirror_get(hwaddr ipa, const GXFPerms* perms, uint8_t level, uint32_t nents);
@@ -323,6 +376,7 @@ static uint64_t gxf_mirror_desc(GXFMirror* m, uint32_t i, uint64_t d)
     uint64_t leaf;
 
     if (m->children != NULL && m->children[i] != NULL) {
+        gxf_mirror_unparent(m->children[i], m, i);
         gxf_mirror_put(m->children[i]);
         m->children[i] = NULL;
     }
@@ -330,7 +384,8 @@ static uint64_t gxf_mirror_desc(GXFMirror* m, uint32_t i, uint64_t d)
     if (!(d & PTE_VALID)) { return 0; }
 
     if (m->level < 3 && (d & PTE_TABLE)) {
-        hwaddr next = d & GXF_OA_MASK;
+        hwaddr    next   = d & GXF_OA_MASK;
+        GXFParent parent = {.mirror = m, .index = i};
 
         if (gxf_host_ptr(next, GXF_PAGE_SIZE) == NULL) {
             warn_report("apple-virt: L%u[%u] points at non-RAM 0x%" HWADDR_PRIx ", leaving it unmapped", m->level, i,
@@ -339,8 +394,8 @@ static uint64_t gxf_mirror_desc(GXFMirror* m, uint32_t i, uint64_t d)
         }
         if (m->children == NULL) { m->children = g_new0(GXFMirror*, m->nents); }
         m->children[i] = gxf_mirror_get(next, m->perms, m->level + 1, GXF_PT_ENTRIES);
-        // SPRR ignores the hierarchical permission bits, so they are dropped.
-        return m->children[i]->shadow | PTE_TABLE | PTE_VALID;
+        g_array_append_val(m->children[i]->parents, parent);
+        return gxf_mirror_table_desc(m->children[i]);
     }
 
     // A level 3 descriptor without the table bit is reserved.
@@ -368,10 +423,13 @@ static void gxf_mirror_sync_range(GXFMirror* m, uint32_t first, uint32_t count)
     m->refs += 1;
     for (uint32_t i = first; i < first + count; i++) {
         uint64_t d = le64_to_cpu(qatomic_read(&m->host[i]));
+        uint64_t shadow;
 
         if (d == m->seen[i]) { continue; }
         m->seen[i] = d;
-        qatomic_set(&m->shadow_host[i], cpu_to_le64(gxf_mirror_desc(m, i, d)));
+        shadow     = gxf_mirror_desc(m, i, d);
+        if (shadow != 0 && m->shadow_host == NULL) { gxf_mirror_materialise(m); }
+        if (m->shadow_host != NULL) { qatomic_set(&m->shadow_host[i], cpu_to_le64(shadow)); }
     }
     gxf_mirror_put(m);
 }
@@ -388,12 +446,11 @@ static GXFMirror* gxf_mirror_get(hwaddr ipa, const GXFPerms* perms, uint8_t leve
         return m;
     }
 
-    m              = g_new0(GXFMirror, 1);
-    *m             = key;
-    m->refs        = 1;
-    m->shadow      = gxf_pool_alloc();
-    m->host        = (uint64_t*)gxf_host_ptr(ipa, nents * sizeof(uint64_t));
-    m->shadow_host = (uint64_t*)(virt.pool_host + (m->shadow - virt.pool_base));
+    m          = g_new0(GXFMirror, 1);
+    *m         = key;
+    m->refs    = 1;
+    m->host    = (uint64_t*)gxf_host_ptr(ipa, nents * sizeof(uint64_t));
+    m->parents = g_array_new(false, false, sizeof(GXFParent));
     assert_nonnull(m->host);
     // All-ones sets RES0 bits, so no descriptor is ever that and the first sync mirrors every entry.
     m->seen = g_new(uint64_t, nents);
@@ -431,17 +488,9 @@ static void gxf_evict_root(void)
 static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t perm_el1)
 {
     const uint8_t* rwx = guarded ? gxf_gl_rwx : gxf_el_rwx;
+    GXFPerms       want;
     GXFPerms*      p;
 
-    for (guint i = 0; i < virt.perms->len; i++) {
-        p = g_ptr_array_index(virt.perms, i);
-        if (p->guarded == guarded && p->perm_el0 == perm_el0 && p->perm_el1 == perm_el1) { return p; }
-    }
-
-    p           = g_new0(GXFPerms, 1);
-    p->guarded  = guarded;
-    p->perm_el0 = perm_el0;
-    p->perm_el1 = perm_el1;
     // What can't be expressed is over-granted, like m1n1.
     for (int index = 0; index < 16; index++) {
         uint8_t  k    = rwx[(perm_el1 >> (index * 4)) & 0xF];
@@ -449,7 +498,7 @@ static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t p
         uint64_t bits = 0;
 
         if (k == 0 && u == 0) {
-            p->leaf[index] = GXF_NO_ACCESS;
+            want.leaf[index] = GXF_NO_ACCESS;
             continue;
         }
         if (!(k & SPRR_X)) { bits |= PTE_PXN; }
@@ -458,8 +507,15 @@ static const GXFPerms* gxf_get_perms(bool guarded, uint64_t perm_el0, uint64_t p
         // apply PAN like TCG would over-grant more.
         if (u & SPRR_R) { bits |= PTE_AP_EL0; }
         if (!((k | u) & SPRR_W)) { bits |= PTE_AP_RO; }
-        p->leaf[index] = bits;
+        want.leaf[index] = bits;
     }
+
+    for (guint i = 0; i < virt.perms->len; i++) {
+        p = g_ptr_array_index(virt.perms, i);
+        if (memcmp(p->leaf, want.leaf, sizeof(want.leaf)) == 0) { return p; }
+    }
+
+    p = g_memdup2(&want, sizeof(want));
     g_ptr_array_add(virt.perms, p);
     return p;
 }
@@ -495,7 +551,8 @@ static GXFRoot* gxf_get_root(uint64_t ttbr, uint32_t va_bits, const GXFPerms* pe
     r->active = 1;
     g_ptr_array_add(virt.roots, r);
 
-    r->top    = gxf_mirror_get(base, perms, start, nents);
+    r->top = gxf_mirror_get(base, perms, start, nents);
+    if (r->top->shadow_host == NULL) { gxf_mirror_materialise(r->top); }
     r->active = 0;
     return r;
 }
@@ -524,7 +581,6 @@ typedef struct
     bool     guarded;
 } GXFWorld;
 
-// Installs the shadow trees for the guest's current world, TTBRs and SPRR permissions.
 static void gxf_load_shadows(CPUARMState* env, AppleVirtCPU* c, const GXFWorld* w)
 {
     for (int idx = 0; idx < 2; idx++) {
@@ -534,7 +590,8 @@ static void gxf_load_shadows(CPUARMState* env, AppleVirtCPU* c, const GXFWorld* 
         uint32_t tg   = extract64(w->tcr, idx ? 30 : 14, 2);
         GXFRoot* r    = NULL;
 
-        if (!epd) {
+        // The TCR may not be set up while the MMU is off; turning it on reloads the shadows.
+        if (!epd && (w->sctlr & SCTLR_M)) {
             if (tg != (idx ? 1 : 2) || tsz < 16 || tsz > 50) {    // 16KiB granule
                 error_report("apple-virt: unsupported TCR_EL1 0x%" PRIx64 " for shadow paging", w->tcr);
                 abort();
@@ -592,7 +649,6 @@ static void gxf_flush_tlb(AppleVirtCPU* c, GXFWorld* w, bool broadcast)
     w->pc      = virt.stub + (broadcast ? 0x10 : 0);
 }
 
-// Reloads the shadow trees after the GXF state, TTBRs, TCR or SPRR permissions changed.
 static void gxf_update_world_regs(CPUARMState* env, AppleVirtCPU* c, GXFWorld* w, bool force_flush)
 {
     bool want;
@@ -770,7 +826,8 @@ static bool virt_handle_sysreg(CPUARMState* env, AppleVirtCPU* c, uint16_t imm)
     switch (vreg) {
         case APPLE_VIRT_VREG_TTBR0_EL1:
         case APPLE_VIRT_VREG_TTBR1_EL1:
-        case APPLE_VIRT_VREG_TCR_EL1:
+        case APPLE_VIRT_VREG_TCR_EL1  :
+        case APPLE_VIRT_VREG_SCTLR_EL1:
             // The guest does its own TLB maintenance for a new translation.
             gxf_update_world(env, c, false);
             break;
@@ -807,7 +864,6 @@ static uint64_t* gxf_bank_field(CPUARMState* env, bool guarded, int i)
     }
 }
 
-// Swaps the vCPU's banked registers from world `from` to the other one.
 static void gxf_swap_bank(CPUState* cs, CPUARMState* env, bool from)
 {
     for (int i = 0; i < ARRAY_SIZE(gxf_bank_regs); i++) {
@@ -816,7 +872,6 @@ static void gxf_swap_bank(CPUState* cs, CPUARMState* env, bool from)
     }
 }
 
-// Finishes a world switch on the vCPU itself: new shadows and TLB flush, then PC, PSTATE and SCTLR.
 static void gxf_switch_world_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c, GXFWorld* w)
 {
     gxf_update_world_regs(env, c, w, false);
@@ -839,6 +894,63 @@ static bool virt_eret_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
     virt.ops->set_reg(cs, APPLE_VIRT_REG_CPSR, spsr & aarch64_pstate_valid_mask(&env_archcpu(env)->isar) & ~PSTATE_SS);
     virt.ops->set_reg(cs, APPLE_VIRT_REG_PC, virt.ops->get_reg(cs, APPLE_VIRT_REG_ELR_EL1));
     pac_load(cs, env, c, el);
+    return true;
+}
+
+// An EL0 SPRR access, which the vCPU UNDEFs to EL1, emulated as `sprr_uperm_br0_write` does it.
+static bool virt_el0_sprr_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
+{
+    uint64_t elr;
+    uint64_t spsr;
+    uint64_t mask = 0;
+    uint64_t value;
+    hwaddr   pa;
+    uint32_t insn;
+    uint32_t rt;
+    bool     read;
+    int      vreg;
+
+    if (syn_get_ec(virt.ops->get_reg(cs, APPLE_VIRT_REG_ESR_EL1)) != EC_UNCATEGORIZED || (env->gxf.gxf_status_el[1] & 1)
+        || cs->singlestep_enabled)
+    {
+        return false;
+    }
+    // The synchronous exception slot of a lower AArch64 EL, after the `hvc`.
+    if (virt.ops->get_reg(cs, APPLE_VIRT_REG_PC) != virt.ops->get_reg(cs, APPLE_VIRT_REG_VBAR_EL1) + 0x404) {
+        return false;
+    }
+    spsr = virt.ops->get_reg(cs, APPLE_VIRT_REG_SPSR_EL1);
+    elr  = virt.ops->get_reg(cs, APPLE_VIRT_REG_ELR_EL1);
+    if ((spsr & (PSTATE_nRW | PSTATE_M)) != PSTATE_MODE_EL0t || !gxf_live_translate(cs, elr, &pa)) { return false; }
+
+    insn = address_space_ldl_le(&address_space_memory, pa, MEMTXATTRS_UNSPECIFIED, NULL);
+    if ((insn & 0xFFD00000) != 0xD5100000) { return false; }
+    vreg = apple_virt_vreg(2 + extract32(insn, 19, 1), extract32(insn, 16, 3), extract32(insn, 12, 4),
+                           extract32(insn, 8, 4), extract32(insn, 5, 3));
+    read = extract32(insn, 21, 1);
+    rt   = extract32(insn, 0, 5);
+    if (vreg != APPLE_VIRT_VREG_SPRR_UPERM_BR0_EL0 && !(vreg == APPLE_VIRT_VREG_SPRR_UPERM_BR1_EL0 && read)) {
+        return false;
+    }
+
+    virt.ops->set_reg(cs, APPLE_VIRT_REG_ELR_EL1, elr + 4);
+    if (read) {
+        if (rt != 31) { virt.ops->set_xreg(cs, rt, *virt_vreg_field(env, vreg)); }
+    }
+    else {
+        // EL0 only changes the EL bits that SPRR_UMPRR_BR0_EL1 lets it.
+        for (int i = 0; i < 16; i++) { mask |= extract64(env->sprr.sprr_umprr_br[0], i * 2, 2) << (i * 4); }
+        value = (env->sprr.sprr_uperm_br[0] & ~mask) | ((rt == 31 ? 0 : virt.ops->get_xreg(cs, rt)) & mask);
+        if (value != env->sprr.sprr_uperm_br[0]) {
+            env->sprr.sprr_uperm_br[0] = value;
+            if (c->shadowed && c->cur[0] != NULL) {
+                QEMU_LOCK_GUARD(&virt.lock);
+                c->el0_sprr_reload = gxf_get_perms(false, value, env->sprr.sprr_pperm_br[0]) != c->cur[0]->top->perms;
+                if (c->el0_sprr_reload) { return true; }
+            }
+        }
+    }
+    virt_eret_fast(cs, env, c);
     return true;
 }
 
@@ -893,7 +1005,6 @@ static bool gxf_gexit_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
     return true;
 }
 
-// The end of a TLB flush: back to where the world switch was going.
 static void gxf_resume_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU* c)
 {
     int el = extract32(c->resume_pstate, 2, 2);
@@ -961,6 +1072,8 @@ static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU
         case APPLE_VIRT_VREG_SCTLR_EL1: {
             int el = extract64(virt.ops->get_reg(cs, APPLE_VIRT_REG_CPSR), 2, 2);
 
+            // The shadows are only loaded with the MMU on.
+            if (c->shadowed && (value & ~env->cp15.sctlr_el[1] & SCTLR_M)) { return false; }
             env->cp15.sctlr_el[1] = value;
             virt.ops->set_reg(cs, APPLE_VIRT_REG_SCTLR_EL1, pac_hw_sctlr(env, value, el));
             return true;
@@ -1005,6 +1118,7 @@ bool apple_virt_handle_hvc_fast(CPUState* cs, uint16_t imm)
         return true;
     }
     if (imm == APPLE_VIRT_HVC_LOWER_ENTRY) {
+        if (virt_el0_sprr_fast(cs, env, c)) { return !c->el0_sprr_reload; }
         pac_load(cs, env, c, 1);
         return true;
     }
@@ -1094,6 +1208,14 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
 
     switch (imm) {
         case APPLE_VIRT_HVC_LOWER_ENTRY:
+            // Back to EL0 after an emulated SPRR write, through a TLB flush.
+            if (c->el0_sprr_reload) {
+                c->el0_sprr_reload = false;
+                gxf_env_set_pstate(env, env->banked_spsr[BANK_SVC] & aarch64_pstate_valid_mask(&env_archcpu(env)->isar)
+                                            & ~PSTATE_SS);
+                env->pc = env->elr_el[1];
+                gxf_update_world(env, c, true);
+            }
             // The keys of the new EL are installed when the state is put.
             return true;
         case APPLE_VIRT_HVC_ERET: {
@@ -1116,7 +1238,6 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
     }
 }
 
-// Resyncs the mirrors of `page` for a store to [off, off + len) of it.
 static void gxf_page_updated(hwaddr page, uint32_t off, uint32_t len)
 {
     GXFPage* p                   = gxf_page(page);
@@ -1414,7 +1535,6 @@ static bool gxf_emulate_store(GXFStore* st, uint32_t insn)
     return false;
 }
 
-// Translates `va` through the vCPU's current tables, the shadows when they are installed.
 static bool gxf_live_translate(CPUState* cs, uint64_t va, hwaddr* pa)
 {
     uint64_t tcr;
@@ -1678,16 +1798,16 @@ static gboolean gxf_page_drop(gpointer key, gpointer value, gpointer opaque)
     return true;
 }
 
-// Drops the shadow trees of the previous boot, as nothing runs on them any more.
 static void gxf_reset(void)
 {
     for (int i = 0; i < VIRT_MAX_CPUS; i++) {
         AppleVirtCPU* c = &virt.cpus[i];
 
         gxf_release(c);
-        c->untrap_debug  = c->nr_step_pages != 0;
-        c->nr_step_pages = 0;
-        c->flushing      = false;
+        c->untrap_debug    = c->nr_step_pages != 0;
+        c->nr_step_pages   = 0;
+        c->flushing        = false;
+        c->el0_sprr_reload = false;
     }
     while (virt.roots->len != 0) { gxf_root_free(g_ptr_array_index(virt.roots, 0)); }
     assert_cmpuint(g_hash_table_size(virt.mirrors), ==, 0);

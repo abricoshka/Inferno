@@ -1204,14 +1204,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         cmdline = g_strconcat("-restore rd=md0 nand-enable-reformat=1 ", machine->kernel_cmdline, NULL);
     }
 
-    // FIXME: Our current hardware WKDM implementation is broken. When fixed: move inside below hwaccel block.
+    // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass it under hwaccel.
     cmdline = g_strconcat("-vm_compressor_wk_sw ", cmdline, NULL);
-
-    if (hwaccel_enabled()) {
-        if (!apple_boot_contains_boot_arg(cmdline, "aprr_jit=", true)) {
-            cmdline = g_strconcat("aprr_jit=0 ", cmdline, NULL);
-        }
-    }
 
     if (!apple_boot_contains_boot_arg(cmdline, "nvme-coastguard-disable=", true)) {
         cmdline = g_strconcat("nvme-coastguard-disable=1 ", cmdline, NULL);
@@ -1341,6 +1335,11 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     t8030_boot_display(t8030, ca);
 
+    if (hwaccel_enabled()) {
+        ck_patch_virt_monitor(hdr);
+        apple_virt_init(carveout_alloc_mem(ca, T8030_GXF_SHADOW_SIZE), T8030_GXF_SHADOW_SIZE);
+    }
+
     use_sptm = apple_boot_get_segment(hdr, "__DATA_SPTM") != NULL;
     if (use_sptm) {
         if (t8030->sptm == NULL || t8030->txm == NULL) {
@@ -1349,11 +1348,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
         }
         apple_boot_allocate_sptm_records(memory_map);
         t8030_sptm_assign_dart_ids(t8030->device_tree);
-
-        if (hwaccel_enabled()) {
-            ck_patch_virt_monitor(hdr);
-            apple_virt_init(carveout_alloc_mem(ca, T8030_GXF_SHADOW_SIZE), T8030_GXF_SHADOW_SIZE);
-        }
 
         // SPTM types every frame below the top of kernel data, so TZ0 is carved out like on hardware.
         info->tz0_size = T8030_TZ0_SIZE;
