@@ -409,7 +409,8 @@ static void coroutine_fn vh_send_bulk_ack_co(void* opaque)
     uint32_t              size   = sizeof(VHBulkAck) + length;
     g_autofree VHBulkAck* ack    = vh_msg_new_reply(size, VIRTUALHERE_MSG_BULK_ACK, pkt->hdr);
 
-    ack->status = cpu_to_le32(pkt->out_status < 0 ? pkt->out_status : (int32_t)pkt->base.p.actual_length);
+    ack->status = cpu_to_le32(
+        pkt->out_status < 0 && pkt->base.p.actual_length == 0 ? pkt->out_status : (int32_t)pkt->base.p.actual_length);
     if (length) { memcpy(ack->data, pkt->buffer, length); }
 
     vh_send_ack(pkt, ack, size);
@@ -418,6 +419,8 @@ static void coroutine_fn vh_send_bulk_ack_co(void* opaque)
 static void virtualhere_port_complete(USBPort* port, USBPacket* p)
 {
     USBVirtualHerePacket* pkt;
+
+    if (p->status == USB_RET_REMOVE_FROM_QUEUE) { usb_cancel_packet(p); }
 
     if (usb_uplink_packet_wake(p)) { return; }
 
@@ -432,8 +435,7 @@ static void vh_packet_aborted(USBUplinkPacket* p)
 {
     USBVirtualHerePacket* pkt = container_of(p, USBVirtualHerePacket, base);
 
-    pkt->base.p.actual_length = 0;
-    pkt->out_status           = -ENODEV;
+    pkt->out_status = -ENODEV;
 
     vh_co_enter(pkt->conn->s, qemu_coroutine_create(vh_send_bulk_ack_co, pkt));
 }
@@ -549,6 +551,14 @@ static bool coroutine_fn vh_handle_ctrl_submit(USBVirtualHereConn* conn, const u
                                !(sub->setup[0] & USB_DIR_IN));
     memcpy(pkt->setup, sub->setup, sizeof(pkt->setup));
 
+    if (!(sub->setup[0] & USB_DIR_IN) && len - offsetof(VHCtrlSubmit, data) < lduw_le_p(sub->setup + 6)) {
+        warn_report("hcd-virtualhere: control OUT carries %zu of %u bytes", len - offsetof(VHCtrlSubmit, data),
+                    lduw_le_p(sub->setup + 6));
+        pkt->out_status = -EIO;
+        vh_send_ctrl_ack_co(pkt);
+        return true;
+    }
+
     if (usb_uplink_active(&conn->s->usb) == NULL) {
         pkt->out_status = -ENODEV;
         vh_send_ctrl_ack_co(pkt);
@@ -597,6 +607,14 @@ static bool coroutine_fn vh_handle_bulk_submit(USBVirtualHereConn* conn, const u
 
     pkt          = vh_submit_packet_new(conn, msg, len, offsetof(VHBulkSubmit, data), length, !(endpoint & USB_DIR_IN));
     pkt->ep_addr = endpoint;
+
+    if (!(endpoint & USB_DIR_IN) && len - offsetof(VHBulkSubmit, data) < length) {
+        warn_report("hcd-virtualhere: bulk OUT on ep 0x%02x carries %zu of %u bytes", endpoint,
+                    len - offsetof(VHBulkSubmit, data), length);
+        pkt->out_status = -EIO;
+        vh_send_bulk_ack_co(pkt);
+        return true;
+    }
 
     if (usb_uplink_active(&conn->s->usb) == NULL) {
         pkt->out_status = -ENODEV;
