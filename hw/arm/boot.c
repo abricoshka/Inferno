@@ -588,6 +588,122 @@ void apple_boot_compute_ap_nonce(QCryptoHashAlgo alg, uint64_t generator, uint8_
     assert_cmpuint(hash_len, >=, *nonce_len);
 }
 
+static const uint8_t* apple_boot_der_next(const uint8_t** p, const uint8_t* end, uint8_t tag, gsize* len)
+{
+    const uint8_t* q = *p;
+    gsize          n;
+    uint8_t        len_bytes;
+
+    if (end - q < 2 || *q++ != tag) { return NULL; }
+
+    if ((tag & 0x1F) == 0x1F) {
+        while (q != end && (*q & 0x80)) { q++; }
+        if (end - q < 2) { return NULL; }
+        q++;
+    }
+
+    n = *q++;
+    if (n & 0x80) {
+        len_bytes = n & 0x7F;
+        if (len_bytes > sizeof(n) || end - q < len_bytes) { return NULL; }
+        for (n = 0; len_bytes > 0; len_bytes--) { n = (n << 8) | *q++; }
+    }
+
+    if (n > (gsize)(end - q)) { return NULL; }
+
+    *p   = q + n;
+    *len = n;
+    return q;
+}
+
+static bool apple_boot_der_enter(const uint8_t** p, const uint8_t** end, uint8_t tag)
+{
+    const uint8_t* q;
+    gsize          n;
+
+    q = apple_boot_der_next(p, *end, tag, &n);
+    if (q == NULL) { return false; }
+
+    *p   = q;
+    *end = q + n;
+    return true;
+}
+
+static bool apple_boot_der_enter_magic(const uint8_t** p, const uint8_t** end, const char* magic)
+{
+    const uint8_t* str;
+    gsize          n;
+
+    if (!apple_boot_der_enter(p, end, 0x30)) { return false; }
+
+    str = apple_boot_der_next(p, *end, 0x16, &n);
+    return str != NULL && n == 4 && memcmp(str, magic, 4) == 0;
+}
+
+static void apple_boot_populate_manifest_props(AppleDTNode* node, const uint8_t* ticket, gsize ticket_len)
+{
+    const uint8_t* p   = ticket;
+    const uint8_t* end = ticket + ticket_len;
+    const uint8_t* q;
+    const uint8_t* q_end;
+    const uint8_t* val;
+    gsize          n;
+    gsize          i;
+    uint8_t        tag;
+    char           name[5];
+    uint64_t       num;
+
+    if (!apple_boot_der_enter_magic(&p, &end, "IM4M") || apple_boot_der_next(&p, end, 0x02, &n) == NULL
+        || !apple_boot_der_enter(&p, &end, 0x31) || !apple_boot_der_enter(&p, &end, 0xFF)
+        || !apple_boot_der_enter_magic(&p, &end, "MANB") || !apple_boot_der_enter(&p, &end, 0x31)
+        || !apple_boot_der_enter(&p, &end, 0xFF) || !apple_boot_der_enter_magic(&p, &end, "MANP")
+        || !apple_boot_der_enter(&p, &end, 0x31))
+    {
+        warn_report("Unable to find the AP ticket's manifest properties");
+        return;
+    }
+
+    while (p != end) {
+        q     = p;
+        q_end = end;
+        if (!apple_boot_der_enter(&q, &q_end, 0xFF)) { return; }
+        p = q_end;
+
+        if (!apple_boot_der_enter(&q, &q_end, 0x30)) { continue; }
+        val = apple_boot_der_next(&q, q_end, 0x16, &n);
+        if (val == NULL || n != 4 || q == q_end) { continue; }
+        memcpy(name, val, 4);
+        name[4] = '\0';
+
+        tag = *q;
+        val = apple_boot_der_next(&q, q_end, tag, &n);
+        if (val == NULL) { continue; }
+
+        switch (tag) {
+            case 0x01:    // BOOLEAN
+                if (n == 1) { apple_dt_set_prop_u32(node, name, val[0] != 0); }
+                break;
+            case 0x02:    // INTEGER
+                if (n > sizeof(num) + 1) { break; }
+                for (num = 0, i = 0; i < n; i++) { num = (num << 8) | val[i]; }
+                apple_dt_set_prop_u64(node, name, num);
+                break;
+            case 0x04:    // OCTET STRING
+                if (strcmp(name, "love") != 0) {
+                    apple_dt_set_prop(node, name, n, val);
+                    break;
+                }
+                QEMU_FALLTHROUGH;
+            case 0x16: {    // IA5String
+                g_autofree char* str = g_strndup((const char*)val, n);
+                apple_dt_set_prop_str(node, name, str);
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
 void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot)
 {
     AppleDTNode* child;
@@ -652,10 +768,15 @@ void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_bo
 
     child = apple_dt_get_node(root, "chosen/manifest-properties");
     assert_nonnull(child);
-    apple_boot_compute_ap_nonce(apple_boot_get_crypto_hash_alg(apple_dt_get_node(root, "chosen")),
-                                info->boot_nonce_generator, &nonce, &nonce_len);
-    apple_dt_set_prop(child, "BNCH", nonce_len, nonce);
-    g_free(nonce);
+    if (info->ticket_data != NULL && info->ticket_length != 0) {
+        apple_boot_populate_manifest_props(child, (const uint8_t*)info->ticket_data, info->ticket_length);
+    }
+    if (apple_dt_get_prop(child, "BNCH") == NULL) {
+        apple_boot_compute_ap_nonce(apple_boot_get_crypto_hash_alg(apple_dt_get_node(root, "chosen")),
+                                    info->boot_nonce_generator, &nonce, &nonce_len);
+        apple_dt_set_prop(child, "BNCH", nonce_len, nonce);
+        g_free(nonce);
+    }
 
     child = apple_dt_get_node(root, "product");
     assert_nonnull(child);
@@ -1517,28 +1638,6 @@ MachoSection64* apple_boot_get_section(MachoSegmentCommand64* segment, const cha
 vaddr apple_boot_fixup_slide_va(vaddr va) { return (0xFFFF000000000000 | va) + g_virt_slide; }
 
 void* apple_boot_va_to_ptr(vaddr va) { return (void*)(apple_boot_fixup_slide_va(va) - g_virt_base + g_phys_base); }
-
-static const uint8_t* apple_boot_der_next(const uint8_t** p, const uint8_t* end, uint8_t tag, gsize* len)
-{
-    const uint8_t* q = *p;
-    gsize          n;
-    uint8_t        len_bytes;
-
-    if (end - q < 2 || *q++ != tag) { return NULL; }
-
-    n = *q++;
-    if (n & 0x80) {
-        len_bytes = n & 0x7F;
-        if (len_bytes > sizeof(n) || end - q < len_bytes) { return NULL; }
-        for (n = 0; len_bytes > 0; len_bytes--) { n = (n << 8) | *q++; }
-    }
-
-    if (n > (gsize)(end - q)) { return NULL; }
-
-    *p   = q + n;
-    *len = n;
-    return q;
-}
 
 bool apple_boot_get_im4p_type(const uint8_t* data, gsize len, char* type)
 {
