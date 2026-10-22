@@ -564,14 +564,13 @@ static inline bool cpu_handle_interrupt(CPUState* cpu, TranslationBlock** last_t
             goto check_exit_request;
         }
 
-        bql_lock();
         if (cpu_test_interrupt(cpu, CPU_INTERRUPT_DEBUG)) {
             cpu_reset_interrupt(cpu, CPU_INTERRUPT_DEBUG);
             cpu->exception_index = EXCP_DEBUG;
-            bql_unlock();
             return true;
         }
         if (cpu_test_interrupt(cpu, CPU_INTERRUPT_HALT)) {
+            bql_lock();
             cpu_reset_interrupt(cpu, CPU_INTERRUPT_HALT);
             cpu->halted          = 1;
             cpu->exception_index = EXCP_HLT;
@@ -580,9 +579,10 @@ static inline bool cpu_handle_interrupt(CPUState* cpu, TranslationBlock** last_t
         }
         else {
             const TCGCPUOps* tcg_ops           = cpu->cc->tcg_ops;
-            int              interrupt_request = cpu->interrupt_request;
+            int              interrupt_request = qatomic_read(&cpu->interrupt_request);
 
             if (cpu_test_interrupt(cpu, CPU_INTERRUPT_RESET)) {
+                bql_lock();
                 tcg_ops->cpu_exec_reset(cpu);
                 bql_unlock();
                 return true;
@@ -607,7 +607,6 @@ static inline bool cpu_handle_interrupt(CPUState* cpu, TranslationBlock** last_t
                  */
                 if (unlikely(cpu->singlestep_enabled)) {
                     cpu->exception_index = EXCP_DEBUG;
-                    bql_unlock();
                     return true;
                 }
                 cpu->exception_index = -1;
@@ -620,9 +619,6 @@ static inline bool cpu_handle_interrupt(CPUState* cpu, TranslationBlock** last_t
                the program flow was changed */
             *last_tb = NULL;
         }
-
-        /* If we exit via cpu_loop_exit/longjmp it is reset in cpu_exec */
-        bql_unlock();
     }
 
 check_exit_request:

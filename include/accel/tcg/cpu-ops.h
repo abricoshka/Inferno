@@ -101,8 +101,8 @@ struct TCGCPUOps
     /**
      * @cpu_exec_interrupt: Callback for processing interrupts in cpu_exec
      *
-     * Receives a bitmask of the pending interrupts, and is called WITH the
-     * BQL held.
+     * Receives a bitmask of the pending interrupts, and is called without
+     * the BQL held.
      */
     bool (*cpu_exec_interrupt)(CPUState* cpu, int interrupt_request);
     /** @cpu_exec_reset: Callback for reset in cpu_exec.  */
