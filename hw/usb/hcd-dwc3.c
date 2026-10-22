@@ -752,6 +752,12 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
                 ended = true;
                 break;
             }
+            if (!(trb.ctrl & TRB_CTRL_HWO)) {
+                ended = true;
+                DPRINTF("%s: ended;break: (!(trb.ctrl & TRB_CTRL_HWO))\n", __func__);
+                break;
+            }
+
             uint32_t controlType = TRB_CTRL_TRBCTL(trb.ctrl);
             // everything but reserved and isochronous*
             if (!(controlType == TRBCTL_NORMAL || controlType == TRBCTL_CONTROL_SETUP
@@ -765,12 +771,6 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
             }
             DPRINTF("%s: tdaddr 0x%" HWADDR_PRIx " controlType: %d trb.ctrl: 0x%x\n", __func__, tdaddr, controlType,
                     trb.ctrl);
-
-            if (!(trb.ctrl & TRB_CTRL_HWO)) {
-                ended = true;
-                DPRINTF("%s: ended;break: (!(trb.ctrl & TRB_CTRL_HWO))\n", __func__);
-                break;
-            }
 
             if (controlType == TRBCTL_LINK_TRB) {
                 DWC3BufferDesc* d;
