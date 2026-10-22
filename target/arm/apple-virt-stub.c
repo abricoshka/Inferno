@@ -21,7 +21,3 @@
 #include "apple-virt.h"
 
 void apple_virt_manage_cpu(CPUState* cs) { assert_not_reached(); }
-
-void apple_virt_init(hwaddr base, hwaddr size) { assert_not_reached(); }
-
-void apple_virt_reset(void) { assert_not_reached(); }

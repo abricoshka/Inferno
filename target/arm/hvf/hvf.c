@@ -1878,6 +1878,9 @@ static bool hvf_virt_protect(hwaddr page, uint64_t size, bool writable)
     return hv_vm_protect(page, size, flags) == HV_SUCCESS;
 }
 
+static void hvf_virt_map(void* host, hwaddr ipa, uint64_t size, bool exec)
+{ assert_hvf_ok(hv_vm_map(host, ipa, size, HV_MEMORY_READ | (exec ? HV_MEMORY_EXEC : 0))); }
+
 static void hvf_virt_trap_debug(CPUState* cs, bool enable)
 { assert_hvf_ok(hv_vcpu_set_trap_debug_exceptions(cs->accel->fd, enable || cs->accel->guest_debug_enabled)); }
 
@@ -1888,12 +1891,13 @@ static const AppleVirtOps hvf_apple_virt_ops = {
     .get_reg    = hvf_virt_get_reg,
     .set_reg    = hvf_virt_set_reg,
     .protect    = hvf_virt_protect,
+    .map        = hvf_virt_map,
     .trap_debug = hvf_virt_trap_debug,
 };
 
 int hvf_arch_init(void)
 {
-    apple_virt_set_ops(&hvf_apple_virt_ops);
+    apple_virt_set_ops(&hvf_apple_virt_ops, 1ULL << chosen_ipa_bit_size);
     hvf_state->vtimer_offset = mach_absolute_time();
     qemu_add_vm_change_state_handler(hvf_vm_state_change, &vtimer);
 

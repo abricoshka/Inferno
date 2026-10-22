@@ -323,8 +323,7 @@ static void get_kaslr_slides(AppleT8030MachineState* t8030, hwaddr* phys_slide_o
 // 256 MiB doesn't seem to work properly with sepos 18.5
 // SEP's MPIDR influences stack/sp address
 // #define T8030_TZ0_SIZE (300 * MiB)
-#define T8030_TZ0_SIZE        (240 * MiB)    // FIXME: workaround for sepos >= 16
-#define T8030_GXF_SHADOW_SIZE (64 * MiB)
+#define T8030_TZ0_SIZE (240 * MiB)    // FIXME: workaround for sepos >= 16
 
 // for booting sepfw 26 without opcode17:
 // tz0_addr must be, at least, aligned to 32 MiB
@@ -1104,8 +1103,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     CarveoutAllocator* ca;
     CKPatcherRange*    seprom_range;
 
-    if (hwaccel_enabled()) { apple_virt_reset(); }
-
     if (t8030->securerom_filename != NULL) {
         if (t8030->securerom == NULL
             && !g_file_get_contents(t8030->securerom_filename, &t8030->securerom, &t8030->securerom_size, NULL))
@@ -1206,7 +1203,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass the arg under hwaccel.
     // FIXME: NVMe CoastGuard, see `boot.c`.
-    cmdline = g_strconcat("-vm_compressor_wk_sw nvme-coastguard-disable=1 agm-trusted=1 agm-genuine=1 agm-authentic=1 ", cmdline, NULL);
+    cmdline = g_strconcat("-vm_compressor_wk_sw nvme-coastguard-disable=1 agm-trusted=1 agm-genuine=1 agm-authentic=1 ",
+                          cmdline, NULL);
 
     info_report("Boot Args: [%s]", cmdline);
 
@@ -1332,10 +1330,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
     t8030_boot_display(t8030, ca);
 
-    if (hwaccel_enabled()) {
-        ck_patch_virt_monitor(hdr);
-        apple_virt_init(carveout_alloc_mem(ca, T8030_GXF_SHADOW_SIZE), T8030_GXF_SHADOW_SIZE);
-    }
+    if (hwaccel_enabled()) { ck_patch_virt_monitor(hdr); }
 
     use_sptm = apple_boot_get_segment(hdr, "__DATA_SPTM") != NULL;
     if (use_sptm) {

@@ -59,17 +59,16 @@ typedef struct
     void     (*set_reg)(CPUState* cs, AppleVirtReg reg, uint64_t value);
     /// Changes whether the guest may write [page, page + size) of its memory.
     bool (*protect)(hwaddr page, uint64_t size, bool writable);
+    /// Maps host memory read-only at [ipa, ipa + size) of the guest, executable if `exec`.
+    void (*map)(void* host, hwaddr ipa, uint64_t size, bool exec);
     /// Makes software-step exceptions exit to the host, or restores the accelerator's own setting.
     void (*trap_debug)(CPUState* cs, bool enable);
 } AppleVirtOps;
 
-void apple_virt_set_ops(const AppleVirtOps* ops);
+/// Called by an accelerator that can run GXF/PAC emulation, whose guest physical address space ends at `ipa_end`.
+void apple_virt_set_ops(const AppleVirtOps* ops, hwaddr ipa_end);
 /// Lets GXF/PAC emulation manage a vCPU that runs the patched images.
 void apple_virt_manage_cpu(CPUState* cs);
-/// Enables GXF/SPRR shadow paging for the kernel about to boot, with the shadow tables in guest memory at `base`.
-void apple_virt_init(hwaddr base, hwaddr size);
-/// Drops the previous boot's shadow paging, before anything boots.
-void apple_virt_reset(void);
 
 /// Emulates an `hvc` the patcher left without syncing the vCPU state, if it can; returns false if
 /// `apple_virt_handle_hvc` is needed.

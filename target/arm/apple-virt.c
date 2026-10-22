@@ -40,10 +40,13 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/lockable.h"
+#include "qemu/memalign.h"
 #include "qemu/thread.h"
+#include "qemu/units.h"
 #include "system/address-spaces.h"
 #include "system/hw_accel.h"
 #include "system/memory.h"
+#include "system/reset.h"
 #include "hw/arm/apple_virt_hvc.h"
 #include "cpu.h"
 #include "apple-virt.h"
@@ -60,6 +63,8 @@
 #define GXF_TTBR_CNP   (1ULL << 0)
 #define GXF_NO_ACCESS  (~0ULL)
 #define GXF_MDSCR_SS   (1ULL << 0)
+#define GXF_POOL_AGED  256
+#define GXF_POOL_SIZE  (1 * GiB)
 
 #define PTE_VALID  (1ULL << 0)
 #define PTE_TABLE  (1ULL << 1)
@@ -153,14 +158,13 @@ typedef struct
 static struct
 {
     const AppleVirtOps* ops;
-    // A kernel boots, so the vCPUs run on shadow tables once SPRR is on.
-    bool      monitor;
-    QemuMutex lock;
-    hwaddr    pool_base;
-    hwaddr    pool_end;
-    hwaddr    pool_cursor;
-    uint8_t*  pool_host;
-    // Freed shadow tables, reused oldest first so the guest's TLB maintenance for them has likely happened.
+    QemuMutex           lock;
+    hwaddr              pool_base;
+    hwaddr              pool_end;
+    hwaddr              pool_cursor;
+    uint8_t*            pool_host;
+    // Freed shadow tables, reused oldest first once enough have aged, so that the guest's TLB maintenance for them has
+    // likely happened and the host only backs about as many tables as were ever live at once.
     GQueue   pool_free;
     uint32_t pool_used;
     // Untracked pages that were write-protected, whose stores could still fault on another vCPU.
@@ -222,7 +226,7 @@ static hwaddr gxf_pool_alloc(void)
 {
     hwaddr pa;
 
-    if (virt.pool_cursor + GXF_PAGE_SIZE <= virt.pool_end) {
+    if (g_queue_get_length(&virt.pool_free) < GXF_POOL_AGED && virt.pool_cursor + GXF_PAGE_SIZE <= virt.pool_end) {
         pa                = virt.pool_cursor;
         virt.pool_cursor += GXF_PAGE_SIZE;
     }
@@ -606,7 +610,7 @@ static void gxf_load_shadows(CPUARMState* env, AppleVirtCPU* c, const GXFWorld* 
     }
 }
 
-static bool gxf_wants_shadows(CPUARMState* env) { return virt.monitor && arm_is_sprr_enabled(env); }
+static bool gxf_wants_shadows(CPUARMState* env) { return arm_is_sprr_enabled(env); }
 
 static GXFWorld gxf_env_world(CPUARMState* env)
 {
@@ -653,8 +657,6 @@ static void gxf_update_world_regs(CPUARMState* env, AppleVirtCPU* c, GXFWorld* w
 {
     bool want;
     bool flush;
-
-    if (!virt.monitor) { return; }
 
     QEMU_LOCK_GUARD(&virt.lock);
 
@@ -1159,7 +1161,7 @@ bool apple_virt_sysreg_written(CPUState* cs, uint32_t op0, uint32_t op1, uint32_
         case APPLE_VIRT_VREG_SPRR_PPERM_BR1_EL1: break;
         default                                : return false;
     }
-    if (!c->managed || !virt.monitor) { return false; }
+    if (!c->managed) { return false; }
 
     // The shadows bake the permissions into the TLB entries; the flush resumes after the `msr`.
     cpu_synchronize_state(cs);
@@ -1198,7 +1200,6 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
     if ((imm & APPLE_VIRT_HVC_TLBI_ASID_MASK) == APPLE_VIRT_HVC_TLBI_ASID) {
         uint32_t rt = APPLE_VIRT_HVC_RT(imm);
 
-        if (!virt.monitor) { return false; }
         WITH_QEMU_LOCK_GUARD(&virt.lock) { gxf_drop_asid(rt == 31 ? 0 : env->xregs[rt] >> 48); }
         w = gxf_env_world(env);
         gxf_flush_tlb(c, &w, true);
@@ -1535,6 +1536,15 @@ static bool gxf_emulate_store(GXFStore* st, uint32_t insn)
     return false;
 }
 
+// The shadow tables are only in the pool, which isn't guest memory.
+static uint64_t gxf_table_read(hwaddr pa)
+{
+    if (pa >= virt.pool_base && pa < virt.pool_end) {
+        return le64_to_cpu(qatomic_read((uint64_t*)(virt.pool_host + (pa - virt.pool_base))));
+    }
+    return address_space_ldq_le(&address_space_memory, pa, MEMTXATTRS_UNSPECIFIED, NULL);
+}
+
 static bool gxf_live_translate(CPUState* cs, uint64_t va, hwaddr* pa)
 {
     uint64_t tcr;
@@ -1559,9 +1569,7 @@ static bool gxf_live_translate(CPUState* cs, uint64_t va, hwaddr* pa)
     for (level = 0; level < 3 && va_bits <= gxf_lvl_off[level]; level++) { }
     for (; level <= 3; level++) {
         uint32_t bits = level == 0 || va_bits <= gxf_lvl_off[level - 1] ? va_bits - gxf_lvl_off[level] : 11;
-        uint64_t d    = address_space_ldq_le(&address_space_memory,
-                                             table + extract64(va, gxf_lvl_off[level], bits) * sizeof(uint64_t),
-                                             MEMTXATTRS_UNSPECIFIED, NULL);
+        uint64_t d    = gxf_table_read(table + extract64(va, gxf_lvl_off[level], bits) * sizeof(uint64_t));
 
         if (!(d & PTE_VALID)) { return false; }
         if (level == 3 || !(d & PTE_TABLE)) {
@@ -1668,7 +1676,7 @@ static GXFFaultResult gxf_write_fault(CPUState* cs, uint64_t va, hwaddr ipa)
 
 bool apple_virt_handle_write_fault(CPUState* cs, uint64_t va, hwaddr ipa)
 {
-    if (!virt.monitor || !virt_cpu(cs)->managed) { return false; }
+    if (!virt_cpu(cs)->managed) { return false; }
 
     switch (gxf_write_fault(cs, va, ipa)) {
         case GXF_FAULT_NOT_TABLE : return false;
@@ -1689,7 +1697,7 @@ bool apple_virt_handle_step(CPUState* cs)
     AppleVirtCPU* c    = virt_cpu(cs);
     uint32_t      mask = PSTATE_SS | PSTATE_DAIF;
 
-    if (!virt.monitor || c->nr_step_pages == 0) { return false; }
+    if (c->nr_step_pages == 0) { return false; }
 
     // Syncing can take the lock.
     cpu_synchronize_state(cs);
@@ -1783,8 +1791,6 @@ void apple_virt_sync_end(CPUState* cs)
     if (c->sync_guarded) { gxf_swap_env_bank(env); }
 }
 
-void apple_virt_set_ops(const AppleVirtOps* ops) { virt.ops = ops; }
-
 void apple_virt_manage_cpu(CPUState* cs)
 {
     if (virt.ops == NULL) {
@@ -1818,18 +1824,17 @@ static void gxf_reset(void)
     g_hash_table_remove_all(virt.unprotected);
     g_ptr_array_set_size(virt.perms, 0);
     g_queue_clear(&virt.pool_free);
-    virt.monitor = false;
+    virt.pool_cursor = virt.pool_base + 2 * GXF_PAGE_SIZE;
+    virt.pool_used   = 0;
 }
 
-void apple_virt_reset(void)
+static void apple_virt_reset(void* opaque)
 {
-    if (virt.roots == NULL) { return; }
-
     QEMU_LOCK_GUARD(&virt.lock);
     gxf_reset();
 }
 
-void apple_virt_init(hwaddr base, hwaddr size)
+void apple_virt_set_ops(const AppleVirtOps* ops, hwaddr ipa_end)
 {
     // tlbi vmalle1[is]; dsb nsh/ish; isb; hvc #RESUME
     static const uint32_t stub[] = {
@@ -1837,32 +1842,25 @@ void apple_virt_init(hwaddr base, hwaddr size)
         0xD508831F, 0xD5033B9F, 0xD5033FDF, 0xD4000002 | (APPLE_VIRT_HVC_RESUME << 5),
     };
 
-    assert_true(QEMU_IS_ALIGNED(base, GXF_PAGE_SIZE));
-    assert_cmphex(size, >=, 3 * GXF_PAGE_SIZE);
-    assert_nonnull(virt.ops);
+    virt.ops = ops;
+    qemu_mutex_init(&virt.lock);
+    virt.perms       = g_ptr_array_new_with_free_func(g_free);
+    virt.mirrors     = g_hash_table_new(gxf_mirror_hash, gxf_mirror_equal);
+    virt.pages       = g_hash_table_new(g_int64_hash, g_int64_equal);
+    virt.unprotected = g_hash_table_new(g_direct_hash, g_direct_equal);
+    virt.roots       = g_ptr_array_new();
 
-    if (virt.roots == NULL) {
-        qemu_mutex_init(&virt.lock);
-        virt.perms       = g_ptr_array_new_with_free_func(g_free);
-        virt.mirrors     = g_hash_table_new(gxf_mirror_hash, gxf_mirror_equal);
-        virt.pages       = g_hash_table_new(g_int64_hash, g_int64_equal);
-        virt.unprotected = g_hash_table_new(g_direct_hash, g_direct_equal);
-        virt.roots       = g_ptr_array_new();
-    }
-
-    QEMU_LOCK_GUARD(&virt.lock);
+    virt.pool_host = qemu_memalign(GXF_PAGE_SIZE, GXF_POOL_SIZE);
+    virt.pool_base = ipa_end - GXF_POOL_SIZE;
+    virt.pool_end  = ipa_end;
+    virt.stub      = virt.pool_base;
+    virt.empty     = virt.pool_base + GXF_PAGE_SIZE;
+    memset(virt.pool_host, 0, 2 * GXF_PAGE_SIZE);
+    for (size_t i = 0; i < ARRAY_SIZE(stub); i++) { stl_le_p(virt.pool_host + i * 4, stub[i]); }
+    // The stub page is executed, the rest only walked.
+    ops->map(virt.pool_host, virt.pool_base, GXF_PAGE_SIZE, true);
+    ops->map(virt.pool_host + GXF_PAGE_SIZE, virt.pool_base + GXF_PAGE_SIZE, GXF_POOL_SIZE - GXF_PAGE_SIZE, false);
 
     gxf_reset();
-    virt.pool_base   = base;
-    virt.pool_end    = base + size;
-    virt.pool_cursor = base;
-    virt.pool_used   = 0;
-    virt.pool_host   = gxf_host_ptr(base, size);
-    assert_nonnull(virt.pool_host);
-    virt.stub = gxf_pool_alloc();
-    for (size_t i = 0; i < ARRAY_SIZE(stub); i++) {
-        address_space_stl_le(&address_space_memory, virt.stub + i * 4, stub[i], MEMTXATTRS_UNSPECIFIED, NULL);
-    }
-    virt.empty   = gxf_pool_alloc();
-    virt.monitor = true;
+    qemu_register_reset(apple_virt_reset, NULL);
 }
