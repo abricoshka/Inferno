@@ -458,7 +458,9 @@ namespace
         void corrupt(const std::uint64_t index)
         {
             if (this->ascii_string(index).empty()) { throw std::runtime_error("not an ASCII string"); }
-            this->patcher.write(this->file, std::streamoff(this->object(index).pos), std::array<std::uint8_t, 1>{'_'});
+            const auto                      obj = this->object(index);
+            const std::vector<std::uint8_t> underscores(obj.count, '_');
+            this->patcher.write(this->file, std::streamoff(obj.pos), underscores.data(), underscores.size());
         }
 
     public:
