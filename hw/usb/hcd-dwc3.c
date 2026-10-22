@@ -70,7 +70,6 @@ static const char* TRBControlType_names[] = {
 typedef enum
 {
     DWC3_WORK_RUN,
-    DWC3_WORK_WAKEUP,
     DWC3_WORK_CONFIGURE,
     DWC3_WORK_END_TRANSFER,
     DWC3_WORK_RESET_ENDPOINTS,
@@ -130,12 +129,20 @@ static int dwc3_device_intr_level(DWC3State* s, int n)
     return qatomic_read(&s->intrs[n].count) > 0;
 }
 
+static void dwc3_set_irq(DWC3State* s, int n, bool level)
+{
+    if (s->irq_level[n] == level) { return; }
+
+    s->irq_level[n] = level;
+    qemu_set_irq(s->sysbus_xhci.irq[n], level);
+}
+
 static void dwc3_update_irq(DWC3State* s)
 {
     int ip = 0;
     for (uint32_t i = 0; i < s->numintrs; i++) {
         int level = dwc3_device_intr_level(s, i);
-        qemu_set_irq(s->sysbus_xhci.irq[i], level || s->host_intr_state[i]);
+        dwc3_set_irq(s, i, level || s->host_intr_state[i]);
         ip |= level;
     }
     if (ip) { s->gsts |= GSTS_DEVICE_IP; }
@@ -163,7 +170,7 @@ static bool dwc3_host_intr_raise(XHCIState* xhci, int n, bool level)
     else {
         s->gsts &= ~GSTS_HOST_IP;
     }
-    qemu_set_irq(xhci_sysbus->irq[n], level || dwc3_device_intr_level(s, n));
+    dwc3_set_irq(s, n, level || dwc3_device_intr_level(s, n));
 
     return false;
 }
@@ -197,25 +204,6 @@ static void dwc3_td_dump(DWC3Transfer* xfer)
     }
 }
 #endif
-
-static int dwc3_bd_length(DWC3State* s, dma_addr_t tdaddr)
-{
-    struct dwc3_trb trb    = {0};
-    int             length = 0;
-
-    while (1) {
-        if (dma_memory_read(&s->dma_as, tdaddr, &trb, sizeof(trb), MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: failed to read trb\n", __func__);
-            return 0;
-        }
-        if (!(trb.ctrl & TRB_CTRL_HWO)) { return -length; }
-
-        if (TRB_CTRL_TRBCTL(trb.ctrl) == TRBCTL_LINK_TRB) { return length; }
-        length++;
-        tdaddr += sizeof(trb);
-        if (trb.ctrl & TRB_CTRL_LST) { return -length; }
-    }
-}
 
 // looks/looked like a bad copy of libhw.c, just with in/out from/to being in
 // reverse.
@@ -280,7 +268,7 @@ void dwc3_bd_unmap(DWC3State* s, DWC3BufferDesc* desc)
 }
 
 static bool dwc3_bd_writeback(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p, bool buserr, int packet_left,
-                              int xfer_size, void* buffer)
+                              int xfer_size)
 {
     uint32_t                 i            = 0;
     uint32_t                 j            = 0;
@@ -384,8 +372,8 @@ static bool dwc3_bd_writeback(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p, 
                 ret = false;
                 goto end;
             }
-            memcpy(&setup_ep->setup_packet, buffer, sizeof(setup_ep->setup_packet));
-            HEXDUMP(__func__, buffer, sizeof(setup_ep->setup_packet));
+            iov_to_buf(p->iov.iov, p->iov.niov, 0, &setup_ep->setup_packet, sizeof(setup_ep->setup_packet));
+            HEXDUMP(__func__, &setup_ep->setup_packet, sizeof(setup_ep->setup_packet));
             // event.endpoint_event = DEPEVT_XFERCOMPLETE;
             // dwc3_ep_trb_event(s, desc->epid, trb, event);
             // p->status = USB_RET_SUCCESS;
@@ -613,14 +601,34 @@ end:
     return ret;
 }
 
+static uint32_t dwc3_bd_packet_copy(DWC3BufferDesc* desc, USBPacket* p, uint32_t len)
+{
+    size_t   off  = desc->actual_length;
+    uint32_t done = 0;
+
+    for (int i = 0; i < desc->iov.niov && done < len; i++) {
+        const struct iovec* v = &desc->iov.iov[i];
+        uint32_t            n;
+
+        if (off >= v->iov_len) {
+            off -= v->iov_len;
+            continue;
+        }
+        n = MIN(v->iov_len - off, len - done);
+        usb_packet_copy(p, (uint8_t*)v->iov_base + off, n);
+        done += n;
+        off   = 0;
+    }
+    return done;
+}
+
 static int dwc3_bd_copy(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p)
 {
-    g_autofree void* buffer      = NULL;
-    uint32_t         packet_left = usb_packet_size(p) - p->actual_length;
-    uint32_t         desc_left   = desc->length - desc->actual_length;
-    uint32_t         actual_xfer = 0;
-    uint32_t         mps         = s->eps[desc->epid].max_packet_size;
-    uint32_t         xfer_size;
+    uint32_t packet_left = usb_packet_size(p) - p->actual_length;
+    uint32_t desc_left   = desc->length - desc->actual_length;
+    uint32_t actual_xfer = 0;
+    uint32_t mps         = s->eps[desc->epid].max_packet_size;
+    uint32_t xfer_size;
     DPRINTF("%s: entered function\n", __func__);
 
     xfer_size = MIN(packet_left, desc_left);
@@ -637,22 +645,12 @@ static int dwc3_bd_copy(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p)
         return -1;
     }
 
-    // depend on a non-null pointer, even if xfer_size is zero.
-    buffer = g_malloc0(MAX(xfer_size, 1));
-    assert_nonnull(buffer);
     if (p->pid == USB_TOKEN_IN) {
 #if 1
         DPRINTF("%s IN Transfer 0x%x on EP %d to 0x" HWADDR_FMT_plx "\n", __func__, xfer_size, desc->epid,
                 desc->trbs[0].bp);
         DPRINTF("%s: p: 0x%x/0x%lx\n", __func__, p->actual_length, usb_packet_size(p));
 #endif
-        if (xfer_size) {
-            actual_xfer = qemu_iovec_to_buf(&desc->iov, desc->actual_length, buffer, xfer_size);
-            usb_packet_copy(p, buffer, xfer_size);
-#if 0
-            HEXDUMP(__func__, buffer, xfer_size);
-#endif
-        }
     }
     else {
 #if 1
@@ -666,14 +664,8 @@ static int dwc3_bd_copy(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p)
         }
         DPRINTF("%s: p: 0x%x/0x%lx\n", __func__, p->actual_length, usb_packet_size(p));
 #endif
-        if (xfer_size) {
-            usb_packet_copy(p, buffer, xfer_size);
-            actual_xfer = qemu_iovec_from_buf(&desc->iov, desc->actual_length, buffer, xfer_size);
-#if 0
-            HEXDUMP(__func__, buffer, xfer_size);
-#endif
-        }
     }
+    actual_xfer = dwc3_bd_packet_copy(desc, p, xfer_size);
 
     assert_cmphex(actual_xfer, >=, 0);
     desc->actual_length += actual_xfer;
@@ -700,7 +692,7 @@ static int dwc3_bd_copy(DWC3State* s, DWC3BufferDesc* desc, USBPacket* p)
         // would become negative for whatever reason
         buserr = actual_xfer < xfer_size;
     }
-    dwc3_bd_writeback(s, desc, p, buserr, packet_left, xfer_size, buffer);
+    dwc3_bd_writeback(s, desc, p, buserr, packet_left, xfer_size);
     // Don't do dwc3_bd_unmap for the if_0 case.
     dwc3_bd_unmap(s, desc);
     return xfer_size;
@@ -736,27 +728,17 @@ static void dwc3_td_free(DWC3State* s, DWC3Transfer* xfer)
 
 static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
 {
-    struct dwc3_trb trb = {0};
-    int             count;
+    struct dwc3_trb trb   = {0};
     bool            ended = false;
 
     do {
         DWC3BufferDesc* desc;
-
-        count = dwc3_bd_length(s, tdaddr);
-        if (count < 0) {
-            ended = true;
-            count = -count;
-        }
-        if (count == 0) {
-            ended = true;
-            break;
-        }
+        uint32_t        capacity = 0;
 
         desc         = g_new0(DWC3BufferDesc, 1);
         desc->epid   = xfer->epid;
         desc->count  = 0;
-        desc->trbs   = g_new0(DWC3TRB, count);
+        desc->trbs   = NULL;
         desc->length = 0;
         qemu_iovec_init(&desc->iov, 1);
         qemu_sglist_init(&desc->sgl, &s->parent_obj.parent_obj, 1, &s->dma_as);
@@ -793,10 +775,15 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
             if (controlType == TRBCTL_LINK_TRB) {
                 DWC3BufferDesc* d;
 
+                if (desc->count == 0) {
+                    ended = true;
+                    break;
+                }
+
                 tdaddr = dwc3_addr64(trb.bpl, trb.bph);
                 DPRINTF("%s: TRBCTL_LINK_TRB: link_tdaddr 0x%" HWADDR_PRIx "\n", __func__, tdaddr);
 
-                if (desc->trbs[0].addr <= tdaddr && tdaddr <= desc->trbs[0].addr + sizeof(trb) * (count + 1)) {
+                if (desc->trbs[0].addr <= tdaddr && tdaddr <= desc->trbs[0].addr + sizeof(trb) * (desc->count + 1)) {
                     /* self loop */
                     ended = true;
                     DPRINTF("%s: ended;break: self-loop\n", __func__);
@@ -814,13 +801,9 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
                 }
                 break;
             }
-            if (desc->count >= count) {
-                /* We don't include the link TRB in the desc count */
-                ended = true;
-                DPRINTF("%s: ended;break: We don't include the link TRB in the "
-                        "desc count\n",
-                        __func__);
-                break;
+            if (desc->count == capacity) {
+                capacity   = MAX(capacity * 2, 4);
+                desc->trbs = g_renew(DWC3TRB, desc->trbs, capacity);
             }
             desc->trbs[desc->count].bp     = dwc3_addr64(trb.bpl, trb.bph);
             desc->trbs[desc->count].addr   = tdaddr;
@@ -1069,6 +1052,7 @@ static void dwc3_reset_enter(Object* obj, ResetType type)
 
     QEMU_LOCK_GUARD(&s->lock);
 
+    memset(s->irq_level, -1, sizeof(s->irq_level));
     dwc3_dcore_reset(s, false);
     s->dctl    = 0;
     s->gsts    = GSTS_CURMOD_DRD;
@@ -2138,15 +2122,6 @@ static void dwc3_ep_run(DWC3State* s, DWC3Endpoint* ep)
     }
 }
 
-static void dwc3_ep_wakeup(DWC3State* s, DWC3Endpoint* ep)
-{
-    USBEndpoint* uep;
-
-    WITH_QEMU_LOCK_GUARD(&s->lock) { uep = ep->uep; }
-
-    if (uep != NULL) { usb_wakeup(uep, 0); }
-}
-
 static void dwc3_ep_configure(DWC3State* s, DWC3Endpoint* ep, uint32_t par0)
 {
     USBEndpoint* uep = usb_ep_get(&s->device.parent_obj, ep->epid & 1 ? USB_TOKEN_IN : USB_TOKEN_OUT, ep->epid >> 1);
@@ -2216,7 +2191,6 @@ static void dwc3_work_bh(void* opaque)
 
         switch (work->type) {
             case DWC3_WORK_RUN            : dwc3_ep_run(s, work->ep); break;
-            case DWC3_WORK_WAKEUP         : dwc3_ep_wakeup(s, work->ep); break;
             case DWC3_WORK_CONFIGURE      : dwc3_ep_configure(s, work->ep, work->par0); break;
             case DWC3_WORK_END_TRANSFER   : dwc3_ep_end_transfer(s, work->ep); break;
             case DWC3_WORK_RESET_ENDPOINTS: dwc3_reset_endpoints(s); break;
@@ -2245,7 +2219,10 @@ static void dwc3_work_schedule(DWC3State* s, DWC3WorkType type, DWC3Endpoint* ep
 
 static void dwc3_ep_run_schedule_update(DWC3State* s, DWC3Endpoint* ep) { dwc3_work_schedule(s, DWC3_WORK_RUN, ep, 0); }
 
-static void dwc3_ep_schedule_wakeup(DWC3State* s, DWC3Endpoint* ep) { dwc3_work_schedule(s, DWC3_WORK_WAKEUP, ep, 0); }
+static void dwc3_ep_schedule_wakeup(DWC3State* s, DWC3Endpoint* ep)
+{
+    if (ep->uep != NULL) { usb_wakeup(ep->uep, 0); }
+}
 
 static void dwc3_usb_device_class_initfn(ObjectClass* klass, const void* data)
 {

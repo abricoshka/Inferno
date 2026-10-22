@@ -130,6 +130,7 @@ typedef struct DWC3State
     uint32_t      numintrs;
     DWC3Endpoint  eps[DWC3_NUM_EPS];
     bool          host_intr_state[DWC3_NUM_INTRS];
+    int8_t        irq_level[DWC3_NUM_INTRS];
 
     union
     {
