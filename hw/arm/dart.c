@@ -653,8 +653,6 @@ static IOMMUTLBEntry apple_dart_mapper_translate(IOMMUMemoryRegion* mr, hwaddr a
         .perm      = IOMMU_NONE,
     };
 
-    if (REG_FIELD_EX32(qatomic_read(&mapper->regs.tlb_op), DART_TLB_OP, BUSY)) { return entry; }
-
     sid = apple_dart_sid_remap(mapper, sid);
 
     if (sid >= DART_MAX_STREAMS) {
@@ -683,7 +681,7 @@ static IOMMUTLBEntry apple_dart_mapper_translate(IOMMUMemoryRegion* mr, hwaddr a
     }
 
     iova = addr >> dart->page_shift;
-    gen  = qatomic_read(&mapper->tlb_gen[sid]);
+    gen  = qatomic_load_acquire(&mapper->tlb_gen[sid]);
 
     if (!apple_dart_tlb_lookup(mapper, sid, iova, gen, &entry)) {
         uint32_t status = apple_dart_mapper_ptw(mapper, sid, iova, &entry);
