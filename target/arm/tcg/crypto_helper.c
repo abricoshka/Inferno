@@ -14,6 +14,7 @@
 
 #include "tcg/tcg-gvec-desc.h"
 #include "crypto/aes-round.h"
+#include "host/crypto/sha2.h"
 #include "crypto/sm4.h"
 #include "vec_internal.h"
 
@@ -101,6 +102,56 @@ void HELPER(crypto_aesd)(void* vd, void* vn, void* vm, uint32_t desc)
         else {
             t.v = st->v ^ rk->v;
             aesdec_ISB_ISR_AK(ad, &t, &aes_zero, false);
+        }
+    }
+    clear_tail(vd, opr_sz, simd_maxsz(desc));
+}
+
+void HELPER(crypto_aese_mc)(void* vd, void* vn, void* vm, uint32_t desc)
+{
+    intptr_t i, opr_sz = simd_oprsz(desc);
+
+    for (i = 0; i < opr_sz; i += 16) {
+        AESState* ad = (AESState*)(vd + i);
+        AESState* st = (AESState*)(vn + i);
+        AESState* rk = (AESState*)(vm + i);
+        AESState  t;
+
+        if (HOST_BIG_ENDIAN) {
+            t.d[0] = st->d[1] ^ rk->d[1];
+            t.d[1] = st->d[0] ^ rk->d[0];
+            aesenc_SB_SR_MC_AK(&t, &t, &aes_zero, false);
+            ad->d[0] = t.d[1];
+            ad->d[1] = t.d[0];
+        }
+        else {
+            t.v = st->v ^ rk->v;
+            aesenc_SB_SR_MC_AK(ad, &t, &aes_zero, false);
+        }
+    }
+    clear_tail(vd, opr_sz, simd_maxsz(desc));
+}
+
+void HELPER(crypto_aesd_imc)(void* vd, void* vn, void* vm, uint32_t desc)
+{
+    intptr_t i, opr_sz = simd_oprsz(desc);
+
+    for (i = 0; i < opr_sz; i += 16) {
+        AESState* ad = (AESState*)(vd + i);
+        AESState* st = (AESState*)(vn + i);
+        AESState* rk = (AESState*)(vm + i);
+        AESState  t;
+
+        if (HOST_BIG_ENDIAN) {
+            t.d[0] = st->d[1] ^ rk->d[1];
+            t.d[1] = st->d[0] ^ rk->d[0];
+            aesdec_ISB_ISR_AK_IMC(&t, &t, &aes_zero, false);
+            ad->d[0] = t.d[1];
+            ad->d[1] = t.d[0];
+        }
+        else {
+            t.v = st->v ^ rk->v;
+            aesdec_ISB_ISR_AK_IMC(ad, &t, &aes_zero, false);
         }
     }
     clear_tail(vd, opr_sz, simd_maxsz(desc));
@@ -270,6 +321,12 @@ void HELPER(crypto_sha256h)(void* vd, void* vn, void* vm, uint32_t desc)
     union CRYPTO_STATE m  = {.l = {rm[0], rm[1]}};
     int                i;
 
+    if (HAVE_SHA256_ACCEL && !HOST_BIG_ENDIAN) {
+        sha256h_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     for (i = 0; i < 4; i++) {
         uint32_t t = cho(CR_ST_WORD(n, 0), CR_ST_WORD(n, 1), CR_ST_WORD(n, 2)) + CR_ST_WORD(n, 3) + S1(CR_ST_WORD(n, 0))
                      + CR_ST_WORD(m, i);
@@ -303,6 +360,12 @@ void HELPER(crypto_sha256h2)(void* vd, void* vn, void* vm, uint32_t desc)
     union CRYPTO_STATE m  = {.l = {rm[0], rm[1]}};
     int                i;
 
+    if (HAVE_SHA256_ACCEL && !HOST_BIG_ENDIAN) {
+        sha256h2_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     for (i = 0; i < 4; i++) {
         uint32_t t = cho(CR_ST_WORD(d, 0), CR_ST_WORD(d, 1), CR_ST_WORD(d, 2)) + CR_ST_WORD(d, 3) + S1(CR_ST_WORD(d, 0))
                      + CR_ST_WORD(m, i);
@@ -326,6 +389,12 @@ void HELPER(crypto_sha256su0)(void* vd, void* vm, uint32_t desc)
     union CRYPTO_STATE d  = {.l = {rd[0], rd[1]}};
     union CRYPTO_STATE m  = {.l = {rm[0], rm[1]}};
 
+    if (HAVE_SHA256_ACCEL && !HOST_BIG_ENDIAN) {
+        sha256su0_accel(rd, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     CR_ST_WORD(d, 0) += s0(CR_ST_WORD(d, 1));
     CR_ST_WORD(d, 1) += s0(CR_ST_WORD(d, 2));
     CR_ST_WORD(d, 2) += s0(CR_ST_WORD(d, 3));
@@ -345,6 +414,12 @@ void HELPER(crypto_sha256su1)(void* vd, void* vn, void* vm, uint32_t desc)
     union CRYPTO_STATE d  = {.l = {rd[0], rd[1]}};
     union CRYPTO_STATE n  = {.l = {rn[0], rn[1]}};
     union CRYPTO_STATE m  = {.l = {rm[0], rm[1]}};
+
+    if (HAVE_SHA256_ACCEL && !HOST_BIG_ENDIAN) {
+        sha256su1_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
 
     CR_ST_WORD(d, 0) += s1(CR_ST_WORD(m, 2)) + CR_ST_WORD(n, 1);
     CR_ST_WORD(d, 1) += s1(CR_ST_WORD(m, 3)) + CR_ST_WORD(n, 2);
@@ -381,6 +456,12 @@ void HELPER(crypto_sha512h)(void* vd, void* vn, void* vm, uint32_t desc)
     uint64_t  d0 = rd[0];
     uint64_t  d1 = rd[1];
 
+    if (HAVE_SHA512_ACCEL) {
+        sha512h_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     d1 += S1_512(rm[1]) + cho512(rm[1], rn[0], rn[1]);
     d0 += S1_512(d1 + rm[0]) + cho512(d1 + rm[0], rm[1], rn[0]);
 
@@ -398,6 +479,12 @@ void HELPER(crypto_sha512h2)(void* vd, void* vn, void* vm, uint32_t desc)
     uint64_t  d0 = rd[0];
     uint64_t  d1 = rd[1];
 
+    if (HAVE_SHA512_ACCEL) {
+        sha512h2_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     d1 += S0_512(rm[0]) + maj512(rn[0], rm[1], rm[0]);
     d0 += S0_512(d1) + maj512(d1, rm[0], rm[1]);
 
@@ -414,6 +501,12 @@ void HELPER(crypto_sha512su0)(void* vd, void* vn, uint32_t desc)
     uint64_t  d0 = rd[0];
     uint64_t  d1 = rd[1];
 
+    if (HAVE_SHA512_ACCEL) {
+        sha512su0_accel(rd, rn);
+        clear_tail_16(vd, desc);
+        return;
+    }
+
     d0 += s0_512(rd[1]);
     d1 += s0_512(rn[0]);
 
@@ -428,6 +521,12 @@ void HELPER(crypto_sha512su1)(void* vd, void* vn, void* vm, uint32_t desc)
     uint64_t* rd = vd;
     uint64_t* rn = vn;
     uint64_t* rm = vm;
+
+    if (HAVE_SHA512_ACCEL) {
+        sha512su1_accel(rd, rn, rm);
+        clear_tail_16(vd, desc);
+        return;
+    }
 
     rd[0] += s1_512(rn[0]) + rm[0];
     rd[1] += s1_512(rn[1]) + rm[1];

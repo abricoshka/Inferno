@@ -42,6 +42,9 @@
 #define TCG_TARGET_HAS_bitsel_vec 1
 #define TCG_TARGET_HAS_cmpsel_vec 0
 #define TCG_TARGET_HAS_tst_vec    1
+#define TCG_TARGET_HAS_aes_vec    (cpuinfo & CPUINFO_AES)
+#define TCG_TARGET_HAS_sha256_vec (cpuinfo & CPUINFO_SHA256)
+#define TCG_TARGET_HAS_sha512_vec (cpuinfo & CPUINFO_SHA512)
 
 #define TCG_TARGET_extract_valid(type, ofs, len)  1
 #define TCG_TARGET_sextract_valid(type, ofs, len) 1

@@ -647,6 +647,98 @@ void tcg_gen_sars_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 b)
 void tcg_gen_rotls_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_i32 s)
 { do_shifts(vece, r, a, s, INDEX_op_rotls_vec); }
 
+static void vec_gen_op4(TCGOpcode opc, unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    TCGTemp* rt   = tcgv_vec_temp(r);
+    TCGTemp* at   = tcgv_vec_temp(a);
+    TCGTemp* bt   = tcgv_vec_temp(b);
+    TCGTemp* ct   = tcgv_vec_temp(c);
+    TCGType  type = rt->base_type;
+
+    tcg_debug_assert(at->base_type >= type);
+    tcg_debug_assert(bt->base_type >= type);
+    tcg_debug_assert(ct->base_type >= type);
+    vec_gen_4(opc, type, vece, temp_arg(rt), temp_arg(at), temp_arg(bt), temp_arg(ct));
+}
+
+static void vec_check_crypto(TCGOpcode opc, unsigned vece, TCGv_vec r)
+{
+    tcg_assert_listed_vecop(opc);
+    tcg_debug_assert(tcg_can_emit_vec_op(opc, tcgv_vec_temp(r)->base_type, vece) > 0);
+}
+
+void tcg_gen_aese_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b)
+{
+    vec_check_crypto(INDEX_op_aese_vec, MO_8, r);
+    vec_gen_op3(INDEX_op_aese_vec, MO_8, r, a, b);
+}
+
+void tcg_gen_aesd_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b)
+{
+    vec_check_crypto(INDEX_op_aesd_vec, MO_8, r);
+    vec_gen_op3(INDEX_op_aesd_vec, MO_8, r, a, b);
+}
+
+void tcg_gen_aesmc_vec(TCGv_vec r, TCGv_vec a)
+{
+    vec_check_crypto(INDEX_op_aesmc_vec, MO_8, r);
+    vec_gen_op2(INDEX_op_aesmc_vec, MO_8, r, a);
+}
+
+void tcg_gen_aesimc_vec(TCGv_vec r, TCGv_vec a)
+{
+    vec_check_crypto(INDEX_op_aesimc_vec, MO_8, r);
+    vec_gen_op2(INDEX_op_aesimc_vec, MO_8, r, a);
+}
+
+void tcg_gen_sha256h_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha256h_vec, MO_32, r);
+    vec_gen_op4(INDEX_op_sha256h_vec, MO_32, r, a, b, c);
+}
+
+void tcg_gen_sha256h2_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha256h2_vec, MO_32, r);
+    vec_gen_op4(INDEX_op_sha256h2_vec, MO_32, r, a, b, c);
+}
+
+void tcg_gen_sha256su0_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b)
+{
+    vec_check_crypto(INDEX_op_sha256su0_vec, MO_32, r);
+    vec_gen_op3(INDEX_op_sha256su0_vec, MO_32, r, a, b);
+}
+
+void tcg_gen_sha256su1_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha256su1_vec, MO_32, r);
+    vec_gen_op4(INDEX_op_sha256su1_vec, MO_32, r, a, b, c);
+}
+
+void tcg_gen_sha512h_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha512h_vec, MO_64, r);
+    vec_gen_op4(INDEX_op_sha512h_vec, MO_64, r, a, b, c);
+}
+
+void tcg_gen_sha512h2_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha512h2_vec, MO_64, r);
+    vec_gen_op4(INDEX_op_sha512h2_vec, MO_64, r, a, b, c);
+}
+
+void tcg_gen_sha512su0_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b)
+{
+    vec_check_crypto(INDEX_op_sha512su0_vec, MO_64, r);
+    vec_gen_op3(INDEX_op_sha512su0_vec, MO_64, r, a, b);
+}
+
+void tcg_gen_sha512su1_vec(TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
+{
+    vec_check_crypto(INDEX_op_sha512su1_vec, MO_64, r);
+    vec_gen_op4(INDEX_op_sha512su1_vec, MO_64, r, a, b, c);
+}
+
 void tcg_gen_bitsel_vec(unsigned vece, TCGv_vec r, TCGv_vec a, TCGv_vec b, TCGv_vec c)
 {
     TCGTemp* rt   = tcgv_vec_temp(r);

@@ -181,6 +181,20 @@ DEF(cmp_vec, 1, 2, 1, TCG_OPF_VECTOR)
 DEF(bitsel_vec, 1, 3, 0, TCG_OPF_VECTOR)
 DEF(cmpsel_vec, 1, 4, 1, TCG_OPF_VECTOR)
 
+/* Arm crypto extension semantics; destructive ones take Vd as the first input. */
+DEF(aese_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(aesd_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(aesmc_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(aesimc_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(sha256h_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sha256h2_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sha256su0_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sha256su1_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sha512h_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sha512h2_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sha512su0_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sha512su1_vec, 1, 3, 0, TCG_OPF_VECTOR)
+
 DEF(last_generic, 0, 0, 0, TCG_OPF_NOT_PRESENT)
 
 #include "tcg-target-opc.h.inc"

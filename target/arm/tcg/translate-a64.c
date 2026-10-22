@@ -4336,33 +4336,49 @@ TRANS(ZIP2, do_simd_permute, a, permute_load_zip, 1)
  * Cryptographic AES, SHA, SHA512
  */
 
-TRANS_FEAT(AESE, aa64_aes, do_gvec_op3_ool, a, 0, gen_helper_crypto_aese)
-TRANS_FEAT(AESD, aa64_aes, do_gvec_op3_ool, a, 0, gen_helper_crypto_aesd)
-TRANS_FEAT(AESMC, aa64_aes, do_gvec_op2_ool, a, 0, gen_helper_crypto_aesmc)
-TRANS_FEAT(AESIMC, aa64_aes, do_gvec_op2_ool, a, 0, gen_helper_crypto_aesimc)
+static bool do_aes_round(DisasContext* s, arg_qrrr_e* a, uint32_t mix, GVecGen3Fn* fn, GVecGen3Fn* fused)
+{
+    if (!fp_access_check(s)) { return true; }
+    if (s->base.num_insns < s->base.max_insns
+        && arm_ldl_code(s->env, &s->base, s->base.pc_next, s->sctlr_b) == (mix | a->rd << 5 | a->rd))
+    {
+        s->base.pc_next += 4;
+        s->base.max_insns--;
+        fn = fused;
+    }
+    gen_gvec_fn3(s, a->q, a->rd, a->rn, a->rm, fn, MO_8);
+    return true;
+}
+
+static bool do_gvec_fn2(DisasContext* s, arg_qrr_e* a, GVecGen2Fn* fn);
+
+TRANS_FEAT(AESE, aa64_aes, do_aes_round, a, 0x4e286800, gen_gvec_aese, gen_gvec_aese_mc)
+TRANS_FEAT(AESD, aa64_aes, do_aes_round, a, 0x4e287800, gen_gvec_aesd, gen_gvec_aesd_imc)
+TRANS_FEAT(AESMC, aa64_aes, do_gvec_fn2, a, gen_gvec_aesmc)
+TRANS_FEAT(AESIMC, aa64_aes, do_gvec_fn2, a, gen_gvec_aesimc)
 
 TRANS_FEAT(SHA1C, aa64_sha1, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha1c)
 TRANS_FEAT(SHA1P, aa64_sha1, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha1p)
 TRANS_FEAT(SHA1M, aa64_sha1, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha1m)
 TRANS_FEAT(SHA1SU0, aa64_sha1, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha1su0)
 
-TRANS_FEAT(SHA256H, aa64_sha256, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha256h)
-TRANS_FEAT(SHA256H2, aa64_sha256, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha256h2)
-TRANS_FEAT(SHA256SU1, aa64_sha256, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha256su1)
+TRANS_FEAT(SHA256H, aa64_sha256, do_gvec_fn3, a, gen_gvec_sha256h)
+TRANS_FEAT(SHA256H2, aa64_sha256, do_gvec_fn3, a, gen_gvec_sha256h2)
+TRANS_FEAT(SHA256SU1, aa64_sha256, do_gvec_fn3, a, gen_gvec_sha256su1)
 
 TRANS_FEAT(SHA1H, aa64_sha1, do_gvec_op2_ool, a, 0, gen_helper_crypto_sha1h)
 TRANS_FEAT(SHA1SU1, aa64_sha1, do_gvec_op2_ool, a, 0, gen_helper_crypto_sha1su1)
-TRANS_FEAT(SHA256SU0, aa64_sha256, do_gvec_op2_ool, a, 0, gen_helper_crypto_sha256su0)
+TRANS_FEAT(SHA256SU0, aa64_sha256, do_gvec_fn2, a, gen_gvec_sha256su0)
 
-TRANS_FEAT(SHA512H, aa64_sha512, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha512h)
-TRANS_FEAT(SHA512H2, aa64_sha512, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha512h2)
-TRANS_FEAT(SHA512SU1, aa64_sha512, do_gvec_op3_ool, a, 0, gen_helper_crypto_sha512su1)
+TRANS_FEAT(SHA512H, aa64_sha512, do_gvec_fn3, a, gen_gvec_sha512h)
+TRANS_FEAT(SHA512H2, aa64_sha512, do_gvec_fn3, a, gen_gvec_sha512h2)
+TRANS_FEAT(SHA512SU1, aa64_sha512, do_gvec_fn3, a, gen_gvec_sha512su1)
 TRANS_FEAT(RAX1, aa64_sha3, do_gvec_fn3, a, gen_gvec_rax1)
 TRANS_FEAT(SM3PARTW1, aa64_sm3, do_gvec_op3_ool, a, 0, gen_helper_crypto_sm3partw1)
 TRANS_FEAT(SM3PARTW2, aa64_sm3, do_gvec_op3_ool, a, 0, gen_helper_crypto_sm3partw2)
 TRANS_FEAT(SM4EKEY, aa64_sm4, do_gvec_op3_ool, a, 0, gen_helper_crypto_sm4ekey)
 
-TRANS_FEAT(SHA512SU0, aa64_sha512, do_gvec_op2_ool, a, 0, gen_helper_crypto_sha512su0)
+TRANS_FEAT(SHA512SU0, aa64_sha512, do_gvec_fn2, a, gen_gvec_sha512su0)
 TRANS_FEAT(SM4E, aa64_sm4, do_gvec_op3_ool, a, 0, gen_helper_crypto_sm4e)
 
 TRANS_FEAT(EOR3, aa64_sha3, do_gvec_fn4, a, gen_gvec_eor3)
@@ -8897,6 +8913,7 @@ static void aarch64_tr_init_disas_context(DisasContextBase* dcbase, CPUState* cp
     int           bound, core_mmu_idx;
 
     dc->isar          = &arm_cpu->isar;
+    dc->env           = env;
     dc->condjmp       = 0;
     dc->pc_save       = dc->base.pc_first;
     dc->gxf_active    = arm_feature(env, ARM_FEATURE_GXF);

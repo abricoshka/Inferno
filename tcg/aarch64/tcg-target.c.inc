@@ -639,6 +639,20 @@ typedef enum
     I3617_ABS   = 0x0e20b800,
     I3617_NEG   = 0x2e20b800,
 
+    /* Cryptographic extension: rm, rn, rd.  */
+    ICRYPTO_AESE      = 0x4e284800,
+    ICRYPTO_AESD      = 0x4e285800,
+    ICRYPTO_AESMC     = 0x4e286800,
+    ICRYPTO_AESIMC    = 0x4e287800,
+    ICRYPTO_SHA256H   = 0x5e004000,
+    ICRYPTO_SHA256H2  = 0x5e005000,
+    ICRYPTO_SHA256SU0 = 0x5e282800,
+    ICRYPTO_SHA256SU1 = 0x5e006000,
+    ICRYPTO_SHA512H   = 0xce608000,
+    ICRYPTO_SHA512H2  = 0xce608400,
+    ICRYPTO_SHA512SU0 = 0xcec08000,
+    ICRYPTO_SHA512SU1 = 0xce608800,
+
     /* System instructions.  */
     NOP     = 0xd503201f,
     DMB_ISH = 0xd50338bf,
@@ -793,6 +807,9 @@ static void tcg_out_insn_3616(TCGContext* s, AArch64Insn insn, bool q, unsigned 
 
 static void tcg_out_insn_3617(TCGContext* s, AArch64Insn insn, bool q, unsigned size, TCGReg rd, TCGReg rn)
 { tcg_out32(s, insn | q << 30 | (size << 22) | (rn & 0x1f) << 5 | (rd & 0x1f)); }
+
+static void tcg_out_insn_crypto(TCGContext* s, AArch64Insn insn, TCGReg rd, TCGReg rn, TCGReg rm)
+{ tcg_out32(s, insn | (rm & 0x1f) << 16 | (rn & 0x1f) << 5 | (rd & 0x1f)); }
 
 static void tcg_out_insn_3310(TCGContext* s, AArch64Insn insn, TCGReg rd, TCGReg base, TCGType ext, TCGReg regoff)
 {
@@ -2718,6 +2735,19 @@ static void tcg_out_vec_op(TCGContext* s, TCGOpcode opc, unsigned vecl, unsigned
             }
             break;
 
+        case INDEX_op_aese_vec     : tcg_out_insn_crypto(s, ICRYPTO_AESE, a0, a2, 0); break;
+        case INDEX_op_aesd_vec     : tcg_out_insn_crypto(s, ICRYPTO_AESD, a0, a2, 0); break;
+        case INDEX_op_aesmc_vec    : tcg_out_insn_crypto(s, ICRYPTO_AESMC, a0, a1, 0); break;
+        case INDEX_op_aesimc_vec   : tcg_out_insn_crypto(s, ICRYPTO_AESIMC, a0, a1, 0); break;
+        case INDEX_op_sha256su0_vec: tcg_out_insn_crypto(s, ICRYPTO_SHA256SU0, a0, a2, 0); break;
+        case INDEX_op_sha512su0_vec: tcg_out_insn_crypto(s, ICRYPTO_SHA512SU0, a0, a2, 0); break;
+        case INDEX_op_sha256h_vec  : tcg_out_insn_crypto(s, ICRYPTO_SHA256H, a0, a2, args[3]); break;
+        case INDEX_op_sha256h2_vec : tcg_out_insn_crypto(s, ICRYPTO_SHA256H2, a0, a2, args[3]); break;
+        case INDEX_op_sha256su1_vec: tcg_out_insn_crypto(s, ICRYPTO_SHA256SU1, a0, a2, args[3]); break;
+        case INDEX_op_sha512h_vec  : tcg_out_insn_crypto(s, ICRYPTO_SHA512H, a0, a2, args[3]); break;
+        case INDEX_op_sha512h2_vec : tcg_out_insn_crypto(s, ICRYPTO_SHA512H2, a0, a2, args[3]); break;
+        case INDEX_op_sha512su1_vec: tcg_out_insn_crypto(s, ICRYPTO_SHA512SU1, a0, a2, args[3]); break;
+
         case INDEX_op_mov_vec: /* Always emitted via tcg_out_mov.  */
         case INDEX_op_dup_vec: /* Always emitted via tcg_out_dup_vec.  */
         default              : assert_not_reached();
@@ -2727,36 +2757,48 @@ static void tcg_out_vec_op(TCGContext* s, TCGOpcode opc, unsigned vecl, unsigned
 int tcg_can_emit_vec_op(TCGOpcode opc, TCGType type, unsigned vece)
 {
     switch (opc) {
-        case INDEX_op_add_vec   :
-        case INDEX_op_sub_vec   :
-        case INDEX_op_and_vec   :
-        case INDEX_op_or_vec    :
-        case INDEX_op_xor_vec   :
-        case INDEX_op_andc_vec  :
-        case INDEX_op_orc_vec   :
-        case INDEX_op_neg_vec   :
-        case INDEX_op_abs_vec   :
-        case INDEX_op_not_vec   :
-        case INDEX_op_cmp_vec   :
-        case INDEX_op_shli_vec  :
-        case INDEX_op_shri_vec  :
-        case INDEX_op_sari_vec  :
-        case INDEX_op_ssadd_vec :
-        case INDEX_op_sssub_vec :
-        case INDEX_op_usadd_vec :
-        case INDEX_op_ussub_vec :
-        case INDEX_op_shlv_vec  :
-        case INDEX_op_bitsel_vec: return 1;
-        case INDEX_op_rotli_vec :
-        case INDEX_op_shrv_vec  :
-        case INDEX_op_sarv_vec  :
-        case INDEX_op_rotlv_vec :
-        case INDEX_op_rotrv_vec : return -1;
-        case INDEX_op_mul_vec   :
-        case INDEX_op_smax_vec  :
-        case INDEX_op_smin_vec  :
-        case INDEX_op_umax_vec  :
-        case INDEX_op_umin_vec  : return vece < MO_64;
+        case INDEX_op_add_vec      :
+        case INDEX_op_sub_vec      :
+        case INDEX_op_and_vec      :
+        case INDEX_op_or_vec       :
+        case INDEX_op_xor_vec      :
+        case INDEX_op_andc_vec     :
+        case INDEX_op_orc_vec      :
+        case INDEX_op_neg_vec      :
+        case INDEX_op_abs_vec      :
+        case INDEX_op_not_vec      :
+        case INDEX_op_cmp_vec      :
+        case INDEX_op_shli_vec     :
+        case INDEX_op_shri_vec     :
+        case INDEX_op_sari_vec     :
+        case INDEX_op_ssadd_vec    :
+        case INDEX_op_sssub_vec    :
+        case INDEX_op_usadd_vec    :
+        case INDEX_op_ussub_vec    :
+        case INDEX_op_shlv_vec     :
+        case INDEX_op_bitsel_vec   : return 1;
+        case INDEX_op_rotli_vec    :
+        case INDEX_op_shrv_vec     :
+        case INDEX_op_sarv_vec     :
+        case INDEX_op_rotlv_vec    :
+        case INDEX_op_rotrv_vec    : return -1;
+        case INDEX_op_mul_vec      :
+        case INDEX_op_smax_vec     :
+        case INDEX_op_smin_vec     :
+        case INDEX_op_umax_vec     :
+        case INDEX_op_umin_vec     : return vece < MO_64;
+        case INDEX_op_aese_vec     :
+        case INDEX_op_aesd_vec     :
+        case INDEX_op_aesmc_vec    :
+        case INDEX_op_aesimc_vec   : return type == TCG_TYPE_V128 && TCG_TARGET_HAS_aes_vec;
+        case INDEX_op_sha256h_vec  :
+        case INDEX_op_sha256h2_vec :
+        case INDEX_op_sha256su0_vec:
+        case INDEX_op_sha256su1_vec: return type == TCG_TYPE_V128 && TCG_TARGET_HAS_sha256_vec;
+        case INDEX_op_sha512h_vec  :
+        case INDEX_op_sha512h2_vec :
+        case INDEX_op_sha512su0_vec:
+        case INDEX_op_sha512su1_vec: return type == TCG_TYPE_V128 && TCG_TARGET_HAS_sha512_vec;
 
         default: return 0;
     }
@@ -2859,7 +2901,19 @@ static TCGConstraintSetIndex tcg_target_op_def(TCGOpcode op, TCGType type, unsig
         case INDEX_op_orc_vec      : return C_O1_I2(w, w, wN);
         case INDEX_op_cmp_vec      : return C_O1_I2(w, w, wZ);
         case INDEX_op_bitsel_vec   : return C_O1_I3(w, w, w, w);
-        case INDEX_op_aa64_sli_vec : return C_O1_I2(w, 0, w);
+        case INDEX_op_aa64_sli_vec :
+        case INDEX_op_aese_vec     :
+        case INDEX_op_aesd_vec     :
+        case INDEX_op_sha256su0_vec:
+        case INDEX_op_sha512su0_vec: return C_O1_I2(w, 0, w);
+        case INDEX_op_aesmc_vec    :
+        case INDEX_op_aesimc_vec   : return C_O1_I1(w, w);
+        case INDEX_op_sha256h_vec  :
+        case INDEX_op_sha256h2_vec :
+        case INDEX_op_sha256su1_vec:
+        case INDEX_op_sha512h_vec  :
+        case INDEX_op_sha512h2_vec :
+        case INDEX_op_sha512su1_vec: return C_O1_I3(w, 0, w, w);
 
         default: return C_NotImplemented;
     }

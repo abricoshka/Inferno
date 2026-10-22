@@ -166,6 +166,28 @@ static inline ARMFPStatusFlavour select_ah_fpst(DisasContext* s, MemOp esz)
 bool disas_sve(DisasContext*, uint32_t);
 bool disas_sme(DisasContext*, uint32_t);
 
+void gen_gvec_aese(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, uint32_t max_sz);
+void gen_gvec_aesd(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, uint32_t max_sz);
+void gen_gvec_aese_mc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                      uint32_t max_sz);
+void gen_gvec_aesd_imc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                       uint32_t max_sz);
+void gen_gvec_aesmc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz);
+void gen_gvec_aesimc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz);
+void gen_gvec_sha256h(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                      uint32_t max_sz);
+void gen_gvec_sha256h2(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                       uint32_t max_sz);
+void gen_gvec_sha256su1(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                        uint32_t max_sz);
+void gen_gvec_sha512h(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                      uint32_t max_sz);
+void gen_gvec_sha512h2(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                       uint32_t max_sz);
+void gen_gvec_sha512su1(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                        uint32_t max_sz);
+void gen_gvec_sha256su0(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz);
+void gen_gvec_sha512su0(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz);
 void gen_gvec_rax1(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, uint32_t max_sz);
 void gen_gvec_xar(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, int64_t shift, uint32_t opr_sz,
                   uint32_t max_sz);

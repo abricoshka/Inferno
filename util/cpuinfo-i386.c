@@ -19,7 +19,7 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
     if (info) { return info; }
 
 #ifdef CONFIG_CPUID_H
-    unsigned max, a, b, c, d, b7 = 0, c7 = 0;
+    unsigned max, a, b, c, d, b7 = 0, c7 = 0, a7_1 = 0;
 
     max = __get_cpuid_max(0, 0);
 
@@ -27,6 +27,8 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
         __cpuid_count(7, 0, a, b7, c7, d);
         info |= (b7 & bit_BMI ? CPUINFO_BMI1 : 0);
         info |= (b7 & bit_BMI2 ? CPUINFO_BMI2 : 0);
+
+        if (a >= 1) { __cpuid_count(7, 1, a7_1, b, c, d); }
     }
 
     if (max >= 1) {
@@ -40,6 +42,7 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
 
         /* Our AES support requires PSHUFB as well. */
         info |= ((c & bit_AES) && (c & bit_SSSE3) ? CPUINFO_AES : 0);
+        info |= ((b7 & bit_SHA) && (c & bit_SSSE3) ? CPUINFO_SHA : 0);
 
         /* For AVX features, we must check available and usable. */
         if ((c & bit_AVX) && (c & bit_OSXSAVE)) {
@@ -48,6 +51,7 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
             if ((bv & 6) == 6) {
                 info |= CPUINFO_AVX1;
                 info |= (b7 & bit_AVX2 ? CPUINFO_AVX2 : 0);
+                info |= ((b7 & bit_AVX2) && (a7_1 & bit_SHA512) ? CPUINFO_SHA512 : 0);
                 info |= (c7 & bit_GFNI ? CPUINFO_GFNI : 0);
 
                 if ((bv & 0xe0) == 0xe0) {

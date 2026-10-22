@@ -56,6 +56,9 @@
 #ifndef bit_AVX512DQ
     #define bit_AVX512DQ (1 << 17)
 #endif
+#ifndef bit_SHA
+    #define bit_SHA (1 << 29)
+#endif
 #ifndef bit_AVX512BW
     #define bit_AVX512BW (1 << 30)
 #endif
@@ -69,6 +72,11 @@
 #endif
 #ifndef bit_GFNI
     #define bit_GFNI (1 << 8)
+#endif
+
+/* Leaf 7, subleaf 1, %eax */
+#ifndef bit_SHA512
+    #define bit_SHA512 (1 << 0)
 #endif
 
 /* Leaf 0x80000001, %ecx */

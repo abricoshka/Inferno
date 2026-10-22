@@ -342,3 +342,122 @@ void gen_gvec_sve2_sqdmulh(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint
     };
     tcg_gen_gvec_3_ool(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, 0, fns[vece]);
 }
+
+static void gen_aese_vec(unsigned vece, TCGv_vec d, TCGv_vec n, TCGv_vec m) { tcg_gen_aese_vec(d, n, m); }
+
+static void gen_aesd_vec(unsigned vece, TCGv_vec d, TCGv_vec n, TCGv_vec m) { tcg_gen_aesd_vec(d, n, m); }
+
+static void gen_aese_mc_vec(unsigned vece, TCGv_vec d, TCGv_vec n, TCGv_vec m)
+{
+    tcg_gen_aese_vec(d, n, m);
+    tcg_gen_aesmc_vec(d, d);
+}
+
+static void gen_aesd_imc_vec(unsigned vece, TCGv_vec d, TCGv_vec n, TCGv_vec m)
+{
+    tcg_gen_aesd_vec(d, n, m);
+    tcg_gen_aesimc_vec(d, d);
+}
+
+static void gen_aesmc_vec(unsigned vece, TCGv_vec d, TCGv_vec n) { tcg_gen_aesmc_vec(d, n); }
+
+static void gen_aesimc_vec(unsigned vece, TCGv_vec d, TCGv_vec n) { tcg_gen_aesimc_vec(d, n); }
+
+void gen_gvec_aese(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aese_vec, 0};
+    static const GVecGen3  op           = {.fniv    = gen_aese_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aese,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_3(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, &op);
+}
+
+void gen_gvec_aesd(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aesd_vec, 0};
+    static const GVecGen3  op           = {.fniv    = gen_aesd_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aesd,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_3(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, &op);
+}
+
+void gen_gvec_aese_mc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                      uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aese_vec, INDEX_op_aesmc_vec, 0};
+    static const GVecGen3  op           = {.fniv    = gen_aese_mc_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aese_mc,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_3(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, &op);
+}
+
+void gen_gvec_aesd_imc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz,
+                       uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aesd_vec, INDEX_op_aesimc_vec, 0};
+    static const GVecGen3  op           = {.fniv    = gen_aesd_imc_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aesd_imc,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_3(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, &op);
+}
+
+void gen_gvec_aesmc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aesmc_vec, 0};
+    static const GVecGen2  op           = {.fniv    = gen_aesmc_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aesmc,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_2(rd_ofs, rn_ofs, opr_sz, max_sz, &op);
+}
+
+void gen_gvec_aesimc(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz)
+{
+    static const TCGOpcode vecop_list[] = {INDEX_op_aesimc_vec, 0};
+    static const GVecGen2  op           = {.fniv    = gen_aesimc_vec,
+                                           .opt_opc = vecop_list,
+                                           .fno     = gen_helper_crypto_aesimc,
+                                           .vece    = MO_8};
+    tcg_gen_gvec_2(rd_ofs, rn_ofs, opr_sz, max_sz, &op);
+}
+
+#define DO_SHA2_3(NAME, VECE)                                                                               \
+    static void gen_##NAME##_vec(unsigned vece, TCGv_vec d, TCGv_vec n, TCGv_vec m)                         \
+    { tcg_gen_##NAME##_vec(d, d, n, m); }                                                                   \
+    void gen_gvec_##NAME(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t rm_ofs, uint32_t opr_sz, \
+                         uint32_t max_sz)                                                                   \
+    {                                                                                                       \
+        static const TCGOpcode vecop_list[] = {INDEX_op_##NAME##_vec, 0};                                   \
+        static const GVecGen3  op           = {.fniv      = gen_##NAME##_vec,                               \
+                                               .opt_opc   = vecop_list,                                     \
+                                               .fno       = gen_helper_crypto_##NAME,                       \
+                                               .vece      = VECE,                                           \
+                                               .load_dest = true};                                          \
+        tcg_gen_gvec_3(rd_ofs, rn_ofs, rm_ofs, opr_sz, max_sz, &op);                                        \
+    }
+
+#define DO_SHA2_2(NAME, VECE)                                                                                      \
+    static void gen_##NAME##_vec(unsigned vece, TCGv_vec d, TCGv_vec n) { tcg_gen_##NAME##_vec(d, d, n); }         \
+    void        gen_gvec_##NAME(unsigned vece, uint32_t rd_ofs, uint32_t rn_ofs, uint32_t opr_sz, uint32_t max_sz) \
+    {                                                                                                              \
+        static const TCGOpcode vecop_list[] = {INDEX_op_##NAME##_vec, 0};                                          \
+        static const GVecGen2  op           = {.fniv      = gen_##NAME##_vec,                                      \
+                                               .opt_opc   = vecop_list,                                            \
+                                               .fno       = gen_helper_crypto_##NAME,                              \
+                                               .vece      = VECE,                                                  \
+                                               .load_dest = true};                                                 \
+        tcg_gen_gvec_2(rd_ofs, rn_ofs, opr_sz, max_sz, &op);                                                       \
+    }
+
+DO_SHA2_3(sha256h, MO_32)
+DO_SHA2_3(sha256h2, MO_32)
+DO_SHA2_2(sha256su0, MO_32)
+DO_SHA2_3(sha256su1, MO_32)
+DO_SHA2_3(sha512h, MO_64)
+DO_SHA2_3(sha512h2, MO_64)
+DO_SHA2_2(sha512su0, MO_64)
+DO_SHA2_3(sha512su1, MO_64)

@@ -44,6 +44,8 @@ typedef struct DisasContext
     target_ulong pc_save;
     target_ulong page_start;
     uint32_t     insn;
+    /* For fetching code past the current insn. */
+    CPUARMState* env;
     /* Nonzero if this instruction has been conditionally skipped.  */
     int condjmp;
     /* The label that will be jumped to when the instruction is skipped.  */
