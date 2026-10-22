@@ -74,6 +74,7 @@
 #define DECMPFS_TYPE_LZBITMAP_RSRC (14)
 #define DECMPFS_CHUNK_SIZE         (64 * KiB)
 #define DECMPFS_CHUNK_RAW          (0xFF)
+#define DECMPFS_CACHE_SLOTS        (8)
 
 static const uint8_t gpt_apfs_type_guid[16] = {
     0xEF, 0x57, 0x34, 0x7C, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC,
@@ -259,6 +260,13 @@ struct ApfsFile
     uint32_t compression_type;
     uint64_t chunk_table;
     uint32_t chunk_count;
+    struct
+    {
+        uint8_t* data;
+        uint32_t idx;
+        uint64_t used;
+    } cache[DECMPFS_CACHE_SLOTS];
+    uint64_t cache_clock;
 };
 
 static uint64_t apfs_fletcher64(const uint8_t* block)
@@ -798,6 +806,7 @@ static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* pat
     ApfsXattrLookup rsrc    = {.name = APFS_RSRC_XATTR, .name_len = strlen(APFS_RSRC_XATTR)};
     uint8_t         rsrc_hdr[16];
     uint64_t        size;
+    uint32_t        i;
 
     if (!apfs_lookup_xattr(ctx, ino, path, &decmpfs, errp)) { return false; }
     if (!(decmpfs.flags & APFS_XATTR_DATA_EMBEDDED) || decmpfs.len < 16) {
@@ -831,6 +840,7 @@ static bool apfs_open_compressed(ApfsContext* ctx, uint64_t ino, const char* pat
     file->compressed  = true;
     file->size        = size;
     file->chunk_count = (size + DECMPFS_CHUNK_SIZE - 1) / DECMPFS_CHUNK_SIZE;
+    for (i = 0; i < DECMPFS_CACHE_SLOTS; i++) { file->cache[i].idx = UINT32_MAX; }
 
     // The resource fork is just the chunk offsets, one more than there are chunks, then the chunks.
     if (file->compression_type == DECMPFS_TYPE_LZBITMAP_RSRC) { return true; }
@@ -931,6 +941,9 @@ ApfsFile* apfs_open_memory_file(uint8_t* image, size_t image_len, const char* pa
 
 void apfs_file_free(ApfsFile* file)
 {
+    uint32_t i;
+
+    for (i = 0; i < DECMPFS_CACHE_SLOTS; i++) { g_free(file->cache[i].data); }
     g_array_unref(file->extents);
     g_free(file);
 }
@@ -1091,16 +1104,39 @@ static bool apfs_chunk_write(ApfsFile* file, uint32_t idx, const uint8_t* in, ui
                         errp);
 }
 
+static uint8_t* apfs_chunk_get(ApfsFile* file, uint32_t idx, uint64_t len, Error** errp)
+{
+    uint32_t victim = 0;
+    uint32_t i;
+
+    for (i = 0; i < DECMPFS_CACHE_SLOTS; i++) {
+        if (file->cache[i].idx == idx) {
+            file->cache[i].used = ++file->cache_clock;
+            return file->cache[i].data;
+        }
+        if (file->cache[i].used < file->cache[victim].used) { victim = i; }
+    }
+
+    if (file->cache[victim].data == NULL) { file->cache[victim].data = g_malloc(DECMPFS_CHUNK_SIZE); }
+    file->cache[victim].idx = UINT32_MAX;
+    if (!apfs_chunk_read(file, idx, file->cache[victim].data, len, errp)) { return NULL; }
+    file->cache[victim].idx  = idx;
+    file->cache[victim].used = ++file->cache_clock;
+
+    return file->cache[victim].data;
+}
+
 static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* buf, bool write, Error** errp)
 {
-    g_autofree uint8_t* chunk = NULL;
-    uint64_t            pos;
-    uint64_t            end = off + len;
-    uint32_t            idx;
-    uint64_t            chunk_start;
-    uint64_t            chunk_len;
-    uint64_t            local;
-    uint64_t            n;
+    uint8_t* chunk;
+    uint32_t i;
+    uint64_t pos;
+    uint64_t end = off + len;
+    uint32_t idx;
+    uint64_t chunk_start;
+    uint64_t chunk_len;
+    uint64_t local;
+    uint64_t n;
 
     if (!file->compressed) { return apfs_data_io(file, off, len, buf, write, errp); }
 
@@ -1109,7 +1145,6 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
         return false;
     }
 
-    chunk = g_malloc(DECMPFS_CHUNK_SIZE);
     for (pos = off; pos < end; pos += n) {
         idx         = pos / DECMPFS_CHUNK_SIZE;
         chunk_start = (uint64_t)idx * DECMPFS_CHUNK_SIZE;
@@ -1117,11 +1152,17 @@ static bool apfs_file_io(ApfsFile* file, uint64_t off, uint64_t len, uint8_t* bu
         local       = pos - chunk_start;
         n           = MIN(end - pos, chunk_len - local);
 
-        if (!apfs_chunk_read(file, idx, chunk, chunk_len, errp)) { return false; }
+        chunk = apfs_chunk_get(file, idx, chunk_len, errp);
+        if (chunk == NULL) { return false; }
 
         if (write) {
             memcpy(chunk + local, buf + (pos - off), n);
-            if (!apfs_chunk_write(file, idx, chunk, chunk_len, errp)) { return false; }
+            if (!apfs_chunk_write(file, idx, chunk, chunk_len, errp)) {
+                for (i = 0; i < DECMPFS_CACHE_SLOTS; i++) {
+                    if (file->cache[i].idx == idx) { file->cache[i].idx = UINT32_MAX; }
+                }
+                return false;
+            }
         }
         else {
             memcpy(buf + (pos - off), chunk + local, n);
