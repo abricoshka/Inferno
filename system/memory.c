@@ -21,6 +21,7 @@
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
+#include "qemu/rcu_queue.h"
 #include "qemu/qemu-print.h"
 #include "qemu/target-info.h"
 #include "qom/object.h"
@@ -1488,6 +1489,10 @@ uint8_t memory_region_get_dirty_log_mask(const MemoryRegion* mr)
 bool memory_region_is_logging(const MemoryRegion* mr, uint8_t client)
 { return memory_region_get_dirty_log_mask(mr) & (1 << client); }
 
+static QemuMutex iommu_notifier_lock;
+
+static void __attribute__((__constructor__)) iommu_notifier_lock_init(void) { qemu_mutex_init(&iommu_notifier_lock); }
+
 static int memory_region_update_iommu_notify_flags(IOMMUMemoryRegion* iommu_mr, Error** errp)
 {
     IOMMUNotifierFlag       flags = IOMMU_NOTIFIER_NONE;
@@ -1518,9 +1523,11 @@ int memory_region_register_iommu_notifier(MemoryRegion* mr, IOMMUNotifier* n, Er
     assert(n->start <= n->end);
     assert(n->iommu_idx >= 0 && n->iommu_idx < memory_region_iommu_num_indexes(iommu_mr));
 
-    QLIST_INSERT_HEAD(&iommu_mr->iommu_notify, n, node);
+    QEMU_LOCK_GUARD(&iommu_notifier_lock);
+
+    QLIST_INSERT_HEAD_RCU(&iommu_mr->iommu_notify, n, node);
     ret = memory_region_update_iommu_notify_flags(iommu_mr, errp);
-    if (ret) { QLIST_REMOVE(n, node); }
+    if (ret) { QLIST_REMOVE_RCU(n, node); }
     return ret;
 }
 
@@ -1565,7 +1572,9 @@ void memory_region_unregister_iommu_notifier(MemoryRegion* mr, IOMMUNotifier* n)
         memory_region_unregister_iommu_notifier(mr->alias, n);
         return;
     }
-    QLIST_REMOVE(n, node);
+    QEMU_LOCK_GUARD(&iommu_notifier_lock);
+
+    QLIST_REMOVE_RCU(n, node);
     iommu_mr = IOMMU_MEMORY_REGION(mr);
     memory_region_update_iommu_notify_flags(iommu_mr, NULL);
 }
@@ -1614,6 +1623,8 @@ void memory_region_notify_iommu(IOMMUMemoryRegion* iommu_mr, int iommu_idx, cons
     IOMMUNotifier* iommu_notifier;
 
     assert(memory_region_is_iommu(&iommu_mr->parent_obj));
+
+    RCU_READ_LOCK_GUARD();
 
     IOMMU_NOTIFIER_FOREACH (iommu_notifier, iommu_mr) {
         if (iommu_notifier->iommu_idx == iommu_idx) { memory_region_notify_iommu_one(iommu_notifier, &event); }

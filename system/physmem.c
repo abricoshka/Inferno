@@ -522,11 +522,12 @@ MemoryRegion* flatview_translate(FlatView* fv, hwaddr addr, hwaddr* xlat, hwaddr
 
 typedef struct TCGIOMMUNotifier
 {
-    IOMMUNotifier n;
-    MemoryRegion* mr;
-    CPUState*     cpu;
-    int           iommu_idx;
-    bool          active;
+    struct rcu_head rcu;
+    IOMMUNotifier   n;
+    MemoryRegion*   mr;
+    CPUState*       cpu;
+    int             iommu_idx;
+    bool            active;
 } TCGIOMMUNotifier;
 
 static void tcg_iommu_flush_work(CPUState* cpu, run_on_cpu_data data) { tlb_flush(cpu); }
@@ -593,7 +594,7 @@ void tcg_iommu_free_notifier_list(CPUState* cpu)
     for (i = 0; i < cpu->iommu_notifiers->len; i++) {
         notifier = g_array_index(cpu->iommu_notifiers, TCGIOMMUNotifier*, i);
         memory_region_unregister_iommu_notifier(notifier->mr, &notifier->n);
-        g_free(notifier);
+        g_free_rcu(notifier, rcu);
     }
     g_array_free(cpu->iommu_notifiers, true);
 }

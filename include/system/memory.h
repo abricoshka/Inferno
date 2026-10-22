@@ -768,7 +768,8 @@ struct IOMMUMemoryRegion
     IOMMUNotifierFlag iommu_notify_flags;
 };
 
-#define IOMMU_NOTIFIER_FOREACH(n, mr) QLIST_FOREACH ((n), &(mr)->iommu_notify, node)
+/* Under the RCU read lock. */
+#define IOMMU_NOTIFIER_FOREACH(n, mr) QLIST_FOREACH_RCU ((n), &(mr)->iommu_notify, node)
 
 #define MEMORY_LISTENER_PRIORITY_MIN         0
 #define MEMORY_LISTENER_PRIORITY_ACCEL       10
@@ -1608,7 +1609,8 @@ void memory_region_iommu_replay(IOMMUMemoryRegion* iommu_mr, IOMMUNotifier* n);
  *
  * @mr: the memory region which was observed and for which notify_stopped()
  *      needs to be called
- * @n: the notifier to be removed.
+ * @n: the notifier to be removed. Readers may still see it until an RCU grace period has passed, so free it with
+ *     call_rcu().
  */
 void memory_region_unregister_iommu_notifier(MemoryRegion* mr, IOMMUNotifier* n);
 
