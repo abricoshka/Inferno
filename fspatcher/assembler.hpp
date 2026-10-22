@@ -75,12 +75,6 @@ class Assembler
     void write_inst(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target, const INST inst)
     { this->patcher.write(file, header.vm_addr_to_file_off(target), u32_to_bytes(inst)); }
 
-    void write_inst_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target, const INST inst)
-    {
-        this->write_inst(file, header, target, inst);
-        target += sizeof(INST_BYTES);
-    }
-
     static constexpr INST NOP_INST       = 0xD503201FU;
     static constexpr INST RET_INST       = 0xD65F03C0U;
     static constexpr INST MOVZ_INST      = 0x52800000U;
@@ -145,10 +139,38 @@ class Assembler
 
     static auto make_blr(const GPReg reg) -> INST { return BLR_INST | (INST(reg) << 5); }
 
+    static constexpr std::int64_t BL_RANGE = 128 * 1024 * 1024;
+
+    static auto make_bl(const std::uint64_t inst_addr, const std::uint64_t target) -> INST
+    {
+        const auto off = std::int64_t(target - inst_addr);
+        if (off < -BL_RANGE || off >= BL_RANGE || (off & 3) != 0) { throw std::invalid_argument("invalid bl target"); }
+        return BL_INST | (INST(std::uint64_t(off) >> 2) & ~BL_INST_MASK);
+    }
+
 public:
     explicit Assembler(Patcher& patcher) :
         patcher(patcher)
     { }
+
+    void write_inst_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& target, const INST inst)
+    {
+        this->write_inst(file, header, target, inst);
+        target += sizeof(INST_BYTES);
+    }
+
+    void write_bl_incr(const FileRef& file, const DyldCacheHeader& header, std::uint64_t& address,
+                       const std::uint64_t target)
+    { this->write_inst_incr(file, header, address, make_bl(address, target)); }
+
+    static auto read_bl_target(std::istream& stream, const DyldCacheHeader& header, const std::uint64_t inst_addr)
+        -> std::uint64_t
+    {
+        seek_stream(stream, header.vm_addr_to_file_off(inst_addr));
+        const auto inst = read_u32_le(stream);
+        if ((inst & BL_INST_MASK) != BL_INST) { throw std::invalid_argument("not a bl instruction"); }
+        return disas_bl(inst_addr, inst);
+    }
 
     void write_movz(const FileRef& file, const DyldCacheHeader& header, const std::uint64_t target, const GPReg reg,
                     const bool wide, const std::uint16_t imm, const MOVZShift shift = MOVZShift::_0)

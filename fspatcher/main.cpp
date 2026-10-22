@@ -120,6 +120,95 @@ namespace
             }
         }
 
+        void track_iosurface_surfaces(std::istream& stream)
+        {
+            static constexpr std::uint64_t                            FUNC_SIZE = 0xC0;
+            static constexpr std::uint32_t                            BL = 0;    // Placeholder for the next callee.
+            static constexpr std::array<std::uint32_t, FUNC_SIZE / 4> CODE{
+                0xD503237F,    // pacibsp
+                0xA9BB57F6,    // stp x22, x21, [sp, #-0x50]!
+                0xA9014FF4,    // stp x20, x19, [sp, #0x10]
+                0xA9027BFD,    // stp fp, lr, [sp, #0x20]
+                0x910083FD,    // add fp, sp, #0x20
+                0x7100043F,    // cmp w1, #1
+                0x54000121,    // b.ne fail
+                0xA9030FE2,    // stp x2, x3, [sp, #0x30]
+                0xAA0403F3,    // mov x19, x4
+                0xAA0003F4,    // mov x20, x0
+                0xAA0403E0,    // mov x0, x4
+                0x52800001,    // mov w1, #0
+                0xD2800002,    // mov x2, #0
+                BL,            // bl IOSurfaceLock
+                0x340000E0,    // cbz w0, ok
+                0xD2800015,    // fail: mov x21, #0
+                0xAA1503E0,    // ret: mov x0, x21
+                0xA9427BFD,    // ldp fp, lr, [sp, #0x20]
+                0xA9414FF4,    // ldp x20, x19, [sp, #0x10]
+                0xA8C557F6,    // ldp x22, x21, [sp], #0x50
+                0xD65F0FFF,    // retab
+                0xAA1303E0,    // ok: mov x0, x19
+                BL,            // bl IOSurfaceGetBaseAddress
+                0xAA0003F5,    // mov x21, x0
+                0xAA1303E0,    // mov x0, x19
+                BL,            // bl IOSurfaceGetBytesPerRow
+                0xAA0003F6,    // mov x22, x0
+                0xAA1303E0,    // mov x0, x19
+                BL,            // bl IOSurfaceGetWidth
+                0xF90023E0,    // str x0, [sp, #0x40]
+                0xAA1303E0,    // mov x0, x19
+                BL,            // bl IOSurfaceGetHeight
+                0xAA0003E6,    // mov x6, x0
+                0xAA1503E1,    // mov x1, x21
+                0xAA1603E2,    // mov x2, x22
+                0xA94313E3,    // ldp x3, x4, [sp, #0x30]
+                0xF94023E5,    // ldr x5, [sp, #0x40]
+                0x52800007,    // mov w7, #0
+                BL,            // bl SWContext::create_surface_from_data
+                0xAA0003F5,    // mov x21, x0
+                0xB4FFFD00,    // cbz x0, ret
+                0xF90062B3,    // str x19, [x21, #0xc0]
+                0xAA1303E0,    // mov x0, x19
+                BL,            // bl CFRetain
+                0xAA1403E0,    // mov x0, x20
+                0xAA1503E1,    // mov x1, x21
+                BL,            // bl Context::track_surface
+                0x17FFFFE1,    // b ret
+            };
+
+            // iOS <=18 doesn't track surfaces.
+            const auto track_surface = this->image.symbols.find("__ZN2CA3OGL7Context13track_surfaceEPNS0_7SurfaceE");
+            if (track_surface == this->image.symbols.end()) { return; }
+
+            const auto start =
+                this->image.resolve_sym("__ZN2CA3OGL9SWContext29create_surface_from_iosurfaceEiiiP11__IOSurface");
+
+            std::array<std::uint64_t, 8> callees{};
+            auto                         bl = start;
+            for (std::size_t i = 0; i < callees.size() - 1; ++i) {
+                bl          = Assembler::find_bl(stream, this->image.header, bl, -1ULL, false,
+                                                 std::uint32_t((start + FUNC_SIZE - bl) / 4));
+                callees[i]  = Assembler::read_bl_target(stream, this->image.header, bl);
+                bl         += 4;
+            }
+            if (bl != start + FUNC_SIZE - 4
+                || callees[5] != this->image.resolve_sym("__ZN2CA3OGL9SWContext24create_surface_from_dataEPvliiiib"))
+            {
+                throw std::runtime_error("unexpected `SWContext::create_surface_from_iosurface` layout");
+            }
+            callees.back() = track_surface->second;
+
+            auto address = start;
+            auto callee  = callees.begin();
+            for (const auto inst : CODE) {
+                if (inst == BL) {
+                    this->assembler.write_bl_incr(this->image.file, this->image.header, address, *callee++);
+                }
+                else {
+                    this->assembler.write_inst_incr(this->image.file, this->image.header, address, inst);
+                }
+            }
+        }
+
         void nullify(std::uint64_t addr)
         {
             this->assembler.write_movz_incr(this->image.file, this->image.header, addr, GPReg::R0, true, 0);
@@ -156,6 +245,14 @@ namespace
                 this->nullify("__ZN2CA12WindowServer10EAGLServer8rendererEv",
                               "__ZN2CA12WindowServer11AccelServer8rendererEv");
                 this->nullify(asyncDispatchRenderer);
+
+                // Unlike `MetalContext`, `SWContext` doesn't track IOSurface surfaces, which `push_surface` asserts on.
+                try {
+                    this->track_iosurface_surfaces(cache_file);
+                }
+                catch (const std::exception& e) {
+                    std::cerr << "Warning: Failed to fix `SWContext` IOSurface surface tracking: " << e.what() << ".\n";
+                }
             }
         }
     };
