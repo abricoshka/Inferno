@@ -999,6 +999,10 @@ void ck_patch_txm(MachoHeader64* hdr)
     apple_boot_get_kc_bounds(hdr, NULL, &base, NULL, NULL, NULL);
     g_autofree CKPatcherRange* text =
         ck_patcher_range_from_ptr("__TEXT_EXEC", apple_boot_get_macho_buffer(hdr) + seg->vmaddr - base, seg->vmsize);
+    text->addr = seg->vmaddr;
+    g_autofree CKPatcherRange* strings =
+        ck_patcher_range_from_ptr("TXM constants", apple_boot_get_macho_buffer(hdr), seg->vmaddr - base);
+    strings->addr = base;
 
     //   mov w0, #0x293e ; movk w0, #0x3, lsl #16   ->   mov w0, #0x3e ; nop
     static const uint8_t pattern[] = {
@@ -1050,6 +1054,9 @@ void ck_patch_txm(MachoHeader64* hdr)
     static const uint8_t cs_repl[] = {NOP_BYTES};
     ck_patcher_find_replace(text, "code signature bypass (TXM)", cs_pattern, cs_pattern_mask, sizeof(cs_pattern),
                             sizeof(uint32_t), 1, cs_repl, NULL, 4, sizeof(cs_repl));
+
+    ck_kp_stub_func_by_string(text, strings, "img4 manifest signature and identity evaluation bypass (TXM)",
+                              "manifest evaluation: starting signature and identity evaluation");
 }
 
 /// Patch `buffer` and find the span that changed; returns false if nothing did.
