@@ -93,6 +93,7 @@ typedef struct
     bool               by_iova;
 } HVFPrivateRange;
 
+static QemuMutex   hvf_private_lock;
 static GPtrArray*  hvf_private_spaces;
 static GHashTable* hvf_private_pages;
 
@@ -115,7 +116,9 @@ static gboolean hvf_private_page_drop(gpointer key, gpointer value, gpointer opa
 
 static void hvf_private_drop(HVFPrivateRange range)
 {
-    if (hvf_private_pages != NULL) { g_hash_table_foreach_remove(hvf_private_pages, hvf_private_page_drop, &range); }
+    QEMU_LOCK_GUARD(&hvf_private_lock);
+
+    g_hash_table_foreach_remove(hvf_private_pages, hvf_private_page_drop, &range);
 }
 
 static void hvf_private_drop_section(HVFPrivateSpace* space, MemoryRegionSection* section)
@@ -188,17 +191,29 @@ bool hvf_map_private_page(AddressSpace* as, hwaddr ipa, bool is_write)
     hwaddr              base      = ipa & ~(page_size - 1);
     hv_memory_flags_t   flags     = HV_MEMORY_READ | HV_MEMORY_EXEC;
     IOMMUMemoryRegion*  iommu     = NULL;
-    int                 iommu_idx = 0;
     hwaddr              iova      = 0;
     bool                writable  = true;
     MemoryRegionSection section;
+    HVFPrivateSpace*    space;
     HVFPrivatePage*     page;
 
-    if (as == &address_space_memory || (hvf_private_pages != NULL && g_hash_table_contains(hvf_private_pages, &base))) {
-        return false;
+    if (as == &address_space_memory) { return false; }
+
+    WITH_RCU_READ_LOCK_GUARD()
+    {
+        bool candidate;
+
+        section   = memory_region_find(as->root, base, page_size);
+        candidate = section.mr != NULL && (memory_region_is_iommu(section.mr) || memory_region_is_ram(section.mr));
+        if (section.mr != NULL) { memory_region_unref(section.mr); }
+        if (!candidate) { return false; }
     }
 
+    BQL_LOCK_GUARD();
+    QEMU_LOCK_GUARD(&hvf_private_lock);
     RCU_READ_LOCK_GUARD();
+
+    if (g_hash_table_contains(hvf_private_pages, &base)) { return false; }
 
     section = memory_region_find(get_system_memory(), base, page_size);
     if (section.mr != NULL) {
@@ -206,14 +221,17 @@ bool hvf_map_private_page(AddressSpace* as, hwaddr ipa, bool is_write)
         return false;
     }
 
+    space   = hvf_private_space(as);
     section = memory_region_find(as->root, base, page_size);
     if (section.mr != NULL && memory_region_is_iommu(section.mr)) {
+        int           iommu_idx;
         IOMMUTLBEntry entry;
 
         iommu     = IOMMU_MEMORY_REGION(section.mr);
         iommu_idx = memory_region_iommu_attrs_to_index(iommu, MEMTXATTRS_UNSPECIFIED);
         iova      = section.offset_within_region;
-        entry     = memory_region_get_iommu_class_nocheck(iommu)->translate(iommu, iova, IOMMU_NONE, iommu_idx);
+        hvf_private_watch_iommu(space, iommu, iommu_idx);
+        entry = memory_region_get_iommu_class_nocheck(iommu)->translate(iommu, iova, IOMMU_NONE, iommu_idx);
         memory_region_unref(section.mr);
         section.mr = NULL;
 
@@ -232,17 +250,11 @@ bool hvf_map_private_page(AddressSpace* as, hwaddr ipa, bool is_write)
         return false;
     }
 
-    if (hvf_private_pages == NULL) {
-        hvf_private_spaces = g_ptr_array_new();
-        hvf_private_pages  = g_hash_table_new(g_int64_hash, g_int64_equal);
-    }
-
     page        = g_new0(HVFPrivatePage, 1);
     page->ipa   = base;
-    page->space = hvf_private_space(as);
+    page->space = space;
     page->iommu = iommu;
     page->iova  = iova;
-    if (iommu != NULL) { hvf_private_watch_iommu(page->space, iommu, iommu_idx); }
 
     assert_hvf_ok(hv_vm_map((uint8_t*)memory_region_get_ram_ptr(section.mr) + section.offset_within_region, base,
                             page_size, flags));
@@ -444,6 +456,10 @@ static int hvf_accel_init(AccelState* as, MachineState* ms)
     }
 
     QTAILQ_INIT(&s->hvf_sw_breakpoints);
+
+    qemu_mutex_init(&hvf_private_lock);
+    hvf_private_spaces = g_ptr_array_new();
+    hvf_private_pages  = g_hash_table_new(g_int64_hash, g_int64_equal);
 
     hvf_state = s;
     memory_listener_register(&hvf_memory_listener, &address_space_memory);
