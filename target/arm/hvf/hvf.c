@@ -945,6 +945,7 @@ static bool hvf_sysreg_read_cp(CPUState* cpu, const char* cpname, uint32_t reg, 
         if (ri->accessfn) {
             if (ri->accessfn(env, ri, true) != CP_ACCESS_OK) { return false; }
         }
+        BQL_LOCK_GUARD_IF(ri->type & ARM_CP_IO);
         if (ri->type & ARM_CP_CONST) { *val = ri->resetvalue; }
         else if (ri->readfn) {
             *val = ri->readfn(env, ri);
@@ -972,6 +973,7 @@ static bool hvf_sysreg_write_cp(CPUState* cpu, const char* cpname, uint32_t reg,
         if (ri->accessfn) {
             if (ri->accessfn(env, ri, false) != CP_ACCESS_OK) { return false; }
         }
+        BQL_LOCK_GUARD_IF(ri->type & ARM_CP_IO);
         if (ri->writefn) { ri->writefn(env, ri, val); }
         else {
             raw_write(env, ri, val);
@@ -1217,6 +1219,7 @@ static bool hvf_sysreg_write_impdef(CPUState* cpu, uint32_t reg, uint64_t val)
     if (ri->type & ARM_CP_CONST) { return true; }
     if (ri->writefn == NULL) { raw_write(env, ri, val); }
     else if (ri->type & ARM_CP_IO) {
+        BQL_LOCK_GUARD();
         ri->writefn(env, ri, val);
     }
     else {
