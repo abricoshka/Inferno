@@ -953,6 +953,7 @@ static void virtualhere_accept(QIONetListener* listener, QIOChannelSocket* cioc,
     conn->ioc = QIO_CHANNEL(cioc);
     object_ref(OBJECT(conn->ioc));
     qio_channel_set_blocking(conn->ioc, false, NULL);
+    qio_channel_set_delay(conn->ioc, false);
     qio_channel_set_follow_coroutine_ctx(conn->ioc, true);
     conn->heartbeat_timer = aio_timer_new(s->ctx, QEMU_CLOCK_REALTIME, SCALE_MS, vh_heartbeat_cb, conn);
 
