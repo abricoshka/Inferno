@@ -29,6 +29,8 @@
 #include "qemu/bitops.h"
 #include "system/dma.h"
 #include "qobject/qdict.h"
+#include "qemu/lockable.h"
+#include "qemu/rcu_queue.h"
 
 #if 0
     #define DPRINTF(fmt, ...)                             \
@@ -198,6 +200,7 @@ struct AppleDARTMapperInstance
     AppleDARTInstance           common;
     AppleDARTIOMMUMemoryRegion* iommus[DART_MAX_STREAMS];
     AppleDARTDARTRegs           regs;
+    QemuMutex                   tlb_op_lock;
     uint32_t                    tlb_gen[DART_MAX_STREAMS];
     AppleDARTTLBEntry           tlb[DART_MAX_STREAMS][DART_TLB_ENTRIES];
 };
@@ -207,6 +210,7 @@ struct AppleDARTState
     SysBusDevice        parent_obj;
     const char*         name;
     qemu_irq            irq;
+    QemuMutex           irq_lock;
     AppleDARTInstance** instances;
     uint32_t            num_instances;
     uint32_t            page_size;
@@ -246,13 +250,15 @@ static void apple_dart_update_irq(AppleDARTState* dart)
     AppleDARTInstance*       instance;
     AppleDARTMapperInstance* mapper;
 
+    QEMU_LOCK_GUARD(&dart->irq_lock);
+
     for (uint32_t i = 0; i < dart->num_instances; i++) {
         instance = dart->instances[i];
         if (instance->type != DART_DART) { continue; }
 
         mapper = container_of(instance, AppleDARTMapperInstance, common);
 
-        if (mapper->regs.error_status == 0) { continue; }
+        if (qatomic_read(&mapper->regs.error_status) == 0) { continue; }
 
         apple_dart_raise_irq(dart);
         return;
@@ -344,7 +350,7 @@ static void apple_dart_notify_remap(AppleDARTMapperInstance* mapper, uint32_t in
 
     iommu = &mapper->iommus[index]->iommu;
 
-    if (QLIST_EMPTY(&iommu->iommu_notify)) { return; }
+    if (QLIST_EMPTY_RCU(&iommu->iommu_notify)) { return; }
 
     event.type            = IOMMU_NOTIFIER_UNMAP;
     event.entry.target_as = &address_space_memory;
@@ -352,6 +358,8 @@ static void apple_dart_notify_remap(AppleDARTMapperInstance* mapper, uint32_t in
     event.entry.perm      = IOMMU_NONE;
     event.entry.addr_mask = HWADDR_MAX;
     memory_region_notify_iommu(iommu, 0, event);
+
+    RCU_READ_LOCK_GUARD();
 
     IOMMU_NOTIFIER_FOREACH (notifier, iommu) {
         if (notifier->notifier_flags & IOMMU_NOTIFIER_MAP) { memory_region_iommu_replay(iommu, notifier); }
@@ -377,7 +385,9 @@ static void apple_dart_mapper_reg_write(void* opaque, hwaddr addr, uint64_t data
             mapper->common.id, addr, data);
 
     switch (addr >> 2) {
-        case R_DART_TLB_OP:
+        case R_DART_TLB_OP: {
+            QEMU_LOCK_GUARD(&mapper->tlb_op_lock);
+
             apple_dart_notify_remap_all(mapper);
 
             if (REG_FIELD_EX32(val, DART_TLB_OP, OP) != DART_TLB_OP_INVALIDATE
@@ -408,6 +418,7 @@ static void apple_dart_mapper_reg_write(void* opaque, hwaddr addr, uint64_t data
 
             qatomic_and(&mapper->regs.tlb_op, ~R_DART_TLB_OP_BUSY_MASK);
             break;
+        }
         case R_DART_TLB_OP_SET_0_LOW:
             if (!REG_FIELD_EX32(qatomic_read(&mapper->regs.tlb_op), DART_TLB_OP, BUSY)) {
                 qatomic_set__nocheck(&mapper->regs.tlb_op_set[0],
@@ -520,6 +531,8 @@ static const MemoryRegionOps apple_dart_dummy_reg_ops = {
 static void apple_dart_mapper_set_error(AppleDARTMapperInstance* mapper, hwaddr addr, uint32_t status, uint32_t sid)
 {
     uint32_t old;
+
+    QEMU_LOCK_GUARD(&mapper->common.dart->irq_lock);
 
     qatomic_set__nocheck(&mapper->regs.error_address, addr);
 
@@ -859,6 +872,8 @@ static void apple_dart_realize(DeviceState* dev, Error** errp)
     // Realizing gives the device a parent if it had none.
     dart->name = object_get_canonical_path_component(OBJECT(dev));
 
+    qemu_mutex_init(&dart->irq_lock);
+
     assert_false(dart->page_size == 0);
     assert_false(dart->num_instances == 0);
     assert_false(dart->sid_mask == 0);
@@ -1067,8 +1082,10 @@ void apple_dart_set_dart_instance(AppleDARTState* dart, uint32_t i, hwaddr regs_
                                  TYPE_APPLE_DART_IOMMU_MEMORY_REGION, OBJECT(dart), name, 1ULL << DART_MAX_VA_BITS);
     }
     dart->instances[i] = instance;
+    qemu_mutex_init(&mapper->tlb_op_lock);
     memory_region_init_io(&instance->iomem, OBJECT(dart), &apple_dart_mapper_reg_ops, instance, TYPE_APPLE_DART ".reg",
                           0x4000);
+    memory_region_enable_lockless_io(&instance->iomem);
     sysbus_init_mmio(SYS_BUS_DEVICE(dart), &instance->iomem);
     DPRINTF("%s: DART %s instance %d: %s\n", __func__, instance->dart->name, i, dart_instance_name[instance->type]);
     sysbus_mmio_map(SYS_BUS_DEVICE(dart), i, regs_addr);
