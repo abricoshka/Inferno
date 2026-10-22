@@ -90,6 +90,7 @@ typedef struct DWC3Endpoint
     uint32_t      intrnum;
     uint32_t      event_en;
     uint32_t      xfer_resource_idx;
+    uint32_t      max_packet_size;
     uint8_t       dseqnum;
     bool          stalled;
     bool          not_ready;
@@ -120,6 +121,8 @@ typedef struct DWC3State
     bool            addr_pending;
     qemu_irq        irq;
     QemuRecMutex    lock;
+    QEMUBH*         work_bh;
+    QSIMPLEQ_HEAD(, DWC3Work) work;
 
     DWC3EventRing intrs[DWC3_NUM_INTRS];
     uint32_t      numintrs;
