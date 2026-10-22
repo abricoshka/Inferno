@@ -121,6 +121,9 @@ static int dwc3_packet_find_epid(DWC3State* s, USBPacket* p)
     return -1;
 }
 
+static bool dwc3_packet_stale(DWC3Endpoint* ep, USBPacket* p)
+{ return p->actual_length > 0 && ep->fed_gen != ep->xfer_gen; }
+
 static int dwc3_device_intr_level(DWC3State* s, int n)
 {
     if (s->gevntsiz(n) & GEVNTSIZ_EVNTINTRPTMASK) { return 0; }
@@ -1632,6 +1635,7 @@ static void usb_dwc3_depcmdreg_write(void* opaque, hwaddr addr, int index, uint6
                     if (ep->xfer) {
                         dwc3_td_free(s, ep->xfer);
                         ep->xfer = NULL;
+                        ep->xfer_gen++;
                         dwc3_work_schedule(s, DWC3_WORK_END_TRANSFER, ep, 0);
                     }
                     else {
@@ -1800,6 +1804,13 @@ static void dwc3_process_packet(DWC3State* s, DWC3Endpoint* ep, USBPacket* p)
             "stalled: %d\n",
             __func__, p->pid, ep->epid, p->id, p->actual_length, usb_packet_size(p), ep->stalled);
 
+    if (p->state == USB_PACKET_ASYNC && dwc3_packet_stale(ep, p)) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: ep %d: transfer ended under a partially delivered packet (%d/%zu)\n",
+                      __func__, ep->epid, p->actual_length, usb_packet_size(p));
+        p->status = USB_RET_IOERROR;
+        goto complete;
+    }
+
     // apparently for the dwc3_ep_run callpath for whatever reason
     if (ep->stalled && p->actual_length == 0) {
         p->status = USB_RET_STALL;
@@ -1926,6 +1937,10 @@ static void dwc3_process_packet(DWC3State* s, DWC3Endpoint* ep, USBPacket* p)
         // can either return xfer_size, which also can be zero, or return -1 in
         // case of an error
         int xfer_size = dwc3_bd_copy(s, desc, p);
+        if (xfer_size == -1) { p->status = USB_RET_IOERROR; }
+        else if (xfer_size > 0) {
+            ep->fed_gen = ep->xfer_gen;
+        }
         if (desc->ended || xfer_size == -1) {
             QTAILQ_REMOVE(&xfer->buffers, desc, queue);
             xfer->count--;
@@ -2142,9 +2157,9 @@ static void dwc3_ep_configure(DWC3State* s, DWC3Endpoint* ep, uint32_t par0)
 
 static void dwc3_uep_cancel(USBDevice* udev, USBEndpoint* uep)
 {
-    USBPacket* p = NULL;
+    USBPacket* p = QTAILQ_FIRST(&uep->queue);
 
-    QTAILQ_FOREACH (p, &uep->queue, queue) {
+    if (p != NULL) {
         p->status = USB_RET_IOERROR;
         usb_packet_complete(udev, p);
     }
@@ -2152,9 +2167,21 @@ static void dwc3_uep_cancel(USBDevice* udev, USBEndpoint* uep)
 
 static void dwc3_ep_end_transfer(DWC3State* s, DWC3Endpoint* ep)
 {
+    USBPacket* p;
+
     QEMU_LOCK_GUARD(&s->lock);
 
-    if (ep->uep != NULL) { dwc3_uep_cancel(&s->device.parent_obj, ep->uep); }
+    if (ep->uep == NULL) { return; }
+
+    p = QTAILQ_FIRST(&ep->uep->queue);
+    if (p == NULL || p->state != USB_PACKET_ASYNC || (p->actual_length > 0 && !dwc3_packet_stale(ep, p))) { return; }
+
+    if (p->actual_length > 0) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: ep %d: transfer ended under a partially delivered packet (%d/%zu)\n",
+                      __func__, ep->epid, p->actual_length, usb_packet_size(p));
+    }
+    p->status = USB_RET_IOERROR;
+    usb_packet_complete(&s->device.parent_obj, p);
 }
 
 static void dwc3_reset_endpoints(DWC3State* s)

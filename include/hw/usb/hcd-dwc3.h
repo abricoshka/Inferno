@@ -91,6 +91,8 @@ typedef struct DWC3Endpoint
     uint32_t      event_en;
     uint32_t      xfer_resource_idx;
     uint32_t      max_packet_size;
+    uint32_t      xfer_gen;
+    uint32_t      fed_gen;
     uint8_t       dseqnum;
     bool          stalled;
     bool          not_ready;
