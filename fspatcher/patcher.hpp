@@ -177,6 +177,7 @@ public:
     {
         for (auto& cache_entries : this->write_queue) {
             auto file = cache_entries.first.open();
+            if (read_cstrn(seek_stream(file, 0), 4) != "dyld") { continue; }
 
             const auto                sig_off  = std::streamoff(read_u64_le(seek_stream(file, 0x28)));
             const auto                sig_size = read_u64_le(file);

@@ -20,8 +20,10 @@
 #include "analyser.hpp"
 #include "assembler.hpp"
 #include "patcher.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <CLI/CLI.hpp>
 
 namespace
@@ -395,6 +397,123 @@ namespace
         }
     };
 
+    // Temporary: without a baseband, these block forever on ARI requests, and their clients with them.
+    class LaunchdPatches
+    {
+        struct Object
+        {
+            std::uint8_t type;
+            std::size_t  count;
+            std::size_t  pos;
+        };
+
+        Patcher&                  patcher;
+        FileRef                   file;
+        std::vector<std::uint8_t> data;
+        std::size_t               offset_size{0};
+        std::size_t               ref_size{0};
+        std::size_t               offset_table{0};
+        std::uint64_t             top{0};
+
+        auto be(const std::size_t pos, const std::size_t size) const -> std::uint64_t
+        {
+            std::uint64_t value = 0;
+            for (std::size_t i = 0; i < size; ++i) { value = (value << 8) | this->data.at(pos + i); }
+            return value;
+        }
+
+        auto object(const std::uint64_t index) const -> Object
+        {
+            auto        pos = std::size_t(this->be(this->offset_table + index * this->offset_size, this->offset_size));
+            const auto  marker = this->data.at(pos++);
+            std::size_t count  = marker & 0xF;
+            if (count == 0xF) {
+                const auto int_size  = std::size_t(1) << (this->data.at(pos++) & 0xF);
+                count                = std::size_t(this->be(pos, int_size));
+                pos                 += int_size;
+            }
+            return {std::uint8_t(marker >> 4), count, pos};
+        }
+
+        auto ref(const Object& obj, const std::size_t i) const -> std::uint64_t
+        { return this->be(obj.pos + i * this->ref_size, this->ref_size); }
+
+        auto ascii_string(const std::uint64_t index) const -> std::string_view
+        {
+            const auto obj = this->object(index);
+            if (obj.type != 0x5 || obj.pos + obj.count > this->data.size()) { return {}; }
+            return {reinterpret_cast<const char*>(this->data.data() + obj.pos), obj.count};
+        }
+
+        auto find(const std::uint64_t dict, const std::string_view key) const -> std::optional<std::uint64_t>
+        {
+            const auto obj = this->object(dict);
+            if (obj.type != 0xD) { throw std::runtime_error("not a dictionary"); }
+            for (std::size_t i = 0; i < obj.count; ++i) {
+                if (this->ascii_string(this->ref(obj, i)) == key) { return this->ref(obj, obj.count + i); }
+            }
+            return std::nullopt;
+        }
+
+        void corrupt(const std::uint64_t index)
+        {
+            if (this->ascii_string(index).empty()) { throw std::runtime_error("not an ASCII string"); }
+            this->patcher.write(this->file, std::streamoff(this->object(index).pos), std::array<std::uint8_t, 1>{'_'});
+        }
+
+    public:
+        static constexpr const char* PATH = "/System/Library/xpc/launchd.plist";
+
+        LaunchdPatches(Storage& storage, Patcher& patcher) :
+            patcher(patcher),
+            file(storage, PATH)
+        {
+            auto stream = this->file.open();
+            stream.seekg(0, std::ios::end);
+            this->data.resize(std::size_t(stream.tellg()));
+            read_stream(seek_stream(stream, 0), this->data.data(), std::streamsize(this->data.size()));
+            if (this->data.size() < 40
+                || std::string_view(reinterpret_cast<const char*>(this->data.data()), 8) != "bplist00")
+            {
+                throw std::runtime_error("not a binary plist");
+            }
+
+            const auto trailer = this->data.size() - 32;
+            this->offset_size  = this->data[trailer + 6];
+            this->ref_size     = this->data[trailer + 7];
+            this->top          = this->be(trailer + 16, 8);
+            this->offset_table = std::size_t(this->be(trailer + 24, 8));
+        }
+
+        void apply()
+        {
+            static constexpr std::array<std::string_view, 5> LABELS{
+                "com.apple.CommCenter", "com.apple.CommCenterMobileHelper", "com.apple.CommCenterRootHelper",
+                "com.apple.locationd",  "com.apple.voicemail.vmd",
+            };
+
+            const auto daemons = this->find(this->top, "LaunchDaemons");
+            if (!daemons) { throw std::out_of_range("no launch daemons"); }
+            const auto jobs = this->object(*daemons);
+            for (std::size_t i = 0; i < jobs.count; ++i) {
+                const auto job   = this->ref(jobs, jobs.count + i);
+                const auto label = this->find(job, "Label");
+                if (!label || std::find(LABELS.begin(), LABELS.end(), this->ascii_string(*label)) == LABELS.end()) {
+                    continue;
+                }
+
+                if (const auto services = this->find(job, "MachServices")) {
+                    const auto obj = this->object(*services);
+                    for (std::size_t j = 0; j < obj.count; ++j) { this->corrupt(this->ref(obj, j)); }
+                }
+                if (const auto program = this->find(job, "Program")) { this->corrupt(*program); }
+                if (const auto arguments = this->find(job, "ProgramArguments")) {
+                    this->corrupt(this->ref(this->object(*arguments), 0));
+                }
+            }
+        }
+    };
+
     auto run(const int argc, char* argv[])
     {
         std::filesystem::path disk_path;
@@ -430,6 +549,7 @@ namespace
         targets.reserve(analyser.caches.size());
         for (const auto& cache : analyser.caches) { targets.emplace_back(dyld_storage, cache.first); }
         if (analyser.symbols_cache) { targets.emplace_back(dyld_storage, analyser.symbols_cache->first); }
+        targets.emplace_back(storage, LaunchdPatches::PATH);
 
         for (const auto& target : targets) {
             if (Patcher::revert(target)) { std::cout << "Reverted " << target.string() << ".\n"; }
@@ -464,6 +584,12 @@ namespace
             }
         }
         if (unredact_logs) { LibSystemTracePatches(analyser, assembler).apply(); }
+        try {
+            LaunchdPatches(storage, patcher).apply();
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to apply launchd patches: " << e.what() << ".\n";
+        }
         std::cout << "Patches built successfully.\n";
 
         patcher.rehash();
