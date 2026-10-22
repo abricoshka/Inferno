@@ -683,6 +683,75 @@ static void ck_kp_img4_patches(CKPatcherRange* range)
                              sizeof(uint32_t), 1, ck_kp_img4_callback);
 }
 
+static vaddr ck_kp_find_cstring(CKPatcherRange* range, const char* sub)
+{
+    size_t len = strlen(sub);
+
+    if (range == NULL || len == 0) { return 0; }
+    for (vaddr i = 0; i + len <= range->length; ++i) {
+        vaddr start;
+        if (memcmp(range->ptr + i, sub, len) != 0) { continue; }
+        for (start = i; start > 0 && range->ptr[start - 1] != 0; --start) { }
+        return range->addr + start;
+    }
+    return 0;
+}
+
+static bool ck_kp_stub_func_by_string(CKPatcherRange* text, CKPatcherRange* strings, const char* name,
+                                      const char* str)
+{
+    vaddr sva = ck_kp_find_cstring(strings, str);
+    if (sva == 0) { return false; }
+
+    for (vaddr off = 0; off + 2 * sizeof(uint32_t) <= text->length; off += sizeof(uint32_t)) {
+        vaddr    target;
+        uint8_t* start;
+
+        if (!ck_patcher_adrp_add_va(text->ptr + off, text->addr + off, &target) || target != sva) { continue; }
+
+        start = ck_patcher_find_prev_insn(text->ptr + off, 200, PACIBSP, 0xFFFFFFFF, 0);
+        if (start == NULL) {
+            error_report("`%s`: failed to find function start", name);
+            return false;
+        }
+        stl_le_p(start, MOV_W0_WZR);
+        stl_le_p(start + sizeof(uint32_t), RET);
+        info_report("`%s` patch applied in `%s`.", name, text->name);
+        return true;
+    }
+
+    warn_report("`%s`: found the string but not its reference", name);
+    return false;
+}
+
+static void ck_kp_image4_eval_patches(CKPatcherRange* text, CKPatcherRange* strings)
+{
+    static const uint8_t env_pattern[] = {
+        0x5F, 0x24, 0x03, 0xD5,    // bti c
+        0x1F, 0x04, 0x00, 0x71,    // cmp w0, #1
+        0x41, 0x00, 0x00, 0x54,    // b.ne #8
+        0xC0, 0x03, 0x5F, 0xD6,    // ret
+        0xE0, 0x03, 0x01, 0xAA,    // mov x0, x1
+        0xE1, 0x03, 0x02, 0xAA,    // mov x1, x2
+        0x00, 0x00, 0x00, 0x14,    // b #?
+    };
+    static const uint8_t env_mask[] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFC,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(env_pattern) != sizeof(env_mask));
+    static const uint8_t env_repl[] = {NOP_BYTES};
+    ck_patcher_find_replace(text, "Image4 Kernelspace environment: always evaluate", env_pattern, env_mask,
+                            sizeof(env_pattern), sizeof(uint32_t), 1, env_repl, NULL, 0xC, sizeof(env_repl));
+
+    ck_kp_stub_func_by_string(text, strings, "bypass Image4 manifest signature and identity evaluation",
+                              "manifest evaluation: starting signature and identity evaluation");
+    ck_kp_stub_func_by_string(text, strings, "bypass Image4 subsequent stage anti-replay",
+                              "manifest evaluation: attempting subsequent stage anti-replay policy");
+    ck_kp_stub_func_by_string(text, strings, "bypass Image4 payload signature evaluation",
+                              "payload evaluation: starting signature evaluation");
+}
+
 static void ck_kp_cs_patches(CKPatcherRange* range)
 {
     //   ldrb w8,[sp,#0xc] ; ldrb w9,[sp,#0xd] ; cmp w8,w9 ; b.ne <reject>   ->   NOP the b.ne
@@ -861,6 +930,9 @@ void ck_patch_kernel(MachoHeader64* hdr)
     g_autofree CKPatcherRange* amfi_text;
     g_autofree CKPatcherRange* sep_mgr_text;
     g_autofree CKPatcherRange* img4_text;
+    MachoHeader64*             image4_hdr;
+    g_autofree CKPatcherRange* image4_text    = NULL;
+    g_autofree CKPatcherRange* image4_cstring = NULL;
     g_autofree CKPatcherRange* fwupdate_text;
     g_autofree CKPatcherRange* kernel_text;
     g_autofree CKPatcherRange* kernel_const;
@@ -882,6 +954,13 @@ void ck_patch_kernel(MachoHeader64* hdr)
 
     fwupdate_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleFirmwareUpdateKext");
     if (fwupdate_text != NULL) { ck_kp_img4_patches(fwupdate_text); }
+
+    image4_hdr = ck_kp_find_image_header(hdr, "com.apple.security.Image4");
+    if (image4_hdr != NULL) {
+        image4_text    = ck_kp_find_section_range(image4_hdr, "__TEXT_EXEC", "__text");
+        image4_cstring = ck_kp_find_section_range(image4_hdr, "__TEXT", "__cstring");
+        if (image4_text != NULL) { ck_kp_image4_eval_patches(image4_text, image4_cstring); }
+    }
 
     kernel_text = ck_kp_get_kernel_section(hdr, "__TEXT_EXEC", "__text");
     ck_kp_mac_mount_patch(kernel_text);

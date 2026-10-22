@@ -62,6 +62,9 @@ bool ck_patcher_find_replace(CKPatcherRange* range, const char* name, const uint
                              size_t len, size_t align, uint32_t count, const uint8_t* replacement,
                              const uint8_t* replacement_mask, size_t replace_off, size_t replace_len);
 
+/// `ADRP`+`ADD` (immediate) pair at `buffer`.
+bool ck_patcher_adrp_add_va(const uint8_t* buffer, vaddr va, vaddr* out);
+
 /// Thumb-2 `MOVW Rd, #imm16` (T3) at `buffer`.
 bool ck_patcher_thumb_movw(const uint8_t* buffer, uint16_t* imm);
 /// Thumb-2 `STR.W Rt, [Rn, #imm12]` (T3) at `buffer`.

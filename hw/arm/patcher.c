@@ -171,6 +171,26 @@ uint8_t* ck_patcher_find_prev_insn(uint8_t* buffer, uint32_t num, uint32_t insn,
     return NULL;
 }
 
+bool ck_patcher_adrp_add_va(const uint8_t* buffer, vaddr va, vaddr* out)
+{
+    uint32_t adrp = ldl_le_p(buffer);
+    uint32_t add  = ldl_le_p(buffer + sizeof(uint32_t));
+    int64_t  imm;
+    uint32_t imm12;
+
+    // adrp x?, #?
+    if ((adrp & 0x9F000000) != 0x90000000) { return false; }
+    // add x?, x?, #? (64-bit, immediate)
+    if ((add & 0xFF800000) != 0x91000000) { return false; }
+
+    imm   = ((int64_t)sextract32(adrp, 5, 19) << 2) | extract32(adrp, 29, 2);
+    imm12 = extract32(add, 10, 12);
+    if (extract32(add, 22, 1)) { imm12 <<= 12; }
+
+    *out = ((va & ~(vaddr)0xFFF) + (imm << 12)) + imm12;
+    return true;
+}
+
 bool ck_patcher_thumb_movw(const uint8_t* buffer, uint16_t* imm)
 {
     uint16_t hw1 = lduw_le_p(buffer);
