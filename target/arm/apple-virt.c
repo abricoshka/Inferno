@@ -1746,8 +1746,10 @@ void apple_virt_sync_begin(CPUState* cs)
     for (int k = 0; k < ARRAY_SIZE(c->guest_keys); k++) { *pac_key_field(env, k) = pac_key(env, k, el); }
     c->guest_sctlr        = env->cp15.sctlr_el[1];
     env->cp15.sctlr_el[1] = pac_hw_sctlr(env, c->guest_sctlr, el);
-    c->pac_loaded         = true;
-    c->pac_el             = el;
+    // The TLB flush stub runs with the MMU off.
+    if (c->flushing) { env->cp15.sctlr_el[1] &= ~SCTLR_M; }
+    c->pac_loaded = true;
+    c->pac_el     = el;
 
     // The vCPU was reset.
     if (c->shadowed && !gxf_wants_shadows(env)) {
