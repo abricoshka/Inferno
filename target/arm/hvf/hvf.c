@@ -1578,13 +1578,14 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
             uint32_t len     = 1 << sas;
             uint32_t srt     = (syndrome >> 16) & 0x1f;
             uint32_t cm      = (syndrome >> 8) & 0x1;
-            bool     perm    = (syndrome & 0x3c) == 0xc;
+            uint32_t fsc     = syndrome & 0x3c;
             uint64_t val     = 0;
 
             trace_hvf_data_abort(excp->virtual_address, excp->physical_address, isv, iswrite, s1ptw, len, srt);
 
-            // A store to a write-protected guest page table, rather than to MMIO.
-            if (iswrite && !cm && perm
+            // A store to a write-protected guest page table, rather than to MMIO; HVF reports one to a page it hasn't
+            // mapped yet as a translation fault.
+            if (iswrite && !cm && (fsc == 0x4 || fsc == 0xc)
                 && apple_virt_handle_write_fault(cpu, excp->virtual_address, excp->physical_address))
             {
                 break;

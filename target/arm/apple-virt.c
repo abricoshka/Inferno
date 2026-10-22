@@ -157,6 +157,8 @@ static struct
     // Freed shadow tables, reused oldest first so the guest's TLB maintenance for them has likely happened.
     GQueue   pool_free;
     uint32_t pool_used;
+    // Untracked pages that were write-protected, whose stores could still fault on another vCPU.
+    GHashTable* unprotected;
     // Evicted trees, whose stale walks a vCPU must flush before it runs on new shadows.
     uint64_t     evictions;
     hwaddr       stub;
@@ -265,13 +267,17 @@ static void gxf_track(GXFMirror* m)
         p->ipa     = m->ipa & ~(hwaddr)(GXF_PAGE_SIZE - 1);
         p->mirrors = g_ptr_array_new();
         g_hash_table_insert(virt.pages, &p->ipa, p);
+        g_hash_table_remove(virt.unprotected, GSIZE_TO_POINTER(p->ipa));
     }
     g_ptr_array_add(p->mirrors, m);
 }
 
 static void gxf_page_free(GXFPage* p)
 {
-    if (p->protected) { gxf_protect(p->ipa, true); }
+    if (p->protected) {
+        gxf_protect(p->ipa, true);
+        g_hash_table_add(virt.unprotected, GSIZE_TO_POINTER(p->ipa));
+    }
     g_ptr_array_free(p->mirrors, true);
     g_free(p);
 }
@@ -1113,8 +1119,8 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
 // Resyncs the mirrors of `page` for a store to [off, off + len) of it.
 static void gxf_page_updated(hwaddr page, uint32_t off, uint32_t len)
 {
-    GXFPage* p = gxf_page(page);
-    g_autoptr(GPtrArray) mirrors;
+    GXFPage* p                   = gxf_page(page);
+    g_autoptr(GPtrArray) mirrors = NULL;
 
     if (p == NULL) { return; }
 
@@ -1495,7 +1501,12 @@ static GXFFaultResult gxf_write_fault(CPUState* cs, uint64_t va, hwaddr ipa)
     QEMU_LOCK_GUARD(&virt.lock);
 
     p = gxf_page(ipa);
-    if (p == NULL) { return GXF_FAULT_NOT_TABLE; }
+    // The page stopped being a table and became writable after the store faulted, so it is retried.
+    if (p == NULL) {
+        return g_hash_table_contains(virt.unprotected, GSIZE_TO_POINTER(ipa & ~(hwaddr)(GXF_PAGE_SIZE - 1))) ?
+                   GXF_FAULT_HANDLED :
+                   GXF_FAULT_NOT_TABLE;
+    }
 
     st = (GXFStore){
         .cs      = cs,
@@ -1682,6 +1693,7 @@ static void gxf_reset(void)
     assert_cmpuint(g_hash_table_size(virt.mirrors), ==, 0);
     // Pages of stores that were being stepped.
     g_hash_table_foreach_remove(virt.pages, gxf_page_drop, NULL);
+    g_hash_table_remove_all(virt.unprotected);
     g_ptr_array_set_size(virt.perms, 0);
     g_queue_clear(&virt.pool_free);
     virt.monitor = false;
@@ -1709,10 +1721,11 @@ void apple_virt_init(hwaddr base, hwaddr size)
 
     if (virt.roots == NULL) {
         qemu_mutex_init(&virt.lock);
-        virt.perms   = g_ptr_array_new_with_free_func(g_free);
-        virt.mirrors = g_hash_table_new(gxf_mirror_hash, gxf_mirror_equal);
-        virt.pages   = g_hash_table_new(g_int64_hash, g_int64_equal);
-        virt.roots   = g_ptr_array_new();
+        virt.perms       = g_ptr_array_new_with_free_func(g_free);
+        virt.mirrors     = g_hash_table_new(gxf_mirror_hash, gxf_mirror_equal);
+        virt.pages       = g_hash_table_new(g_int64_hash, g_int64_equal);
+        virt.unprotected = g_hash_table_new(g_direct_hash, g_direct_equal);
+        virt.roots       = g_ptr_array_new();
     }
 
     QEMU_LOCK_GUARD(&virt.lock);

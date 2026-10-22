@@ -1104,6 +1104,8 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     CarveoutAllocator* ca;
     CKPatcherRange*    seprom_range;
 
+    if (hwaccel_enabled()) { apple_virt_reset(); }
+
     if (t8030->securerom_filename != NULL) {
         if (t8030->securerom == NULL
             && !g_file_get_contents(t8030->securerom_filename, &t8030->securerom, &t8030->securerom_size, NULL))
@@ -1360,7 +1362,6 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
     }
     else {
         apple_boot_allocate_segment_records(memory_map, hdr);
-        if (hwaccel_enabled()) { apple_virt_reset(); }
     }
 
     t8030_update_device_tree(t8030);
