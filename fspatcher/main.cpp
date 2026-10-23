@@ -489,10 +489,15 @@ namespace
 
         void apply()
         {
-            static constexpr std::array<std::string_view, 7> LABELS{
-                "com.apple.CommCenter", "com.apple.CommCenterMobileHelper", "com.apple.CommCenterRootHelper",
-                "com.apple.locationd",  "com.apple.voicemail.vmd",          "com.apple.bluetoothd",
+            static constexpr std::array<std::string_view, 8> LABELS{
+                "com.apple.CommCenter",
+                "com.apple.CommCenterMobileHelper",
+                "com.apple.CommCenterRootHelper",
+                "com.apple.locationd",
+                "com.apple.voicemail.vmd",
+                "com.apple.bluetoothd",
                 "com.apple.nfcd",
+                "com.apple.audiomxd",
             };
 
             const auto daemons = this->find(this->top, "LaunchDaemons");
