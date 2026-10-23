@@ -73,6 +73,7 @@ typedef struct
     uint32_t        chip_revision;
     char*           usb_uplink_addr;
     USBUplinkType   usb_uplink_type;
+    uint32_t        usb_uplink_compression_limit;
     char*           model_number;
     char*           region_info;
     char*           config_number;

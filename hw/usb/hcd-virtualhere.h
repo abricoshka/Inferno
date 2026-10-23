@@ -61,8 +61,9 @@ struct USBVirtualHereState
     USBVirtualHereConn* active_conn;
     uint16_t            device_id;
 
-    char*   server_name;
-    char*   server_id;
-    char*   server_host;
-    uint8_t server_guid[VIRTUALHERE_GUID_LEN];
+    char*    server_name;
+    char*    server_id;
+    char*    server_host;
+    uint8_t  server_guid[VIRTUALHERE_GUID_LEN];
+    uint32_t compression_limit;
 };

@@ -124,19 +124,25 @@ static bool coroutine_fn vh_conn_send_raw(USBVirtualHereConn* conn, const void* 
     return ok;
 }
 
-static void vh_frame_append(GByteArray* out, uint32_t compressed_len, uint32_t uncompressed_len, const void* body,
-                            uint32_t body_len)
+static void vh_frame_append(GByteArray* out, uint32_t compression_limit, const void* msg, uint32_t len)
 {
-    uint8_t hdr[VIRTUALHERE_FRAME_HDR_LEN];
+    guint    off            = out->len;
+    int      compressed_len = 0;
+    uint8_t* body;
 
-    stl_le_p(hdr, compressed_len);
-    stl_le_p(hdr + 4, uncompressed_len);
-    g_byte_array_append(out, hdr, sizeof(hdr));
-    g_byte_array_append(out, body, body_len);
+    g_byte_array_set_size(out, off + VIRTUALHERE_FRAME_HDR_LEN + len);
+    body = out->data + off + VIRTUALHERE_FRAME_HDR_LEN;
+
+    if (len > compression_limit) { compressed_len = LZ4_compress_default(msg, (char*)body, len, len); }
+    if (compressed_len == 0) { memcpy(body, msg, len); }
+
+    stl_le_p(out->data + off, compressed_len);
+    stl_le_p(out->data + off + 4, len);
+    g_byte_array_set_size(out, off + VIRTUALHERE_FRAME_HDR_LEN + (compressed_len ?: len));
 }
 
-static void vh_msg_append(GByteArray* out, uint8_t type, const uint8_t* req_hdr, const void* payload,
-                          uint32_t payload_len)
+static void vh_msg_append(GByteArray* out, uint32_t compression_limit, uint8_t type, const uint8_t* req_hdr,
+                          const void* payload, uint32_t payload_len)
 {
     uint32_t            msg_len = VIRTUALHERE_PAYLOAD_OFF + payload_len;
     g_autofree uint8_t* msg     = g_malloc0(msg_len);
@@ -146,31 +152,14 @@ static void vh_msg_append(GByteArray* out, uint8_t type, const uint8_t* req_hdr,
     stl_le_p(msg + VIRTUALHERE_LENGTH_OFF, payload_len);
     if (payload_len) { memcpy(msg + VIRTUALHERE_PAYLOAD_OFF, payload, payload_len); }
 
-    vh_frame_append(out, 0, msg_len, msg, msg_len);
+    vh_frame_append(out, compression_limit, msg, msg_len);
 }
 
-static bool vh_lz4_append(GByteArray* out, const uint8_t* uncompressed, uint32_t uncompressed_len)
+static bool coroutine_fn vh_conn_send_frame(USBVirtualHereConn* conn, const void* msg, uint32_t len)
 {
-    g_autofree uint8_t* compressed = g_malloc(LZ4_compressBound(uncompressed_len));
-    int                 compressed_len;
+    g_autoptr(GByteArray) frame = g_byte_array_new();
 
-    compressed_len = LZ4_compress_default((const char*)uncompressed, (char*)compressed, uncompressed_len,
-                                          LZ4_compressBound(uncompressed_len));
-    if (compressed_len <= 0) {
-        error_report("hcd-virtualhere: LZ4 compression failed");
-        return false;
-    }
-
-    vh_frame_append(out, compressed_len, uncompressed_len, compressed, compressed_len);
-    return true;
-}
-
-static bool coroutine_fn vh_conn_send_frame(USBVirtualHereConn* conn, uint32_t compressed_len,
-                                            uint32_t uncompressed_len, const void* body, uint32_t body_len)
-{
-    g_autoptr(GByteArray) frame = g_byte_array_sized_new(VIRTUALHERE_FRAME_HDR_LEN + body_len);
-
-    vh_frame_append(frame, compressed_len, uncompressed_len, body, body_len);
+    vh_frame_append(frame, conn->s->compression_limit, msg, len);
     return vh_conn_send_raw(conn, frame->data, frame->len);
 }
 
@@ -179,16 +168,7 @@ static bool coroutine_fn vh_conn_send_msg(USBVirtualHereConn* conn, uint8_t type
 {
     g_autoptr(GByteArray) frame = g_byte_array_new();
 
-    vh_msg_append(frame, type, req_hdr, payload, payload_len);
-    return vh_conn_send_raw(conn, frame->data, frame->len);
-}
-
-static bool coroutine_fn vh_conn_send_lz4(USBVirtualHereConn* conn, const uint8_t* uncompressed,
-                                          uint32_t uncompressed_len)
-{
-    g_autoptr(GByteArray) frame = g_byte_array_new();
-
-    if (!vh_lz4_append(frame, uncompressed, uncompressed_len)) { return false; }
+    vh_msg_append(frame, conn->s->compression_limit, type, req_hdr, payload, payload_len);
     return vh_conn_send_raw(conn, frame->data, frame->len);
 }
 
@@ -382,7 +362,7 @@ static void vh_packet_free(USBVirtualHerePacket* pkt)
 
 static void coroutine_fn vh_send_ack(USBVirtualHerePacket* pkt, const void* msg, uint32_t size)
 {
-    vh_conn_send_frame(pkt->conn, 0, size, msg, size);
+    vh_conn_send_frame(pkt->conn, msg, size);
     vh_packet_free(pkt);
 }
 
@@ -458,7 +438,7 @@ static bool coroutine_fn vh_conn_announce_device(USBVirtualHereConn* conn)
                         short_info->iface_class, short_info->iface_subclass, short_info->iface_protocol,
                         desc->num_configs, conn->using_device ? "in-use" : "available");
 
-    return vh_conn_send_lz4(conn, (const uint8_t*)short_info, sizeof(*short_info));
+    return vh_conn_send_frame(conn, short_info, sizeof(*short_info));
 }
 
 /* Answering instantly loses a race in the client and the claim is dropped. */
@@ -472,7 +452,7 @@ static bool coroutine_fn vh_conn_fail_claim(USBVirtualHereConn* conn)
     fail->header.device_id = cpu_to_le16(conn->s->device_id);
     fail->bind_result      = cpu_to_le32(VIRTUALHERE_BIND_ERROR);
 
-    return vh_conn_send_lz4(conn, (const uint8_t*)fail, sizeof(*fail));
+    return vh_conn_send_frame(conn, fail, sizeof(*fail));
 }
 
 static bool coroutine_fn vh_handle_use_device(USBVirtualHereConn* conn)
@@ -492,7 +472,7 @@ static bool coroutine_fn vh_handle_use_device(USBVirtualHereConn* conn)
 
     VIRTUALHERE_DPRINTF("%s: sending long-info (%zu bytes)\n", __func__, sizeof(*long_info));
 
-    if (!vh_conn_send_lz4(conn, (const uint8_t*)long_info, sizeof(*long_info))) {
+    if (!vh_conn_send_frame(conn, long_info, sizeof(*long_info))) {
         VIRTUALHERE_DPRINTF("%s: failed to send long-info\n", __func__);
         return false;
     }
@@ -641,18 +621,18 @@ static void coroutine_fn vh_notify_device_removed_co(void* opaque)
 {
     g_autofree VHRemovalNotice* notice = opaque;
     g_autofree VHDeviceInfo*    gone   = notice->msg;
+    uint32_t                    limit  = notice->conn->s->compression_limit;
     g_autoptr(GByteArray) frames       = g_byte_array_new();
 
     if (notice->unbind) {
         VHHeader hdr         = {.device_id = gone->device_id};
         uint8_t  released[4] = {1, 0, 0, 0};
 
-        vh_msg_append(frames, VIRTUALHERE_MSG_UNBIND_ACK, (const uint8_t*)&hdr, released, sizeof(released));
+        vh_msg_append(frames, limit, VIRTUALHERE_MSG_UNBIND_ACK, (const uint8_t*)&hdr, released, sizeof(released));
     }
 
-    if (vh_lz4_append(frames, (const uint8_t*)gone, sizeof(*gone))) {
-        vh_conn_send_raw(notice->conn, frames->data, frames->len);
-    }
+    vh_frame_append(frames, limit, gone, sizeof(*gone));
+    vh_conn_send_raw(notice->conn, frames->data, frames->len);
     object_unref(OBJECT(notice->conn));
 }
 
@@ -795,7 +775,7 @@ static bool coroutine_fn vh_conn_handshake(USBVirtualHereConn* conn, QIOChannel*
                         conn->client_name, conn->client_host);
 
     hub_info = vh_build_server_announce(s);
-    if (!vh_conn_send_lz4(conn, (const uint8_t*)hub_info, sizeof(*hub_info))) { return false; }
+    if (!vh_conn_send_frame(conn, hub_info, sizeof(*hub_info))) { return false; }
 
     vh_conn_send_msg(conn, VIRTUALHERE_MSG_SERVER_NOTICE, NULL, VIRTUALHERE_SERVER_BANNER,
                      sizeof(VIRTUALHERE_SERVER_BANNER));
@@ -1107,6 +1087,8 @@ static const Property usb_virtualhere_props[] = {
     DEFINE_PROP_STRING("server-name", USBVirtualHereState, server_name),
     DEFINE_PROP_STRING("server-id", USBVirtualHereState, server_id),
     DEFINE_PROP_STRING("server-host", USBVirtualHereState, server_host),
+    DEFINE_PROP_UINT32("compression-limit", USBVirtualHereState, compression_limit,
+                       VIRTUALHERE_COMPRESSION_LIMIT_DEFAULT),
 };
 
 static void usb_virtualhere_class_init(ObjectClass* klass, const void* data)

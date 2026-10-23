@@ -18,6 +18,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/qdev-properties.h"
 #include "hw/usb.h"
 #include "hw/usb/hcd-inferno.h"
 #include "qemu/bswap.h"
@@ -545,14 +546,17 @@ int32_t coroutine_fn usb_uplink_transfer(USBUplinkDevice* x, USBUplinkPacket* pk
     }
 }
 
-DeviceState* usb_uplink_new(USBUplinkType type, const char* addr, Error** errp)
+DeviceState* usb_uplink_new(USBUplinkType type, const char* addr, uint32_t compression_limit, Error** errp)
 {
     DeviceState* dev;
 
     switch (type) {
-        case USB_UPLINK_TYPE_INFERNO    : dev = qdev_new(TYPE_USB_INFERNO_HOST); break;
-        case USB_UPLINK_TYPE_VIRTUALHERE: dev = qdev_new(TYPE_USB_VIRTUALHERE); break;
-        default                         : assert_not_reached();
+        case USB_UPLINK_TYPE_INFERNO: dev = qdev_new(TYPE_USB_INFERNO_HOST); break;
+        case USB_UPLINK_TYPE_VIRTUALHERE:
+            dev = qdev_new(TYPE_USB_VIRTUALHERE);
+            qdev_prop_set_uint32(dev, "compression-limit", compression_limit);
+            break;
+        default: assert_not_reached();
     }
 
     if (addr != NULL) { object_property_set_str(OBJECT(dev), "addr", addr, errp); }

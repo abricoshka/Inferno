@@ -2217,7 +2217,8 @@ static void t8030_init(MachineState* machine)
     apple_dart_set_dart_instance(dart, 1, 0x239028000);    // BLK
 
     dev  = qdev_new(TYPE_APPLE_TYPEC);
-    host = usb_uplink_new(t8030->usb_uplink_type, t8030->usb_uplink_addr, &error_fatal);
+    host = usb_uplink_new(t8030->usb_uplink_type, t8030->usb_uplink_addr, t8030->usb_uplink_compression_limit,
+                          &error_fatal);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(host), &error_fatal);
     object_property_set_link(OBJECT(dev), "host", OBJECT(host), &error_fatal);
     iommu = apple_dart_instance_iommu_mr(dart, 1, 0x3);
@@ -2600,6 +2601,7 @@ PROP_STR_GETTER_SETTER(sep_rom_filename);
 PROP_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
 PROP_GETTER_SETTER(int, usb_uplink_type);
+PROP_VISIT_GETTER_SETTER(uint32, usb_uplink_compression_limit);
 PROP_STR_GETTER_SETTER(model_number);
 PROP_STR_GETTER_SETTER(region_info);
 PROP_STR_GETTER_SETTER(config_number);
@@ -2644,6 +2646,12 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
                                            t8030_get_usb_uplink_type, t8030_set_usb_uplink_type);
     object_property_set_default_str(oprop, qapi_enum_lookup(&USBUplinkType_lookup, USB_UPLINK_TYPE_VIRTUALHERE));
     object_class_property_set_description(klass, "usb-uplink-type", "USB Uplink Type");
+    oprop = object_class_property_add(klass, "usb-uplink-compression-limit", "uint32",
+                                      t8030_get_usb_uplink_compression_limit, t8030_set_usb_uplink_compression_limit,
+                                      NULL, NULL);
+    object_property_set_default_uint(oprop, VIRTUALHERE_COMPRESSION_LIMIT_DEFAULT);
+    object_class_property_set_description(klass, "usb-uplink-compression-limit",
+                                          "VirtualHere messages larger than this are LZ4-compressed");
     oprop = object_class_property_add_str(klass, "model", t8030_get_model_number, t8030_set_model_number);
     object_property_set_default_str(oprop, "CKI12");
     object_class_property_set_description(klass, "model", "Model Number");

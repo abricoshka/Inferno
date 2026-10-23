@@ -70,4 +70,5 @@ typedef struct
     uint32_t        board_id;
     char*           usb_uplink_addr;
     USBUplinkType   usb_uplink_type;
+    uint32_t        usb_uplink_compression_limit;
 } AppleS8000MachineState;

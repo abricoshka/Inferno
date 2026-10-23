@@ -37,6 +37,8 @@
 #define USB_IFACE_DESC_SUBCLASS   6
 #define USB_IFACE_DESC_PROTOCOL   7
 
+#define VIRTUALHERE_COMPRESSION_LIMIT_DEFAULT 384
+
 typedef struct USBUplinkPacket
 {
     USBPacket  p;
@@ -134,4 +136,4 @@ int32_t coroutine_fn usb_uplink_control(USBDevice* dev, uint8_t bmRequestType, u
 /*
  * @ret: Caller-owned reference to created USB uplink.
  */
-DeviceState* usb_uplink_new(USBUplinkType type, const char* addr, Error** errp);
+DeviceState* usb_uplink_new(USBUplinkType type, const char* addr, uint32_t compression_limit, Error** errp);
