@@ -51,9 +51,7 @@ struct AppleMTSPIState
     SSIPeripheral parent_obj;
 
     QemuMutex lock;
-    /// IRQ of the Multi Touch Controller is Active Low.
-    /// qemu_irq_raise means IRQ inactive,
-    /// qemu_irq_lower means IRQ active.
+    /// Level-triggered, active low; see apple_mt_spi_update_irq.
     qemu_irq         irq;
     AppleMTSPIBuffer tx;
     AppleMTSPIBuffer rx;
@@ -284,17 +282,18 @@ static inline uint32_t apple_mt_spi_buf_read_dword(const AppleMTSPIBuffer* buf, 
     return apple_mt_spi_buf_read_word(buf, off) | (apple_mt_spi_buf_read_word(buf, off + sizeof(uint16_t)) << 16);
 }
 
-static void apple_mt_spi_push_pending_hbpp_word(AppleMTSPIState* s, uint16_t val)
+/* AOP GPIO 0x22, flags 0x06000001: group 6, level, active low. Held while anything is waiting to be read. */
+static void apple_mt_spi_update_irq(AppleMTSPIState* s)
 {
-    apple_mt_spi_buf_push_word(&s->pending_hbpp, val);
-    qemu_irq_lower(s->irq);
+    qemu_set_irq(s->irq,
+                 apple_mt_spi_buf_is_empty(&s->pending_hbpp) && QTAILQ_EMPTY(&s->pending_fw) && !s->touch_pending);
 }
 
+static void apple_mt_spi_push_pending_hbpp_word(AppleMTSPIState* s, uint16_t val)
+{ apple_mt_spi_buf_push_word(&s->pending_hbpp, val); }
+
 static void apple_mt_spi_push_pending_hbpp_dword(AppleMTSPIState* s, uint32_t val)
-{
-    apple_mt_spi_buf_push_dword(&s->pending_hbpp, val);
-    qemu_irq_lower(s->irq);
-}
+{ apple_mt_spi_buf_push_dword(&s->pending_hbpp, val); }
 
 static inline uint16_t apple_mt_spi_hbpp_packet_hdr_len(uint8_t val)
 {
@@ -636,12 +635,7 @@ static uint32_t apple_mt_spi_transfer(SSIPeripheral* dev, uint32_t val)
 
     ret = apple_mt_spi_buf_pop(&s->tx);
 
-    if (apple_mt_spi_buf_is_empty(&s->pending_hbpp) && QTAILQ_EMPTY(&s->pending_fw) && !s->touch_pending) {
-        qemu_irq_raise(s->irq);
-    }
-    else {
-        qemu_irq_lower(s->irq);
-    }
+    apple_mt_spi_update_irq(s);
 
     return ret;
 }
@@ -770,7 +764,7 @@ static void apple_mt_spi_send_path_update(AppleMTSPIState* s, uint8_t path_stage
     }
 
     QTAILQ_INSERT_TAIL(&s->pending_fw, packet, next);
-    qemu_irq_lower(s->irq);
+    apple_mt_spi_update_irq(s);
 }
 
 static void apple_mt_spi_schedule_touch_update(AppleMTSPIState* s, uint8_t path_stage, int16_t x, int16_t y)
@@ -780,7 +774,7 @@ static void apple_mt_spi_schedule_touch_update(AppleMTSPIState* s, uint8_t path_
 
     if (path_stage == PATH_STAGE_TOUCHING) {
         s->touch_pending = true;
-        qemu_irq_lower(s->irq);
+        apple_mt_spi_update_irq(s);
         return;
     }
 
@@ -919,7 +913,7 @@ static void apple_mt_spi_reset_hold(Object* obj, ResetType type)
 
     QEMU_LOCK_GUARD(&s->lock);
 
-    qemu_irq_raise(s->irq);
+    apple_mt_spi_update_irq(s);
 }
 
 static void apple_mt_spi_class_init(ObjectClass* klass, const void* data)
