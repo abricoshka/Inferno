@@ -697,8 +697,7 @@ static vaddr ck_kp_find_cstring(CKPatcherRange* range, const char* sub)
     return 0;
 }
 
-static bool ck_kp_stub_func_by_string(CKPatcherRange* text, CKPatcherRange* strings, const char* name,
-                                      const char* str)
+static bool ck_kp_stub_func_by_string(CKPatcherRange* text, CKPatcherRange* strings, const char* name, const char* str)
 {
     vaddr sva = ck_kp_find_cstring(strings, str);
     if (sva == 0) { return false; }
