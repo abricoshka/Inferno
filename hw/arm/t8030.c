@@ -1524,10 +1524,40 @@ static const MemoryRegionOps pmgr_unk_reg_ops = {
     .valid.unaligned       = false,
 };
 
+typedef struct T8030PMGRPowerWrite
+{
+    AppleT8030MachineState* t8030;
+    hwaddr                  addr;
+    uint64_t                data;
+} T8030PMGRPowerWrite;
+
+static void pmgr_power_write_bh(void* opaque)
+{
+    g_autofree T8030PMGRPowerWrite* w = opaque;
+    AppleSEP*                       sep;
+
+    switch (w->addr) {
+        case 0xD4004: t8030_start_cpus(w->t8030, w->data); break;
+        case 0x80C00:    // SEP_PS
+            sep = APPLE_SEP(object_property_get_link(OBJECT(w->t8030), "sep", NULL));
+
+            if (sep != NULL) {
+                if (w->data & BIT32(31)) { apple_a13_reset(APPLE_A13(apple_sep_get_cpu(sep))); }
+                else if (w->data & BIT32(10)) {
+                    apple_a13_set_off(APPLE_A13(apple_sep_get_cpu(sep)));
+                }
+                else {
+                    apple_a13_set_on(APPLE_A13(apple_sep_get_cpu(sep)));
+                }
+            }
+            break;
+        default: assert_not_reached();
+    }
+}
+
 static void pmgr_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
 {
     AppleT8030MachineState* t8030 = opaque;
-    AppleSEP*               sep;
 
 #if 0
     qemu_log_mask(LOG_UNIMP,
@@ -1542,20 +1572,17 @@ static void pmgr_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned si
     }
 
     switch (addr) {
-        case 0xD4004: t8030_start_cpus(t8030, data); return;
-        case 0x80C00:    // SEP_PS
-            sep = APPLE_SEP(object_property_get_link(OBJECT(t8030), "sep", NULL));
+        case 0xD4004:
+        case 0x80C00: {    // SEP_PS
+            T8030PMGRPowerWrite* w = g_new(T8030PMGRPowerWrite, 1);
 
-            if (sep != NULL) {
-                if (data & BIT32(31)) { apple_a13_reset(APPLE_A13(apple_sep_get_cpu(sep))); }
-                else if (data & BIT32(10)) {
-                    apple_a13_set_off(APPLE_A13(apple_sep_get_cpu(sep)));
-                }
-                else {
-                    apple_a13_set_on(APPLE_A13(apple_sep_get_cpu(sep)));
-                }
-            }
+            w->t8030 = t8030;
+            w->addr  = addr;
+            w->data  = data;
+            aio_bh_schedule_oneshot(qemu_get_aio_context(), pmgr_power_write_bh, w);
+            if (addr == 0xD4004) { return; }
             break;
+        }
         default: break;
     }
 
@@ -1674,6 +1701,7 @@ static void t8030_pmgr_init_mmio(AppleT8030MachineState* t8030, MemoryRegion* me
                                  void* opaque, const char* name, hwaddr addr, hwaddr size)
 {
     memory_region_init_io(mem, OBJECT(t8030), ops, opaque == NULL ? (void*)addr : opaque, name, size);
+    memory_region_enable_lockless_io(mem);
     memory_region_add_subregion(get_system_memory(), addr, mem);
 }
 
