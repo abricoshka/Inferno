@@ -4342,6 +4342,7 @@ static bool do_aes_round(DisasContext* s, arg_qrrr_e* a, uint32_t mix, GVecGen3F
     if (s->base.num_insns < s->base.max_insns
         && arm_ldl_code(s->env, &s->base, s->base.pc_next, s->sctlr_b) == (mix | a->rd << 5 | a->rd))
     {
+        s->pc_curr = s->base.pc_next;
         s->base.pc_next += 4;
         s->base.max_insns--;
         fn = fused;
