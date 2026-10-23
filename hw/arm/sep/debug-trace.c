@@ -925,7 +925,8 @@ static void apple_sep_debug_trace_class_init(ObjectClass* klass, const void* cla
     dc->realize      = apple_sep_debug_trace_realize;
 }
 
-OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSEPDebugTraceState, apple_sep_debug_trace, APPLE_SEP_DEBUG_TRACE, SYS_BUS_DEVICE)
+OBJECT_DEFINE_SIMPLE_TYPE_CLASS_INIT(AppleSEPDebugTraceState, apple_sep_debug_trace, APPLE_SEP_DEBUG_TRACE,
+                                     SYS_BUS_DEVICE)
 
 AppleSEPDebugTraceState* apple_sep_debug_trace_create(AppleSEP* sep)
 {

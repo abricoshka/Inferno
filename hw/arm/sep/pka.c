@@ -134,7 +134,8 @@ static void pka_fill_attest_output(AppleSEPPKAState* s)
 static void pka_handle_cmd(AppleSEPPKAState* s)
 {
     AppleSEP* sep = s->sep;
-    // just randomly tested some pka commands with 0xaa times 0x20 for offset 0x60, and 0x55 times 0x20 for offset 0x80, and commands 0x4/0x20/0x40/0x80/0x100 cause interrupt_status bit3, while 0x8/0x10 cause bit 30
+    // just randomly tested some pka commands with 0xaa times 0x20 for offset 0x60, and 0x55 times 0x20 for offset 0x80,
+    // and commands 0x4/0x20/0x40/0x80/0x100 cause interrupt_status bit3, while 0x8/0x10 cause bit 30
 
     // values: 0x4/0x8/0x10/0x20/0x40/0x80/0x100
     if (s->command == 0x80 || s->command == 0x100) {    // MPKA_ECPUB_ATTEST/ECDSA_ATTEST
@@ -179,7 +180,7 @@ static void pka_base_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
 #endif
     switch (addr) {
         case 0x0:    // maybe command
-            s->command = data;
+            s->command      = data;
             s->output_ready = false;
             // PKA commands get executed directly, without additional trigger
             pka_handle_cmd(s);
