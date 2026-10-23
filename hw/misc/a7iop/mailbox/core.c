@@ -630,7 +630,7 @@ static void apple_a7iop_mailbox_reset_enter(Object* obj, ResetType type)
     mailbox->iop_dir_en  = true;
     mailbox->ap_dir_en   = true;
     mailbox->underflow   = false;
-    mailbox->int_mask = 0;
+    mailbox->int_mask    = 0;
     memset(&mailbox->iop_recv_reg, 0, sizeof(mailbox->iop_recv_reg));
     memset(&mailbox->ap_recv_reg, 0, sizeof(mailbox->ap_recv_reg));
     memset(&mailbox->iop_send_reg, 0, sizeof(mailbox->iop_send_reg));

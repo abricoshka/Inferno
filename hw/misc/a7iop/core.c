@@ -92,7 +92,7 @@ static void apple_a7iop_reset_enter(Object* obj, ResetType type)
     QEMU_LOCK_GUARD(&s->lock);
 
     s->cpu_status = CPU_STATUS_IDLE;
-    s->cpu_ctrl = 0;
+    s->cpu_ctrl   = 0;
 }
 
 static void apple_a7iop_realize(DeviceState* dev, Error** errp)
