@@ -24,6 +24,7 @@
 #include "hw/usb/apple_dfu.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "system/runstate.h"
@@ -33,9 +34,9 @@
 #define APPLE_DFU_PRODUCT_ID      0x1227
 #define APPLE_RECOVERY_PRODUCT_ID 0x1281
 
-#define APPLE_DFU_REENUMERATE_MS 2000
-#define APPLE_DFU_UPLOAD_MAX     (512 * MiB)
-#define APPLE_DFU_RESPONSE_MAX   256
+#define APPLE_DFU_REATTACH_MS  2000
+#define APPLE_DFU_UPLOAD_MAX   (512 * MiB)
+#define APPLE_DFU_RESPONSE_MAX 256
 
 #define DFU_REQ_DNLOAD    0x01
 #define DFU_REQ_GETSTATUS 0x03
@@ -86,7 +87,8 @@ struct AppleDFUState
     uint64_t ecid;
 
     AppleDFUStage stage;
-    QEMUTimer*    reenumerate_timer;
+    QEMUBH*       detach_bh;
+    QEMUTimer*    reattach_timer;
     char*         nonce;
 
     uint8_t dfu_state;
@@ -193,7 +195,7 @@ static void apple_dfu_clear_upload(AppleDFUState* s)
 static void apple_dfu_enter(AppleDFUState* s, AppleDFUStage stage)
 {
     s->stage = stage;
-    timer_mod(s->reenumerate_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL));
+    qemu_bh_schedule(s->detach_bh);
 }
 
 static void apple_dfu_present(AppleDFUState* s)
@@ -222,23 +224,20 @@ static void apple_dfu_attach(AppleDFUState* s)
     usb_device_attach(USB_DEVICE(s), &error_abort);
 }
 
-static void apple_dfu_reenumerate(void* opaque)
+static void apple_dfu_detach(void* opaque)
 {
     AppleDFUState* s   = opaque;
     USBDevice*     dev = USB_DEVICE(s);
 
-    if (dev->attached) {
-        usb_device_detach(dev);
+    if (dev->attached) { usb_device_detach(dev); }
 
-        if (s->stage == APPLE_DFU_STAGE_BOOTED) { qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET); }
-        else {
-            timer_mod(s->reenumerate_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + APPLE_DFU_REENUMERATE_MS);
-        }
-        return;
+    if (s->stage == APPLE_DFU_STAGE_BOOTED) { qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET); }
+    else {
+        timer_mod(s->reattach_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + APPLE_DFU_REATTACH_MS);
     }
-
-    if (s->stage != APPLE_DFU_STAGE_BOOTED) { apple_dfu_attach(s); }
 }
+
+static void apple_dfu_reattach(void* opaque) { apple_dfu_attach(opaque); }
 
 static void apple_dfu_consume_upload(AppleDFUState* s)
 {
@@ -432,16 +431,18 @@ static void apple_dfu_realize(USBDevice* dev, Error** errp)
     dev->auto_attach = false;
     usb_desc_init(dev);
 
-    s->upload            = g_byte_array_new();
-    s->images            = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_bytes_unref);
-    s->reenumerate_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, apple_dfu_reenumerate, s);
+    s->upload         = g_byte_array_new();
+    s->images         = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_bytes_unref);
+    s->detach_bh      = qemu_bh_new(apple_dfu_detach, s);
+    s->reattach_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, apple_dfu_reattach, s);
 }
 
 static void apple_dfu_unrealize(USBDevice* dev)
 {
     AppleDFUState* s = APPLE_DFU(dev);
 
-    timer_free(s->reenumerate_timer);
+    qemu_bh_delete(s->detach_bh);
+    timer_free(s->reattach_timer);
     g_byte_array_unref(s->upload);
     g_free(s->nonce);
     g_free(s->ticket_data);
