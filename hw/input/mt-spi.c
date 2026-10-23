@@ -67,6 +67,7 @@ struct AppleMTSPIState
     uint64_t   sent_ts;
     bool       touch_pending;
     uint16_t   path_flags;
+    uint8_t    path_id;
     int32_t    btn_state;
     int32_t    prev_btn_state;
     uint32_t   display_width;
@@ -147,6 +148,7 @@ struct AppleMTSPIState
 #define MT_SENSOR_SURFACE_WIDTH  (6458)     // display_width/828 * 7.8
 #define MT_SENSOR_SURFACE_HEIGHT (13977)    // display_height/1792 * 7.8
 #define MT_SENSOR_EDGE           (400)      // 4.00 mm
+#define MT_MAX_PATH_ID           (15)
 
 #define PATH_STAGE_NOT_TRACKING    (0)
 #define PATH_STAGE_START_IN_RANGE  (1)
@@ -723,7 +725,7 @@ static void apple_mt_spi_send_path_update(AppleMTSPIState* s, uint8_t path_stage
     apple_mt_spi_buf_push_byte(&packet->buf, 0);
 
     // Path 0
-    apple_mt_spi_buf_push_byte(&packet->buf, 1);    // Path ID
+    apple_mt_spi_buf_push_byte(&packet->buf, s->path_id);
     apple_mt_spi_buf_push_byte(&packet->buf, path_stage);
     apple_mt_spi_buf_push_byte(&packet->buf, 1);    // Finger ID
     apple_mt_spi_buf_push_byte(&packet->buf, 1);    // Hand ID
@@ -796,12 +798,8 @@ static void apple_mt_spi_timer_tick(void* opaque)
     timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);
 }
 
-static void apple_mt_spi_end_timer_tick(void* opaque)
+static void apple_mt_spi_end_touch(AppleMTSPIState* s)
 {
-    AppleMTSPIState* s = opaque;
-
-    QEMU_LOCK_GUARD(&s->lock);
-
     apple_mt_spi_schedule_touch_update(s, PATH_STAGE_LINGER_IN_RANGE, s->cur_x, s->cur_y);
     apple_mt_spi_schedule_touch_update(s, PATH_STAGE_OUT_OF_RANGE, s->cur_x, s->cur_y);
 
@@ -811,6 +809,15 @@ static void apple_mt_spi_end_timer_tick(void* opaque)
     s->sent_x     = 0;
     s->sent_y     = 0;
     s->path_flags = 0;
+}
+
+static void apple_mt_spi_end_timer_tick(void* opaque)
+{
+    AppleMTSPIState* s = opaque;
+
+    QEMU_LOCK_GUARD(&s->lock);
+
+    apple_mt_spi_end_touch(s);
 }
 
 static void apple_mt_spi_mouse_event(void* opaque, int dx, int dy, int dz, int buttons_state)
@@ -835,10 +842,14 @@ static void apple_mt_spi_mouse_event(void* opaque, int dx, int dy, int dz, int b
     s->btn_state      = buttons_state;
 
     if ((s->prev_btn_state & MOUSE_EVENT_LBUTTON) == 0 && (s->btn_state & MOUSE_EVENT_LBUTTON) != 0) {
+        if (timer_pending(s->end_timer)) {
+            timer_del(s->end_timer);
+            apple_mt_spi_end_touch(s);
+        }
+
+        s->path_id    = s->path_id % MT_MAX_PATH_ID + 1;
         s->path_flags = apple_mt_spi_contact_is_from_edge(x, y) ? PATH_FLAGS_EDGE : 0;
         apple_mt_spi_schedule_touch_update(s, PATH_STAGE_MAKE_TOUCH, x, y);
-
-        timer_del(s->end_timer);
         timer_mod(s->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + NANOSECONDS_PER_SECOND / 60);
     }
     else if ((s->prev_btn_state & MOUSE_EVENT_LBUTTON) != 0 && (s->btn_state & MOUSE_EVENT_LBUTTON) == 0) {
@@ -893,6 +904,7 @@ static void apple_mt_spi_reset_enter(Object* obj, ResetType type)
     s->sent_ts        = 0;
     s->touch_pending  = false;
     s->frame          = 0;
+    s->path_id        = 0;
 
     apple_mt_spi_buf_free(&s->tx);
     apple_mt_spi_buf_free(&s->rx);
