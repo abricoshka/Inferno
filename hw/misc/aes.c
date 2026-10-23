@@ -369,9 +369,9 @@ static uint64_t aes_security_reg_read(void* opaque, hwaddr addr, unsigned size)
         case REG_AES_V3_SECURITY_MCC_BOOTROM_DIS:
             // normally 0x0 for SecureROM, but it only checks after writing to it
             return AES_V3_SECURITY_MCC_BOOTROM_DIS;    // for iBoot (and SecureROM)
-        case 0x4040: // PKA_SECU 0xd4040
-        case 0x4084: // PKA_SECU 0xd4084
-            return 0x10000; // prevent (e.g. SEPOS 18.5) PKA panic
+        case 0x4040:                                   // PKA_SECU 0xd4040
+        case 0x4084:                                   // PKA_SECU 0xd4084
+            return 0x10000;                            // prevent (e.g. SEPOS 18.5) PKA panic
         default: return 0xFF;
     }
 }
