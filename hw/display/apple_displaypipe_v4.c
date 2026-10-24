@@ -183,6 +183,8 @@ struct AppleDisplayPipeV4State
     uint32_t            m3_outcmdq_put;
     uint32_t            m3_activeq_put;
     bool                m3_replaying;
+    bool                m3_activeq_deferred;
+    uint32_t            m3_activeq_deferred_flags;
     uint32_t            m3_dmem[ADP_V4_M3_DMEM_SIZE / sizeof(uint32_t)];
     uint8_t             m3_imem[ADP_V4_M3_IMEM_SIZE];
     hwaddr              m3_outcmdq;
@@ -240,6 +242,8 @@ REG32(APIODMA_BASE_ADDR_3, 0x40030)
 // timestamp queue
 REG32(TSQ_TIMEBASE_CONTROL, 0x44004)
     REG_FIELD(TSQ_TIMEBASE_CONTROL, ENABLE, 0, 1)
+REG32(TSQ_TIMEBASE_LOAD_LO, 0x44008)
+REG32(TSQ_TIMEBASE_LOAD_HI, 0x4400C)
 REG32(TSQ_TIMEBASE_LOAD, 0x4401C)
 REG32(TSQ_TIMEBASE_LO, 0x44020)
 REG32(TSQ_TIMEBASE_HI, 0x44024)
@@ -790,11 +794,13 @@ static bool adp_v4_m3_reg_write(AppleDisplayPipeV4State* adp, hwaddr addr, uint3
             }
             return true;
         }
-        case R_TSQ_TIMEBASE_LO: {
+        case R_TSQ_TIMEBASE_LOAD_LO:
+        case R_TSQ_TIMEBASE_LO     : {
             adp->timebase_load = deposit64(adp->timebase_load, 0, 32, data);
             return true;
         }
-        case R_TSQ_TIMEBASE_HI: {
+        case R_TSQ_TIMEBASE_LOAD_HI:
+        case R_TSQ_TIMEBASE_HI     : {
             adp->timebase_load = deposit64(adp->timebase_load, 32, 32, data);
             return true;
         }
@@ -1215,15 +1221,16 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     qatomic_set(&adp->normal_mode_status, R_CONTROL_NORMAL_MODE_STATUS_AUTO_MASK);
     WITH_QEMU_LOCK_GUARD(&adp->m3_lock)
     {
-        adp->m3_state        = 0;
-        adp->m3_int_enable   = 0;
-        adp->m3_inbox_ctrl   = 0;
-        adp->m3_outbox_ctrl  = 0;
-        adp->m3_outbox_head  = 0;
-        adp->m3_outbox_count = 0;
-        adp->m3_outcmdq_put  = 0;
-        adp->m3_activeq_put  = 0;
-        adp->m3_replaying    = false;
+        adp->m3_state            = 0;
+        adp->m3_int_enable       = 0;
+        adp->m3_inbox_ctrl       = 0;
+        adp->m3_outbox_ctrl      = 0;
+        adp->m3_outbox_head      = 0;
+        adp->m3_outbox_count     = 0;
+        adp->m3_outcmdq_put      = 0;
+        adp->m3_activeq_put      = 0;
+        adp->m3_replaying        = false;
+        adp->m3_activeq_deferred = false;
         memset(adp->m3_dmem, 0, sizeof(adp->m3_dmem));
         memset(adp->m3_imem, 0, sizeof(adp->m3_imem));
         adp->m3_outcmdq = 0;
@@ -1343,6 +1350,14 @@ static void adp_v4_update_disp_bh(void* opaque)
 
     qatomic_set(&adp->commit_pending, 0);
 
+    WITH_QEMU_LOCK_GUARD(&adp->m3_lock)
+    {
+        if (adp->m3_activeq_deferred) {
+            adp->m3_activeq_deferred = false;
+            adp_v4_m3_post_activeq(adp, adp_v4_timebase_now(adp), adp->m3_activeq_deferred_flags);
+        }
+    }
+
     qatomic_or(&adp->int_status, R_CONTROL_INT_FRAME_PROCESSED_MASK);
     adp_v4_update_irqs(adp);
 }
@@ -1441,6 +1456,11 @@ static void adp_v4_tsq_run(AppleDisplayPipeV4State* adp)
     else if (adp->m3_replaying) {
         flags             = REG_FIELD_DP32(flags, APT_M3_ACTIVEQ, REPLAY_EXITED, 1);
         adp->m3_replaying = false;
+    }
+    if (qatomic_read(&adp->commit_pending)) {
+        adp->m3_activeq_deferred       = true;
+        adp->m3_activeq_deferred_flags = flags;
+        return;
     }
     adp_v4_m3_post_activeq(adp, adp_v4_timebase_now(adp), flags);
 }
