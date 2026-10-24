@@ -45,6 +45,7 @@ typedef enum
     SMC_KEY_TYPE_CLH    = '{clh',
     SMC_KEY_TYPE_IOFLT  = 'ioft',
     SMC_KEY_TYPE_FLT    = 'flt ',
+    SMC_KEY_TYPE_CH8    = 'ch8*',
 } SMCKeyType;
 
 typedef enum

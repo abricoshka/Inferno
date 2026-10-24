@@ -562,6 +562,21 @@ static void apple_smc_init(Object* obj)
     // should actually be a function
     apple_smc_add_key(s, 'UB0C', 1, SMC_KEY_TYPE_UINT8, SMC_ATTR_W_LE, NULL);
     apple_smc_add_key(s, 'BNCB', sizeof(battery_count), SMC_KEY_TYPE_UINT8, SMC_ATTR_R_LE, &battery_count);
+    const char batt_serial[18] = "ChefKiss-Battery";
+    apple_smc_add_key(s, 'BMSN', sizeof(batt_serial), SMC_KEY_TYPE_CH8, SMC_ATTR_R_LE, batt_serial);
+    apple_smc_add_key(s, 'B0DD', 2, SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'B0FG', 2, SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'B0MS', 2, SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'BCDC', 1, SMC_KEY_TYPE_UINT8, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'BSFC', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'CH0V', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'BCF0', 4, SMC_KEY_TYPE_UINT32, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'CHCC', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'CHCE', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'CHCR', 1, SMC_KEY_TYPE_FLAG, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'CHSC', 1, SMC_KEY_TYPE_UINT8, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'BMDB', 32, SMC_KEY_TYPE_CH8, SMC_ATTR_R_LE, NULL);
+    apple_smc_add_key(s, 'BMDT', 4, SMC_KEY_TYPE_CH8, SMC_ATTR_R_LE, NULL);
     apple_smc_add_key(s, 'BC1V', sizeof(batt_cell_voltage), SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, &batt_cell_voltage);
     apple_smc_add_key(s, 'BC2V', sizeof(batt_cell_voltage), SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, &batt_cell_voltage);
     apple_smc_add_key(s, 'BC3V', sizeof(batt_cell_voltage), SMC_KEY_TYPE_UINT16, SMC_ATTR_R_LE, &batt_cell_voltage);
