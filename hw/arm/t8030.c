@@ -719,7 +719,9 @@ static bool t8030_load_preboot_file(const char* path, uint8_t** data, gsize* len
         return false;
     }
 
-    if (!apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, "active", &active, &active_len, errp)) { return false; }
+    if (!apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, "active", &active, &active_len, NULL)) {
+        return apfs_read_file(blk, APFS_VOL_ROLE_SYSTEM, path, data, len, errp);
+    }
 
     full_path = g_strdup_printf("%s/%s", (char*)active, path);
     return apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, full_path, data, len, errp);
