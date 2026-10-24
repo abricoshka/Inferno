@@ -53,7 +53,9 @@
 
 #define APFS_ROOT_DIR_INO (2)
 
-#define APFS_INCOMPAT_SEALED_VOLUME (1 << 5)
+#define APFS_INCOMPAT_CASE_INSENSITIVE          (1 << 0)
+#define APFS_INCOMPAT_NORMALIZATION_INSENSITIVE (1 << 3)
+#define APFS_INCOMPAT_SEALED_VOLUME             (1 << 5)
 
 #define APFS_VOL_ROLE_ANY (-1)
 
@@ -204,6 +206,7 @@ typedef struct
     uint64_t   omap_tree;
     uint64_t   root_tree;
     uint64_t   fext_tree;
+    bool       hashed_drec;
 } ApfsContext;
 
 typedef struct
@@ -221,6 +224,7 @@ typedef struct
 {
     const char* name;
     size_t      name_len;
+    bool        hashed;
     bool        found;
     uint64_t    file_id;
 } ApfsDirLookup;
@@ -540,14 +544,24 @@ static int apfs_fext_walk(ApfsContext* ctx, uint64_t paddr, uint16_t max_level, 
 static int apfs_dir_lookup_fn(void* opaque, const ApfsEntry* entry, Error** errp)
 {
     ApfsDirLookup* lookup = opaque;
+    uint32_t       name_off;
     uint32_t       name_len;
 
-    if (entry->key_len < 12) { goto corrupt; }
+    if (lookup->hashed) {
+        if (entry->key_len < 12) { goto corrupt; }
+        name_off = 12;
+        name_len = ldl_le_p(entry->key + 8) & APFS_DREC_LEN_MASK;
+    }
+    else {
+        if (entry->key_len < 10) { goto corrupt; }
+        name_off = 10;
+        name_len = lduw_le_p(entry->key + 8);
+    }
+    if (name_off + name_len > entry->key_len) { goto corrupt; }
 
-    name_len = ldl_le_p(entry->key + 8) & APFS_DREC_LEN_MASK;
-    if (12 + name_len > entry->key_len) { goto corrupt; }
-
-    if (name_len != lookup->name_len + 1 || memcmp(entry->key + 12, lookup->name, lookup->name_len) != 0) { return 0; }
+    if (name_len != lookup->name_len + 1 || memcmp(entry->key + name_off, lookup->name, lookup->name_len) != 0) {
+        return 0;
+    }
 
     if (entry->val_len < sizeof(uint64_t)) { goto corrupt; }
 
@@ -756,7 +770,10 @@ static bool apfs_mount_volume(ApfsContext* ctx, int role, Error** errp)
         if (!apfs_omap_lookup(ctx, oid, &paddr, errp) || !apfs_read_block(ctx, paddr, block, errp)) { return false; }
 
         if (role == APFS_VOL_ROLE_ANY || le16_to_cpu(fs->role) == role) {
-            ctx->root_tree = le64_to_cpu(fs->root_tree_oid);
+            ctx->root_tree   = le64_to_cpu(fs->root_tree_oid);
+            ctx->hashed_drec = (le64_to_cpu(fs->incompat_features)
+                                & (APFS_INCOMPAT_CASE_INSENSITIVE | APFS_INCOMPAT_NORMALIZATION_INSENSITIVE))
+                               != 0;
             ctx->fext_tree =
                 (le64_to_cpu(fs->incompat_features) & APFS_INCOMPAT_SEALED_VOLUME) ? le64_to_cpu(fs->fext_tree_oid) : 0;
             return apfs_load_omap(ctx, le64_to_cpu(fs->omap_oid), errp);
@@ -874,6 +891,7 @@ static ApfsFile* apfs_open(ApfsContext* ctx, int role, const char* path, Error**
 
         lookup.name     = *component;
         lookup.name_len = strlen(*component);
+        lookup.hashed   = ctx->hashed_drec;
         lookup.found    = false;
         if (apfs_fs_walk(ctx, ctx->root_tree, APFS_BTREE_MAX_LEVEL, ino, APFS_TYPE_DIR_REC, apfs_dir_lookup_fn, &lookup,
                          errp)
@@ -1063,13 +1081,98 @@ static bool apfs_chunk_read(ApfsFile* file, uint32_t idx, uint8_t* out, uint64_t
     return true;
 }
 
+static uint8_t* apfs_chunk_compress(uint32_t idx, const uint8_t* in, uint64_t in_len, uLongf* comp_len, Error** errp)
+{
+    g_autofree uint8_t* comp = NULL;
+
+    *comp_len = compressBound(in_len);
+    comp      = g_malloc(*comp_len);
+    if (compress2(comp, comp_len, in, in_len, Z_BEST_COMPRESSION) != Z_OK) {
+        error_setg(errp, "APFS decmpfs chunk %u failed to compress", idx);
+        return NULL;
+    }
+
+    if (*comp_len > in_len) {
+        comp[0] = DECMPFS_CHUNK_RAW;
+        memcpy(comp + 1, in, in_len);
+        *comp_len = in_len + 1;
+    }
+
+    return g_steal_pointer(&comp);
+}
+
+static bool apfs_chunk_put(ApfsFile* file, uint32_t idx, uint64_t off, const uint8_t* comp, uint32_t comp_len,
+                           Error** errp)
+{
+    uint8_t entry[8];
+
+    if (!apfs_data_io(file, off, comp_len, (uint8_t*)comp, true, errp)) { return false; }
+
+    stl_le_p(entry, off - file->chunk_table);
+    stl_le_p(entry + 4, comp_len);
+    return apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8, sizeof(entry), entry, true, errp);
+}
+
+static bool apfs_chunk_repack(ApfsFile* file, uint32_t idx, const uint8_t* comp, uint32_t comp_len, Error** errp)
+{
+    g_autofree uint8_t* raw    = g_malloc(DECMPFS_CHUNK_SIZE);
+    g_autoptr(GPtrArray) comps = g_ptr_array_new_with_free_func(g_free);
+    g_autofree uLongf* lens    = g_new(uLongf, file->chunk_count);
+    uint64_t           start   = UINT64_MAX;
+    uint64_t           end     = 0;
+    uint8_t            map_off[4];
+    uint64_t           off;
+    uint64_t           pos;
+    uint64_t           len;
+    uint32_t           size;
+    uint32_t           i;
+    uint8_t*           out;
+
+    for (i = 0; i < file->chunk_count; i++) {
+        if (!apfs_chunk_entry(file, i, &off, &size, errp)) { return false; }
+        start = MIN(start, off);
+        end   = MAX(end, off + size);
+
+        if (i == idx) {
+            out     = g_memdup2(comp, comp_len);
+            lens[i] = comp_len;
+        }
+        else {
+            len = MIN(DECMPFS_CHUNK_SIZE, file->size - (uint64_t)i * DECMPFS_CHUNK_SIZE);
+            if (!apfs_chunk_read(file, i, raw, len, errp)) { return false; }
+
+            out = apfs_chunk_compress(i, raw, len, &lens[i], errp);
+            if (out == NULL) { return false; }
+        }
+        g_ptr_array_add(comps, out);
+    }
+
+    // Resource fork header (big-endian): dataOffset, mapOffset, ...
+    if (!apfs_data_io(file, 4, sizeof(map_off), map_off, false, errp)) { return false; }
+    end = MAX(end, MIN(ldl_be_p(map_off), file->data_size));
+
+    pos = start;
+    for (i = 0; i < file->chunk_count; i++) { pos += lens[i]; }
+    if (pos > end) {
+        error_setg(errp, "APFS decmpfs chunks grew by 0x%" PRIx64 " bytes, cannot patch in place", pos - end);
+        return false;
+    }
+
+    pos = start;
+    for (i = 0; i < file->chunk_count; i++) {
+        if (!apfs_chunk_put(file, i, pos, g_ptr_array_index(comps, i), lens[i], errp)) { return false; }
+        pos += lens[i];
+    }
+
+    return true;
+}
+
 static bool apfs_chunk_write(ApfsFile* file, uint32_t idx, const uint8_t* in, uint64_t in_len, Error** errp)
 {
     g_autofree uint8_t* comp = NULL;
     uint64_t            off;
     uint32_t            old_size;
     uLongf              comp_len;
-    uint8_t             entry_size[4];
 
     if (file->compression_type != DECMPFS_TYPE_ZLIB_RSRC) {
         error_setg(errp, "APFS decmpfs compression type %u cannot be written", file->compression_type);
@@ -1078,30 +1181,12 @@ static bool apfs_chunk_write(ApfsFile* file, uint32_t idx, const uint8_t* in, ui
 
     if (!apfs_chunk_entry(file, idx, &off, &old_size, errp)) { return false; }
 
-    comp_len = compressBound(in_len);
-    comp     = g_malloc(comp_len);
-    if (compress2(comp, &comp_len, in, in_len, Z_BEST_COMPRESSION) != Z_OK) {
-        error_setg(errp, "APFS decmpfs chunk %u failed to compress", idx);
-        return false;
-    }
+    comp = apfs_chunk_compress(idx, in, in_len, &comp_len, errp);
+    if (comp == NULL) { return false; }
 
-    if (comp_len > in_len) {
-        comp[0] = DECMPFS_CHUNK_RAW;
-        memcpy(comp + 1, in, in_len);
-        comp_len = in_len + 1;
-    }
+    if (comp_len > old_size) { return apfs_chunk_repack(file, idx, comp, comp_len, errp); }
 
-    if (comp_len > old_size) {
-        error_setg(errp, "APFS decmpfs chunk %u grew from 0x%x to 0x%lx bytes, cannot patch in place", idx, old_size,
-                   comp_len);
-        return false;
-    }
-
-    if (!apfs_data_io(file, off, comp_len, comp, true, errp)) { return false; }
-
-    stl_le_p(entry_size, comp_len);
-    return apfs_data_io(file, file->chunk_table + 4 + (uint64_t)idx * 8 + 4, sizeof(entry_size), entry_size, true,
-                        errp);
+    return apfs_chunk_put(file, idx, off, comp, comp_len, errp);
 }
 
 static uint8_t* apfs_chunk_get(ApfsFile* file, uint32_t idx, uint64_t len, Error** errp)
