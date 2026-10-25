@@ -1,6 +1,7 @@
 target("system")
 	if has_config("apple_soc") then
-		add_files("apple_apt_m3.c", "apple_displaypipe_v4.c", "apple_displaypipe_v2.c", "synopsys_mipi_dsim.c", "apple_scaler.c")
+		add_files("apple_apt_m3.c", "apple_displaypipe_v4.c", "apple_displaypipe_v2.c", "synopsys_mipi_dsim.c", "apple_scaler.c",
+		          "apple_surface.c")
 	end
 	if has_config("ddc") then
 		add_files("i2c-ddc.c")

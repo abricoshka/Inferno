@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/display/apple_scaler.h"
+#include "hw/display/apple_surface.h"
 #include "hw/irq.h"
 #include "hw/registerfields.h"
 #include "hw/resettable.h"
@@ -27,7 +28,7 @@
 #include "system/dma.h"
 #include <libyuv.h>
 
-#if 0
+#if 1
     #define SCALER_INFO(fmt, ...) fprintf(stderr, "%s: " fmt "\n", __func__, ##__VA_ARGS__)
 #else
     #define SCALER_INFO(fmt, ...) \
@@ -263,17 +264,6 @@ typedef enum AppleScalerFormat
     APPLE_SCALER_FORMAT_UNKNOWN = -1,
 } AppleScalerFormat;
 
-typedef enum
-{
-    SCALER_LAYOUT_NONE = 0,
-    SCALER_LAYOUT_BIPLANAR_420, /* NV12: chroma at (w+1)/2 x (h+1)/2 */
-    SCALER_LAYOUT_BIPLANAR_422, /* NV16: chroma at (w+1)/2 x h */
-    SCALER_LAYOUT_BIPLANAR_444, /* NV24: chroma at w x h */
-    SCALER_LAYOUT_PACKED32,
-    SCALER_LAYOUT_PACKED_YUY2, /* 2 bytes/pixel average, 4:2:2 */
-    SCALER_LAYOUT_LUMA_ONLY,
-} AppleScalerLayout;
-
 static G_GNUC_UNUSED const char* apple_scaler_stringify_format(AppleScalerFormat format)
 {
     switch (format) {
@@ -314,21 +304,24 @@ static G_GNUC_UNUSED const char* apple_scaler_stringify_format(AppleScalerFormat
     }
 }
 
-static AppleScalerLayout apple_scaler_format_layout(AppleScalerFormat format)
+static AppleSurfaceFormat apple_scaler_surface_format(AppleScalerFormat format)
 {
     switch (format) {
-        case APPLE_SCALER_FORMAT_BGRA     :
-        case APPLE_SCALER_FORMAT_RGBA     :
-        case APPLE_SCALER_FORMAT_L10R     : return SCALER_LAYOUT_PACKED32;
-        case APPLE_SCALER_FORMAT_YUV_420  : return SCALER_LAYOUT_BIPLANAR_420;
-        case APPLE_SCALER_FORMAT_YUV_422  : return SCALER_LAYOUT_BIPLANAR_422;
-        case APPLE_SCALER_FORMAT_YUV_444  : return SCALER_LAYOUT_BIPLANAR_444;
-        case APPLE_SCALER_FORMAT_YUVS_YUVF: return SCALER_LAYOUT_PACKED_YUY2;
-        case APPLE_SCALER_FORMAT_L008     :
-        case APPLE_SCALER_FORMAT_L010     :
-        case APPLE_SCALER_FORMAT_L012     :
-        case APPLE_SCALER_FORMAT_L016     : return SCALER_LAYOUT_LUMA_ONLY;
-        default                           : return SCALER_LAYOUT_NONE;
+        case APPLE_SCALER_FORMAT_BGRA          : return APPLE_SURFACE_FORMAT_ARGB;
+        case APPLE_SCALER_FORMAT_RGBA          : return APPLE_SURFACE_FORMAT_ABGR;
+        case APPLE_SCALER_FORMAT_L10R          : return APPLE_SURFACE_FORMAT_AR30;
+        case APPLE_SCALER_FORMAT_YUV_420       : return APPLE_SURFACE_FORMAT_NV12;
+        case APPLE_SCALER_FORMAT_YUV_422       : return APPLE_SURFACE_FORMAT_NV16;
+        case APPLE_SCALER_FORMAT_YUV_444       : return APPLE_SURFACE_FORMAT_NV24;
+        case APPLE_SCALER_FORMAT_YUVS_YUVF     : return APPLE_SURFACE_FORMAT_YUY2;
+        case APPLE_SCALER_FORMAT_X420_XF20     : return APPLE_SURFACE_FORMAT_P010;
+        case APPLE_SCALER_FORMAT_X422_XF22     : return APPLE_SURFACE_FORMAT_P210;
+        case APPLE_SCALER_FORMAT_X444_XF44_XW44: return APPLE_SURFACE_FORMAT_P410;
+        case APPLE_SCALER_FORMAT_L008          :
+        case APPLE_SCALER_FORMAT_L010          :
+        case APPLE_SCALER_FORMAT_L012          :
+        case APPLE_SCALER_FORMAT_L016          : return APPLE_SURFACE_FORMAT_I400;
+        default                                : return APPLE_SURFACE_FORMAT_NONE;
     }
 }
 
@@ -435,30 +428,6 @@ static AppleScalerFormat apple_scaler_convert_hw_format(uint32_t hw_format, uint
     }
 }
 
-static bool apple_scaler_layout_is_biplanar(AppleScalerLayout layout)
-{ return layout >= SCALER_LAYOUT_BIPLANAR_420 && layout <= SCALER_LAYOUT_BIPLANAR_444; }
-
-static void apple_scaler_chroma_dims(AppleScalerLayout layout, uint32_t width, uint32_t height, uint32_t* chroma_width,
-                                     uint32_t* chroma_height)
-{
-    *chroma_width  = layout == SCALER_LAYOUT_BIPLANAR_444 ? width : (width + 1) / 2;
-    *chroma_height = layout == SCALER_LAYOUT_BIPLANAR_420 ? (height + 1) / 2 : height;
-}
-
-static uint32_t apple_scaler_luma_bpp(AppleScalerLayout layout, uint32_t depth)
-{
-    switch (layout) {
-        case SCALER_LAYOUT_PACKED32   : return 4;
-        case SCALER_LAYOUT_PACKED_YUY2: return 2;
-        case SCALER_LAYOUT_LUMA_ONLY  : return depth > 8 ? 2 : 1;
-        default                       : return 1;
-    }
-}
-
-static bool apple_scaler_layout_is_luma(AppleScalerLayout layout) { return layout == SCALER_LAYOUT_LUMA_ONLY; }
-
-static int apple_scaler_depth_scale(uint32_t depth) { return 65536 >> (depth - 8); }
-
 static dma_addr_t apple_scaler_offset_bytes(uint32_t offsets_reg, uint32_t stride, uint32_t bytes_per_sample)
 {
     dma_addr_t h = REG_FIELD_EX32(offsets_reg, SRCDST_CL_OFFSET, HORIZONTAL);
@@ -466,470 +435,39 @@ static dma_addr_t apple_scaler_offset_bytes(uint32_t offsets_reg, uint32_t strid
     return v * stride + h * bytes_per_sample;
 }
 
-static void apple_scaler_dma_rows(AddressSpace* as, dma_addr_t base, uint32_t stride, uint32_t row_bytes,
-                                  uint32_t height, void* buf, bool write)
-{
-    uint8_t* rows = buf;
-
-    if (row_bytes == 0 || height == 0) { return; }
-
-    if (stride == row_bytes) {
-        size_t total = (size_t)row_bytes * height;
-        if (write) { dma_memory_write(as, base, rows, total, MEMTXATTRS_UNSPECIFIED); }
-        else {
-            dma_memory_read(as, base, rows, total, MEMTXATTRS_UNSPECIFIED);
-        }
-        return;
-    }
-
-    for (uint32_t y = 0; y < height; y++) {
-        dma_addr_t addr = base + (dma_addr_t)y * stride;
-        uint8_t*   row  = rows + (size_t)y * row_bytes;
-        if (write) { dma_memory_write(as, addr, row, row_bytes, MEMTXATTRS_UNSPECIFIED); }
-        else {
-            dma_memory_read(as, addr, row, row_bytes, MEMTXATTRS_UNSPECIFIED);
-        }
-    }
-}
-
-typedef enum
-{
-    IMAGE_ARGB,
-    IMAGE_I444,
-    IMAGE_I422,
-    IMAGE_I420,
-    IMAGE_I400,
-} AppleScalerImageKind;
-
-typedef struct
-{
-    uint8_t*             plane[3];
-    int                  stride[3];
-    uint32_t             width;
-    uint32_t             height;
-    AppleScalerImageKind kind;
-} AppleScalerImage;
-
-static AppleScalerImageKind apple_scaler_layout_kind(AppleScalerLayout layout)
-{
-    switch (layout) {
-        case SCALER_LAYOUT_BIPLANAR_444: return IMAGE_I444;
-        case SCALER_LAYOUT_BIPLANAR_422: return IMAGE_I422;
-        case SCALER_LAYOUT_PACKED_YUY2 : return IMAGE_I422; /* YUY2 is packed 4:2:2 */
-        case SCALER_LAYOUT_PACKED32    : return IMAGE_ARGB;
-        case SCALER_LAYOUT_LUMA_ONLY   : return IMAGE_I400;
-        default                        : return IMAGE_I420;
-    }
-}
-
-static bool apple_scaler_kind_has_chroma(AppleScalerImageKind kind)
-{ return kind == IMAGE_I444 || kind == IMAGE_I422 || kind == IMAGE_I420; }
-
-static void apple_scaler_kind_chroma_dims(AppleScalerImageKind kind, uint32_t width, uint32_t height, uint32_t* cw,
-                                          uint32_t* ch)
-{
-    *cw = kind == IMAGE_I444 ? width : (width + 1) / 2;
-    *ch = kind == IMAGE_I420 ? (height + 1) / 2 : height;
-}
-
-static void apple_scaler_image_init(AppleScalerImage* image, AppleScalerImageKind kind, uint32_t width, uint32_t height)
-{
-    uint32_t cw, ch;
-    size_t   luma_size;
-    size_t   chroma_size;
-
-    *image        = (AppleScalerImage){0};
-    image->kind   = kind;
-    image->width  = width;
-    image->height = height;
-
-    if (kind == IMAGE_ARGB) {
-        image->stride[0] = (int)width * 4;
-        image->plane[0]  = g_malloc((size_t)image->stride[0] * height);
-        return;
-    }
-
-    image->stride[0] = (int)width;
-    luma_size        = (size_t)width * height;
-
-    if (!apple_scaler_kind_has_chroma(kind)) {
-        image->plane[0] = g_malloc(luma_size);
-        return;
-    }
-
-    apple_scaler_kind_chroma_dims(kind, width, height, &cw, &ch);
-    image->stride[1] = image->stride[2] = (int)cw;
-    chroma_size                         = (size_t)cw * ch;
-    image->plane[0]                     = g_malloc(luma_size + 2 * chroma_size);
-    image->plane[1]                     = image->plane[0] + luma_size;
-    image->plane[2]                     = image->plane[1] + chroma_size;
-}
-
-static void apple_scaler_image_destroy(AppleScalerImage* image) { g_free(image->plane[0]); }
-
-typedef int (*AppleScalerPlanarRotate)(const uint8_t*, int, const uint8_t*, int, const uint8_t*, int, uint8_t*, int,
-                                       uint8_t*, int, uint8_t*, int, int, int, enum RotationMode);
-typedef int (*AppleScalerPlanarScale)(const uint8_t*, int, const uint8_t*, int, const uint8_t*, int, int, int, uint8_t*,
-                                      int, uint8_t*, int, uint8_t*, int, int, int, enum FilterMode);
-
-static const AppleScalerPlanarRotate apple_scaler_planar_rotate[] = {
-    [IMAGE_I444] = I444Rotate,
-    [IMAGE_I422] = I422Rotate,
-    [IMAGE_I420] = I420Rotate,
-};
-
-static const AppleScalerPlanarScale apple_scaler_planar_scale[] = {
-    [IMAGE_I444] = I444Scale,
-    [IMAGE_I422] = I422Scale,
-    [IMAGE_I420] = I420Scale,
-};
-
-static void apple_scaler_image_rotate(AppleScalerImage* dst, const AppleScalerImage* src, enum RotationMode rotation)
-{
-    bool swap = rotation == kRotate90 || rotation == kRotate270;
-
-    apple_scaler_image_init(dst, src->kind, swap ? src->height : src->width, swap ? src->width : src->height);
-
-    switch (src->kind) {
-        case IMAGE_ARGB:
-            ARGBRotate(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], (int)src->width, (int)src->height,
-                       rotation);
-            return;
-        case IMAGE_I400:
-            RotatePlane(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], (int)src->width, (int)src->height,
-                        rotation);
-            return;
-        default:
-            apple_scaler_planar_rotate[src->kind](src->plane[0], src->stride[0], src->plane[1], src->stride[1],
-                                                  src->plane[2], src->stride[2], dst->plane[0], dst->stride[0],
-                                                  dst->plane[1], dst->stride[1], dst->plane[2], dst->stride[2],
-                                                  (int)src->width, (int)src->height, rotation);
-            return;
-    }
-}
-
-static void apple_scaler_image_scale(AppleScalerImage* dst, const AppleScalerImage* src, uint32_t width,
-                                     uint32_t height)
-{
-    apple_scaler_image_init(dst, src->kind, width, height);
-
-    switch (src->kind) {
-        case IMAGE_ARGB:
-            ARGBScale(src->plane[0], src->stride[0], (int)src->width, (int)src->height, dst->plane[0], dst->stride[0],
-                      (int)width, (int)height, kFilterBox);
-            return;
-        case IMAGE_I400:
-            ScalePlane(src->plane[0], src->stride[0], (int)src->width, (int)src->height, dst->plane[0], dst->stride[0],
-                       (int)width, (int)height, kFilterBox);
-            return;
-        default:
-            apple_scaler_planar_scale[src->kind](src->plane[0], src->stride[0], src->plane[1], src->stride[1],
-                                                 src->plane[2], src->stride[2], (int)src->width, (int)src->height,
-                                                 dst->plane[0], dst->stride[0], dst->plane[1], dst->stride[1],
-                                                 dst->plane[2], dst->stride[2], (int)width, (int)height, kFilterBox);
-            return;
-    }
-}
-
-static void apple_scaler_image_mirror(AppleScalerImage* dst, const AppleScalerImage* src, bool flip_x)
-{
-    uint32_t cw, ch;
-    int      i;
-
-    apple_scaler_image_init(dst, src->kind, src->width, src->height);
-
-    if (src->kind == IMAGE_ARGB) {
-        if (flip_x) {
-            ARGBMirror(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], (int)src->width, (int)src->height);
-        }
-        else {
-            ARGBCopy(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], (int)src->width, -(int)src->height);
-        }
-        return;
-    }
-
-    apple_scaler_kind_chroma_dims(src->kind, src->width, src->height, &cw, &ch);
-
-    for (i = 0; i < (apple_scaler_kind_has_chroma(src->kind) ? 3 : 1); i++) {
-        int w = i == 0 ? (int)src->width : (int)cw;
-        int h = i == 0 ? (int)src->height : (int)ch;
-
-        if (flip_x) { MirrorPlane(src->plane[i], src->stride[i], dst->plane[i], dst->stride[i], w, h); }
-        else {
-            CopyPlane(src->plane[i], src->stride[i], dst->plane[i], dst->stride[i], w, -h);
-        }
-    }
-}
-
-static void apple_scaler_image_from_i400(AppleScalerImage* dst, const AppleScalerImage* src)
-{
-    uint32_t cw, ch;
-
-    CopyPlane(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], (int)src->width, (int)src->height);
-
-    if (!apple_scaler_kind_has_chroma(dst->kind)) { return; }
-
-    apple_scaler_kind_chroma_dims(dst->kind, dst->width, dst->height, &cw, &ch);
-    SetPlane(dst->plane[1], dst->stride[1], (int)cw, (int)ch, 0x80);
-    SetPlane(dst->plane[2], dst->stride[2], (int)cw, (int)ch, 0x80);
-}
-
-#define PLANAR3(i) (i)->plane[0], (i)->stride[0], (i)->plane[1], (i)->stride[1], (i)->plane[2], (i)->stride[2]
-
-static int apple_scaler_image_convert(AppleScalerImage* dst, const AppleScalerImage* src, AppleScalerImageKind kind)
-{
-    int w = (int)src->width;
-    int h = (int)src->height;
-
-    apple_scaler_image_init(dst, kind, src->width, src->height);
-
-    if (src->kind == IMAGE_I400) {
-        if (kind == IMAGE_ARGB) {
-            return I400ToARGB(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], w, h);
-        }
-        apple_scaler_image_from_i400(dst, src);
-        return 0;
-    }
-
-    if (kind == IMAGE_I400) {
-        if (src->kind == IMAGE_ARGB) {
-            return ARGBToI400(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], w, h);
-        }
-        CopyPlane(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], w, h);
-        return 0;
-    }
-
-    if (src->kind == IMAGE_ARGB) {
-        switch (kind) {
-            case IMAGE_I444: return ARGBToI444(src->plane[0], src->stride[0], PLANAR3(dst), w, h);
-            case IMAGE_I422: return ARGBToI422(src->plane[0], src->stride[0], PLANAR3(dst), w, h);
-            default        : return ARGBToI420(src->plane[0], src->stride[0], PLANAR3(dst), w, h);
-        }
-    }
-
-    if (kind == IMAGE_ARGB) {
-        switch (src->kind) {
-            case IMAGE_I444: return I444ToARGB(PLANAR3(src), dst->plane[0], dst->stride[0], w, h);
-            case IMAGE_I422: return I422ToARGB(PLANAR3(src), dst->plane[0], dst->stride[0], w, h);
-            default        : return I420ToARGB(PLANAR3(src), dst->plane[0], dst->stride[0], w, h);
-        }
-    }
-
-    switch (src->kind) {
-        case IMAGE_I444:
-            if (kind == IMAGE_I420) { return I444ToI420(PLANAR3(src), PLANAR3(dst), w, h); }
-            /* No I444ToI422 in libyuv: halve the chroma planes horizontally, full height. */
-            CopyPlane(src->plane[0], src->stride[0], dst->plane[0], dst->stride[0], w, h);
-            ScalePlane(src->plane[1], src->stride[1], w, h, dst->plane[1], dst->stride[1], dst->stride[1], h,
-                       kFilterBilinear);
-            return ScalePlane(src->plane[2], src->stride[2], w, h, dst->plane[2], dst->stride[2], dst->stride[2], h,
-                              kFilterBilinear);
-        case IMAGE_I422:
-            return kind == IMAGE_I444 ? I422ToI444(PLANAR3(src), PLANAR3(dst), w, h) :
-                                        I422ToI420(PLANAR3(src), PLANAR3(dst), w, h);
-        default:
-            return kind == IMAGE_I444 ? I420ToI444(PLANAR3(src), PLANAR3(dst), w, h) :
-                                        I420ToI422(PLANAR3(src), PLANAR3(dst), w, h);
-    }
-}
-
-static void apple_scaler_chroma_split(const AppleScalerImage* image, const uint8_t* plane1, int stride1)
-{
-    uint32_t cw, ch;
-
-    apple_scaler_kind_chroma_dims(image->kind, image->width, image->height, &cw, &ch);
-    SplitUVPlane(plane1, stride1, image->plane[1], image->stride[1], image->plane[2], image->stride[2], (int)cw,
-                 (int)ch);
-}
-
-static void apple_scaler_chroma_merge(const AppleScalerImage* image, uint8_t* plane1, int stride1)
-{
-    uint32_t cw, ch;
-
-    apple_scaler_kind_chroma_dims(image->kind, image->width, image->height, &cw, &ch);
-    MergeUVPlane(image->plane[1], image->stride[1], image->plane[2], image->stride[2], plane1, stride1, (int)cw,
-                 (int)ch);
-}
-
-static int apple_scaler_packed_to_image(AppleScalerFormat format, const uint8_t* src, int stride,
-                                        const AppleScalerImage* dst)
-{
-    int w = (int)dst->width;
-    int h = (int)dst->height;
-
-    switch (format) {
-        case APPLE_SCALER_FORMAT_BGRA     : return ARGBCopy(src, stride, dst->plane[0], dst->stride[0], w, h);
-        case APPLE_SCALER_FORMAT_RGBA     : return ABGRToARGB(src, stride, dst->plane[0], dst->stride[0], w, h);
-        case APPLE_SCALER_FORMAT_L10R     : return AR30ToARGB(src, stride, dst->plane[0], dst->stride[0], w, h);
-        case APPLE_SCALER_FORMAT_YUVS_YUVF: return YUY2ToI422(src, stride, PLANAR3(dst), w, h);
-        default                           : return -1; /* extend alongside the format table */
-    }
-}
-
-static int apple_scaler_packed_from_image(AppleScalerFormat format, const AppleScalerImage* src, uint8_t* dst,
-                                          int stride)
-{
-    int w = (int)src->width;
-    int h = (int)src->height;
-
-    switch (format) {
-        case APPLE_SCALER_FORMAT_BGRA     : return ARGBCopy(src->plane[0], src->stride[0], dst, stride, w, h);
-        case APPLE_SCALER_FORMAT_RGBA     : return ARGBToABGR(src->plane[0], src->stride[0], dst, stride, w, h);
-        case APPLE_SCALER_FORMAT_L10R     : return ARGBToAR30(src->plane[0], src->stride[0], dst, stride, w, h);
-        case APPLE_SCALER_FORMAT_YUVS_YUVF: return I422ToYUY2(PLANAR3(src), dst, stride, w, h);
-        default                           : return -1; /* extend alongside the format table */
-    }
-}
-
 typedef struct
 {
     AppleScalerFormat format;
-    AppleScalerLayout layout;
-    uint32_t          depth;
-    uint32_t          width;
-    uint32_t          height;
-    uint32_t          stride[LUMA_CHROMA_COUNT];
-    dma_addr_t        base[LUMA_CHROMA_COUNT];
+    AppleSurface      surface;
 } AppleScalerSurface;
 
 static bool apple_scaler_surface_init(AppleScalerSurface* surface, AppleScalerState* scaler, SourceDest srcdst)
 {
     const AppleScalerSrcDstConfig* cfg = &scaler->srcdst[srcdst];
+    AppleSurface*                  out = &surface->surface;
 
-    surface->format         = apple_scaler_convert_hw_format(cfg->format, cfg->swizzle);
-    surface->layout         = apple_scaler_format_layout(surface->format);
-    surface->depth          = apple_scaler_format_depth(surface->format);
-    surface->width          = REG_FIELD_EX32(cfg->size, SRCDST_SIZE, WIDTH);
-    surface->height         = REG_FIELD_EX32(cfg->size, SRCDST_SIZE, HEIGHT);
-    surface->stride[LUMA]   = cfg->stride[LUMA];
-    surface->stride[CHROMA] = cfg->stride[CHROMA];
+    surface->format = apple_scaler_convert_hw_format(cfg->format, cfg->swizzle);
+    out->format     = apple_scaler_surface_format(surface->format);
+    out->depth      = apple_scaler_format_depth(surface->format);
+    out->width      = REG_FIELD_EX32(cfg->size, SRCDST_SIZE, WIDTH);
+    out->height     = REG_FIELD_EX32(cfg->size, SRCDST_SIZE, HEIGHT);
+    out->stride[0]  = cfg->stride[LUMA];
+    out->stride[1]  = cfg->stride[CHROMA];
 
     SCALER_INFO("%s w/h %ux%u stride 0x%X 0x%X format %s @ cl 0x%X 0x%X offsets %d %d",
-                srcdst == SOURCE ? "src" : "dst", surface->width, surface->height, cfg->stride[CHROMA],
-                cfg->stride[LUMA], apple_scaler_stringify_format(surface->format), cfg->base[CHROMA], cfg->base[LUMA],
+                srcdst == SOURCE ? "src" : "dst", out->width, out->height, cfg->stride[CHROMA], cfg->stride[LUMA],
+                apple_scaler_stringify_format(surface->format), cfg->base[CHROMA], cfg->base[LUMA],
                 cfg->offsets[CHROMA], cfg->offsets[LUMA]);
 
-    if (surface->layout == SCALER_LAYOUT_NONE || surface->width == 0 || surface->height == 0) { return false; }
+    if (out->format == APPLE_SURFACE_FORMAT_NONE || out->width == 0 || out->height == 0) { return false; }
 
-    surface->base[LUMA]   = cfg->base[LUMA]
-                            + apple_scaler_offset_bytes(cfg->offsets[LUMA], cfg->stride[LUMA],
-                                                        apple_scaler_luma_bpp(surface->layout, surface->depth));
-    surface->base[CHROMA] = cfg->base[CHROMA] + apple_scaler_offset_bytes(cfg->offsets[CHROMA], cfg->stride[CHROMA], 2);
+    out->base[0] = cfg->base[LUMA]
+                   + apple_scaler_offset_bytes(cfg->offsets[LUMA], cfg->stride[LUMA],
+                                               apple_surface_bytes_per_pixel(out->format, out->depth, 0));
+    out->base[1] = cfg->base[CHROMA]
+                   + apple_scaler_offset_bytes(cfg->offsets[CHROMA], cfg->stride[CHROMA],
+                                               apple_surface_bytes_per_pixel(out->format, out->depth, 1));
     return true;
-}
-
-static bool apple_scaler_image_load(AppleScalerImage* image, AddressSpace* as, const AppleScalerSurface* surface)
-{
-    AppleScalerLayout layout    = surface->layout;
-    uint32_t          row_bytes = surface->width * apple_scaler_luma_bpp(surface->layout, surface->depth);
-    uint8_t*          staging;
-    int               ret;
-
-    apple_scaler_image_init(image, apple_scaler_layout_kind(layout), surface->width, surface->height);
-
-    if (apple_scaler_layout_is_biplanar(layout)) {
-        uint32_t cw, ch;
-        uint8_t* plane1;
-
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, surface->height,
-                              image->plane[0], false);
-
-        apple_scaler_chroma_dims(layout, surface->width, surface->height, &cw, &ch);
-        plane1 = g_malloc((size_t)cw * 2 * ch);
-        apple_scaler_dma_rows(as, surface->base[CHROMA], surface->stride[CHROMA], cw * 2, ch, plane1, false);
-        apple_scaler_chroma_split(image, plane1, (int)(cw * 2));
-        g_free(plane1);
-        return true;
-    }
-
-    if (apple_scaler_layout_is_luma(layout)) {
-        if (surface->depth == 8) {
-            apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, surface->height,
-                                  image->plane[0], false);
-            return true;
-        }
-
-        staging = g_malloc((size_t)row_bytes * surface->height);
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, surface->height, staging,
-                              false);
-        Convert16To8Plane((const uint16_t*)staging, (int)(row_bytes / 2), image->plane[0], image->stride[0],
-                          apple_scaler_depth_scale(surface->depth), (int)image->width, (int)image->height);
-        g_free(staging);
-        return true;
-    }
-
-    if (surface->format == APPLE_SCALER_FORMAT_BGRA) {
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, surface->height,
-                              image->plane[0], false);
-        return true;
-    }
-
-    staging = g_malloc((size_t)row_bytes * surface->height);
-    apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, surface->height, staging, false);
-    ret = apple_scaler_packed_to_image(surface->format, staging, (int)row_bytes, image);
-    g_free(staging);
-
-    if (ret) {
-        SCALER_INFO("conversion from %s failed: %d", apple_scaler_stringify_format(surface->format), ret);
-        apple_scaler_image_destroy(image);
-        return false;
-    }
-    return true;
-}
-
-static bool apple_scaler_image_store(const AppleScalerImage* image, AddressSpace* as, const AppleScalerSurface* surface)
-{
-    AppleScalerLayout layout    = surface->layout;
-    uint32_t          row_bytes = image->width * apple_scaler_luma_bpp(surface->layout, surface->depth);
-    uint8_t*          staging;
-    int               ret;
-
-    if (apple_scaler_layout_is_biplanar(layout)) {
-        uint32_t cw, ch;
-        uint8_t* plane1;
-
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, image->height, image->plane[0],
-                              true);
-
-        apple_scaler_chroma_dims(layout, image->width, image->height, &cw, &ch);
-        plane1 = g_malloc((size_t)cw * 2 * ch);
-        apple_scaler_chroma_merge(image, plane1, (int)(cw * 2));
-        apple_scaler_dma_rows(as, surface->base[CHROMA], surface->stride[CHROMA], cw * 2, ch, plane1, true);
-        g_free(plane1);
-        return true;
-    }
-
-    if (apple_scaler_layout_is_luma(layout)) {
-        if (surface->depth == 8) {
-            apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, image->height,
-                                  image->plane[0], true);
-            return true;
-        }
-
-        staging = g_malloc((size_t)row_bytes * image->height);
-        Convert8To16Plane(image->plane[0], image->stride[0], (uint16_t*)staging, (int)(row_bytes / 2),
-                          (int)surface->depth, (int)image->width, (int)image->height);
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, image->height, staging, true);
-        g_free(staging);
-        return true;
-    }
-
-    if (surface->format == APPLE_SCALER_FORMAT_BGRA) {
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, image->height, image->plane[0],
-                              true);
-        return true;
-    }
-
-    staging = g_malloc((size_t)row_bytes * image->height);
-    ret     = apple_scaler_packed_from_image(surface->format, image, staging, (int)row_bytes);
-    if (ret == 0) {
-        apple_scaler_dma_rows(as, surface->base[LUMA], surface->stride[LUMA], row_bytes, image->height, staging, true);
-    }
-    else {
-        SCALER_INFO("conversion to %s failed: %d", apple_scaler_stringify_format(surface->format), ret);
-    }
-    g_free(staging);
-    return ret == 0;
 }
 
 #if 0
@@ -949,14 +487,16 @@ static void apple_scaler_export_source(AppleScalerState* scaler, const AppleScal
     LumaChroma                     lc;
 
     for (lc = CHROMA; lc < LUMA_CHROMA_COUNT; lc++) {
-        dma_addr_t size = (dma_addr_t)cfg->stride[lc] * (lc == LUMA ? surface->height : surface->height / 2);
+        dma_addr_t size =
+            (dma_addr_t)cfg->stride[lc] * (lc == LUMA ? surface->surface.height : surface->surface.height / 2);
         void*      buf;
 
         if (size == 0) { continue; }
 
         buf = g_malloc(size);
         if (dma_memory_read(&scaler->dma_as, cfg->base[lc], buf, size, MEMTXATTRS_UNSPECIFIED) == MEMTX_OK) {
-            apple_scaler_export_file(SOURCE, surface->width, surface->height, surface->format, lc, buf, size);
+            apple_scaler_export_file(SOURCE, surface->surface.width, surface->surface.height, surface->format, lc, buf,
+                                     size);
         }
         g_free(buf);
     }
@@ -1009,74 +549,58 @@ static AppleScalerTransform apple_scaler_transform(const AppleScalerState* scale
 static bool apple_scaler_transform_is_identity(const AppleScalerTransform* transform)
 { return transform->rotation == kRotate0 && !transform->flip_x && !transform->flip_y; }
 
-static void apple_scaler_blit(AddressSpace* as, const AppleScalerSurface* src, const AppleScalerSurface* dst)
-{
-    uint32_t row_bytes = src->width * apple_scaler_luma_bpp(src->layout, src->depth);
-    uint8_t* buf;
-
-    buf = g_malloc((size_t)row_bytes * src->height);
-    apple_scaler_dma_rows(as, src->base[LUMA], src->stride[LUMA], row_bytes, src->height, buf, false);
-    apple_scaler_dma_rows(as, dst->base[LUMA], dst->stride[LUMA], row_bytes, dst->height, buf, true);
-    g_free(buf);
-
-    if (apple_scaler_layout_is_biplanar(src->layout)) {
-        uint32_t cw, ch;
-
-        apple_scaler_chroma_dims(src->layout, src->width, src->height, &cw, &ch);
-        buf = g_malloc((size_t)cw * 2 * ch);
-        apple_scaler_dma_rows(as, src->base[CHROMA], src->stride[CHROMA], cw * 2, ch, buf, false);
-        apple_scaler_dma_rows(as, dst->base[CHROMA], dst->stride[CHROMA], cw * 2, ch, buf, true);
-        g_free(buf);
-    }
-}
-
 static void apple_scaler_process(AppleScalerState* scaler, const AppleScalerSurface* src, const AppleScalerSurface* dst)
 {
     AppleScalerTransform transform = apple_scaler_transform(scaler);
-    AppleScalerImageKind dst_kind  = apple_scaler_layout_kind(dst->layout);
-    AppleScalerImage     image, tmp;
+    AppleImageKind       dst_kind  = apple_surface_image_kind(dst->surface.format);
+    AppleImage           image, tmp;
     int                  ret;
 
-    if (apple_scaler_transform_is_identity(&transform) && src->format == dst->format && src->width == dst->width
-        && src->height == dst->height)
+    if (apple_scaler_transform_is_identity(&transform) && src->format == dst->format
+        && src->surface.width == dst->surface.width && src->surface.height == dst->surface.height)
     {
-        apple_scaler_blit(&scaler->dma_as, src, dst);
+        apple_surface_copy(&scaler->dma_as, &src->surface, &dst->surface);
         return;
     }
 
-    if (!apple_scaler_image_load(&image, &scaler->dma_as, src)) { return; }
+    if (!apple_surface_load(&image, &scaler->dma_as, &src->surface)) {
+        SCALER_INFO("conversion from %s failed", apple_scaler_stringify_format(src->format));
+        return;
+    }
 
     if (transform.rotation != kRotate0) {
-        apple_scaler_image_rotate(&tmp, &image, transform.rotation);
-        apple_scaler_image_destroy(&image);
+        apple_image_rotate(&tmp, &image, transform.rotation);
+        apple_image_destroy(&image);
         image = tmp;
     }
 
     if (transform.flip_x || transform.flip_y) {
-        apple_scaler_image_mirror(&tmp, &image, transform.flip_x);
-        apple_scaler_image_destroy(&image);
+        apple_image_mirror(&tmp, &image, transform.flip_x);
+        apple_image_destroy(&image);
         image = tmp;
     }
 
-    if (image.width != dst->width || image.height != dst->height) {
-        apple_scaler_image_scale(&tmp, &image, dst->width, dst->height);
-        apple_scaler_image_destroy(&image);
+    if (image.width != dst->surface.width || image.height != dst->surface.height) {
+        apple_image_scale(&tmp, &image, dst->surface.width, dst->surface.height);
+        apple_image_destroy(&image);
         image = tmp;
     }
 
     if (image.kind != dst_kind) {
-        ret = apple_scaler_image_convert(&tmp, &image, dst_kind);
-        apple_scaler_image_destroy(&image);
+        ret = apple_image_convert(&tmp, &image, dst_kind, APPLE_SURFACE_MATRIX_BT601);
+        apple_image_destroy(&image);
         if (ret) {
             SCALER_INFO("conversion to the destination layout failed: %d", ret);
-            apple_scaler_image_destroy(&tmp);
+            apple_image_destroy(&tmp);
             return;
         }
         image = tmp;
     }
 
-    apple_scaler_image_store(&image, &scaler->dma_as, dst);
-    apple_scaler_image_destroy(&image);
+    if (!apple_surface_store(&image, &scaler->dma_as, &dst->surface)) {
+        SCALER_INFO("conversion to %s failed", apple_scaler_stringify_format(dst->format));
+    }
+    apple_image_destroy(&image);
 }
 
 static void apple_scaler_bh(void* opaque)
