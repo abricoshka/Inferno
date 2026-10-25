@@ -134,6 +134,13 @@ class Patcher
 public:
     static bool revert(const FileRef& file)
     {
+        struct Entry
+        {
+            std::streamoff            off;
+            std::vector<std::uint8_t> orig;
+            std::vector<std::uint8_t> patched;
+        };
+
         const auto orig_bytes_path = file.orig_bytes_path();
 
         if (!std::filesystem::exists(orig_bytes_path)) { return false; }
@@ -143,26 +150,56 @@ public:
             throw std::runtime_error("failed to open orig bytes file at `" + orig_bytes_path.string() + '`');
         }
 
-        auto stream = file.open(std::ios::in | std::ios::out);
-
-        bool        changed = false;
-        std::string line;
-        while (orig_bytes_file >> line) {
-            if (line.back() == ':') {
-                stream.seekp(std::stoll(line.substr(0, line.size() - 1), nullptr, 16));
-                if (!stream) { throw std::runtime_error("failed to seek to offset (malformed revert file?)"); }
+        std::vector<Entry> entries;
+        bool               patched = false;
+        std::string        token;
+        while (orig_bytes_file >> token) {
+            if (token.back() == ':') {
+                entries.push_back({std::stoll(token.substr(0, token.size() - 1), nullptr, 16), {}, {}});
+                patched = false;
                 continue;
             }
-            const auto value = std::stoi(line, nullptr, 16);
+            if (entries.empty()) { throw std::runtime_error("malformed revert file; byte before an offset"); }
+            if (token == "|") {
+                patched = true;
+                continue;
+            }
+            const auto value = std::stoi(token, nullptr, 16);
             const auto byte  = std::uint8_t(value & 0xFF);
             if (byte != value) { throw std::runtime_error("malformed revert file; byte too large"); }
-            stream.write(reinterpret_cast<const char*>(&byte), sizeof(byte));
-            if (!stream) { throw std::runtime_error("failed to restore a byte (malformed revert file?)"); }
-            changed = true;
+            (patched ? entries.back().patched : entries.back().orig).push_back(byte);
+        }
+        orig_bytes_file.close();
+
+        auto stream = file.open(std::ios::in | std::ios::out);
+
+        for (const auto& entry : entries) {
+            if (entry.patched.empty()) { continue; }
+            std::vector<std::uint8_t> current(entry.patched.size());
+            try {
+                read_stream(seek_stream(stream, entry.off), current.data(), std::streamsize(current.size()));
+            }
+            catch (const std::exception&) {
+                current.clear();
+            }
+            if (current != entry.patched) {
+                std::cout << file.string() << " changed since it was patched, dropping its revert file.\n";
+                std::filesystem::remove(orig_bytes_path);
+                return false;
+            }
+        }
+
+        bool changed = false;
+        for (const auto& entry : entries) {
+            stream.clear();
+            stream.seekp(entry.off);
+            if (!stream) { throw std::runtime_error("failed to seek to offset (malformed revert file?)"); }
+            stream.write(reinterpret_cast<const char*>(entry.orig.data()), std::streamsize(entry.orig.size()));
+            if (!stream) { throw std::runtime_error("failed to restore bytes (malformed revert file?)"); }
+            changed |= !entry.orig.empty();
         }
 
         stream.flush();
-        orig_bytes_file.close();
         std::filesystem::remove(orig_bytes_path);
 
         return changed;
@@ -222,14 +259,22 @@ public:
                 throw std::runtime_error("`" + cache_entries.first.string() + "` has no code signature");
             }
 
-            auto&      hashes = pending.emplace_back(sig_ref, decltype(pending)::value_type::second_type{}).second;
-            const auto count  = be32(sig, 8);
-            for (std::uint32_t i = 0; i < count; ++i) {
-                const auto blob_off = be32(sig, 12 + std::size_t(i) * 8 + 4);
-                if (be32(sig, blob_off) == CS_MAGIC_CODEDIRECTORY) {
-                    this->rehash_code_directory(cache_entries.first, file, sig, sig_off, blob_off, hashes);
+            decltype(pending)::value_type::second_type hashes;
+            const auto                                 count = be32(sig, 8);
+            try {
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    const auto blob_off = be32(sig, 12 + std::size_t(i) * 8 + 4);
+                    if (be32(sig, blob_off) == CS_MAGIC_CODEDIRECTORY) {
+                        this->rehash_code_directory(cache_entries.first, file, sig, sig_off, blob_off, hashes);
+                    }
                 }
             }
+            catch (const std::exception& e) {
+                if (sig_ref == &cache_entries.first) { throw; }
+                std::cerr << "Warning: not rehashing " << sig_ref->string() << ": " << e.what() << ".\n";
+                continue;
+            }
+            pending.emplace_back(sig_ref, std::move(hashes));
         }
 
         for (auto& [sig_ref, hashes] : pending) {
@@ -276,6 +321,8 @@ public:
                 }
                 diff_file << entry.first << ": ";
                 for (const auto byte : orig_bytes) { diff_file << std::uint16_t(byte) << ' '; }
+                diff_file << "| ";
+                for (const auto byte : entry.second) { diff_file << std::uint16_t(byte) << ' '; }
                 diff_file << '\n';
             }
             cache_file.flush();
