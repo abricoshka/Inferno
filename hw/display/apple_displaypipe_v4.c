@@ -1276,10 +1276,12 @@ static bool adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_i
     if (genpipe->state.buf_len != 0) {
         image = genpipe->state.image;
         if (image == NULL) {
-            fmt                  = adp_v4_gp_fmt_to_pixman(genpipe);
+            fmt = adp_v4_gp_fmt_to_pixman(genpipe);
+            if (fmt == 0) { return false; }
             genpipe->state.image = image =
                 pixman_image_create_bits(fmt, genpipe->state.src_width, genpipe->state.src_height,
                                          (uint32_t*)genpipe->state.buf, genpipe->state.stride);
+            if (image == NULL) { return false; }
         }
 
         if (genpipe->state.src_width != genpipe->state.dest_width
