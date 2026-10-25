@@ -927,7 +927,6 @@ void ck_patch_kernel(MachoHeader64* hdr)
     g_autofree CKPatcherRange* apfs_cstring;
     g_autofree CKPatcherRange* corecrypto_text;
     g_autofree CKPatcherRange* amfi_text;
-    g_autofree CKPatcherRange* sep_mgr_text;
     g_autofree CKPatcherRange* img4_text;
     MachoHeader64*             image4_hdr;
     g_autofree CKPatcherRange* image4_text    = NULL;
