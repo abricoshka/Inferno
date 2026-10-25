@@ -119,9 +119,9 @@ namespace
             const auto    start = this->image.resolve_sym(sym);
             std::uint64_t renderer_call;
             try {
-                renderer_call =
-                    Assembler::find_bl_incr(stream, this->image.header, start, renderer, false,
-                                            std::uint32_t(std::min(this->function_size(start) / 4, 0x400ULL)));
+                renderer_call = Assembler::find_bl_incr(
+                    stream, this->image.header, start, renderer, false,
+                    std::uint32_t(std::min(this->function_size(start) / 4, std::uint64_t(0x400))));
             }
             catch (std::out_of_range& e) {
                 std::cout << "`" << sym << "` doesn't call `CA::OGL::AsynchronousDispatcher::renderer`, skipping.\n";
