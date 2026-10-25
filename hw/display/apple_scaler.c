@@ -28,7 +28,7 @@
 #include "system/dma.h"
 #include <libyuv.h>
 
-#if 1
+#if 0
     #define SCALER_INFO(fmt, ...) fprintf(stderr, "%s: " fmt "\n", __func__, ##__VA_ARGS__)
 #else
     #define SCALER_INFO(fmt, ...) \
