@@ -61,6 +61,7 @@
 OBJECT_DECLARE_SIMPLE_TYPE(AppleSEPAESSState, APPLE_SEP_AESS)
 
 AppleSEPAESSState* apple_sep_aess_create(AppleSEP* sep);
+void               apple_sep_aess_keywrap_uid0(const uint8_t* in, uint8_t* out);
 
 #define TYPE_APPLE_SEP_AESH "apple-sep.aesh"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleSEPAESHState, APPLE_SEP_AESH)

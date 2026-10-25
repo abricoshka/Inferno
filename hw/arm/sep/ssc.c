@@ -19,7 +19,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/crc-ccitt.h"
 #include "qemu/cutils.h"
+#include "qemu/guest-random.h"
 #include "qemu/log.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -1069,6 +1071,82 @@ static void apple_sep_ssc_reset_enter(Object* obj, ResetType type)
     memcpy(ssc->cpsn, cpsn, sizeof(cpsn));
 }
 
+// Counter, generation and payload word of each SP slot as a 14.0 restore leaves them.
+static const struct
+{
+    uint32_t counter;
+    uint32_t generation;
+    uint32_t payload_word;
+} ssc_provision_blocks[] = {
+    {0x11, 0x30, 0}, {0x34, 0x4e, 0}, {0x03, 0x03, 1}, {0x06, 0x1e, 0}, {0x06, 0x1f, 0}, {0x06, 0x20, 0},
+};
+
+static bool ssc_store_is_unprovisioned(const AppleSEPSSCState* ssc)
+{
+    for (size_t slot = 1; slot <= ARRAY_SIZE(ssc_provision_blocks); slot++) {
+        uint64_t key_off = SSC_STORE_KEYS_OFFSET + slot * KBKDF_KEY_KEY_LENGTH;
+
+        if (key_off + KBKDF_KEY_KEY_LENGTH > ssc->store_blk_len) { return false; }
+        for (size_t i = 0; i < KBKDF_KEY_KEY_LENGTH; i++) {
+            if (ssc->store[key_off + i] != 0) { return false; }
+        }
+    }
+    return true;
+}
+
+static void ssc_provision_store(AppleSEPSSCState* ssc)
+{
+    static const uint8_t   lynx_seed[0x20] = "Spes\0\0\0\0Lynx version 1 crypto";
+    uint8_t                root[0x20];
+    uint8_t                sp_key[KBKDF_KEY_KEY_LENGTH];
+    uint8_t                mac_key[SHA256_DIGEST_SIZE];
+    uint8_t                digest[SHA256_DIGEST_SIZE];
+    struct hmac_sha256_ctx ctx;
+
+    apple_sep_aess_keywrap_uid0(lynx_seed, root);
+    hkdf_sha256(0, NULL, strlen("SP key"), (uint8_t*)"SP key", sizeof(root), root, sp_key);
+    hkdf_sha256(0, NULL, strlen("Counter block MAC key"), (uint8_t*)"Counter block MAC key", sizeof(root), root,
+                mac_key);
+
+    for (size_t slot = 1; slot <= ARRAY_SIZE(ssc_provision_blocks); slot++) {
+        uint64_t data_off = slot * CMD_METADATA_DATA_PAYLOAD_LENGTH * SSC_REQUEST_MAX_COPIES;
+        uint8_t  block[CMD_METADATA_DATA_PAYLOAD_LENGTH] = {0};
+        uint8_t* tag;
+
+        stl_le_p(&block[0], ssc_provision_blocks[slot - 1].counter);
+        block[4] = slot;
+        stl_le_p(&block[5], ssc_provision_blocks[slot - 1].generation);
+        hmac_sha256_set_key(&ctx, sizeof(mac_key), mac_key);
+        if (slot <= 2) {
+            stw_le_p(&block[0x1e], crc_ccitt_false(0xffff, block, 0x1e));
+            qemu_guest_getrandom_nofail(&block[0x20], 0x10);
+            hmac_sha256_update(&ctx, 0x30, block);
+            tag = &block[0x30];
+        }
+        else {
+            stw_le_p(&block[0x1e], crc_ccitt_false(0xffff, block, 0xe));
+            for (int i = 0x20; i < CMD_METADATA_DATA_PAYLOAD_LENGTH; i += 4) {
+                stl_le_p(&block[i], ssc_provision_blocks[slot - 1].payload_word);
+            }
+            hmac_sha256_update(&ctx, 0xe, block);
+            hmac_sha256_update(&ctx, 0x22, &block[0x1e]);
+            tag = &block[0xe];
+        }
+#if NETTLE_VERSION_MAJOR >= 4
+        hmac_sha256_digest(&ctx, digest);
+#else
+        hmac_sha256_digest(&ctx, sizeof(digest), digest);
+#endif
+        memcpy(tag, digest, 0x10);
+
+        for (int copy = 0; copy < SSC_REQUEST_MAX_COPIES; copy++) {
+            memcpy(ssc->store + data_off + copy * CMD_METADATA_DATA_PAYLOAD_LENGTH, block,
+                   CMD_METADATA_DATA_PAYLOAD_LENGTH);
+        }
+        memcpy(ssc->store + SSC_STORE_KEYS_OFFSET + slot * KBKDF_KEY_KEY_LENGTH, sp_key, KBKDF_KEY_KEY_LENGTH);
+    }
+}
+
 static void apple_sep_ssc_realize(DeviceState* dev, Error** errp)
 {
     AppleSEPSSCState* ssc = APPLE_SEP_SSC(dev);
@@ -1098,6 +1176,12 @@ static void apple_sep_ssc_realize(DeviceState* dev, Error** errp)
             error_setg_errno(errp, -ret, "apple_sep_ssc: cannot read store");
             return;
         }
+    }
+
+    if (ssc_store_is_unprovisioned(ssc)) {
+        ssc_provision_store(ssc);
+        ssc->store_dirty = true;
+        ssc_flush_sync(ssc);
     }
 
     ssc->flush_bh      = qemu_bh_new(ssc_flush_bh, ssc);

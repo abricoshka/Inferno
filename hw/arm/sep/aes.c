@@ -221,6 +221,23 @@ static void xor_32bit_value(uint8_t* dest, uint32_t val, int size)
     }
 }
 
+static void aess_uid0_keywrap_key(uint8_t* key, uint32_t seed_bits)
+{
+    memcpy(key, AESS_UID0, sizeof(AESS_UID0));         // for UUID
+    xor_32bit_value(&key[0x8], seed_bits, 0x8 / 4);    // seed_bits are only for keywrap
+}
+
+void apple_sep_aess_keywrap_uid0(const uint8_t* in, uint8_t* out)
+{
+    uint8_t        key[sizeof(AESS_UID0)];
+    QCryptoCipher* cipher;
+
+    aess_uid0_keywrap_key(key, SEP_AESS_SEED_BITS_IMG4_VERIFIED);
+    cipher = qcrypto_cipher_new(QCRYPTO_CIPHER_ALGO_AES_256, QCRYPTO_CIPHER_MODE_CBC, key, sizeof(key), &error_abort);
+    qcrypto_cipher_encrypt(cipher, in, out, 0x20, &error_abort);
+    qcrypto_cipher_free(cipher);
+}
+
 static void aess_raise_interrupt(AppleSEPAESSState* s)
 {
     AppleSEP* sep        = s->sep;
@@ -503,10 +520,7 @@ static void apple_sep_aess_handle_cmd(AppleSEPAESSState* s)
     // effect for wrap/UID, no effect for GID/custom?
     else if (normalized_cmd == 0x00) {
         if (keyselect_gid1) {
-            memcpy(s->keywrap_key_uid0, (uint8_t*)AESS_UID0,
-                   sizeof(s->keywrap_key_uid0));    // for UUID
-            xor_32bit_value(&s->keywrap_key_uid0[0x8], s->seed_bits,
-                            0x8 / 4);    // seed_bits are only for keywrap
+            aess_uid0_keywrap_key(s->keywrap_key_uid0, s->seed_bits);
             ////xor_32bit_value(&s->keywrap_key_uid0[0x18],
             /// s->reg_0x18_KEYDISABLE, 0x8/4);
             // NOT AFFECTED by REG_0x18???
