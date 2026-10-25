@@ -40,9 +40,10 @@ namespace
             assembler(assembler)
         { }
 
-        void patch_ret_false(const char* sym)
+        template<typename... T>
+        void patch_ret_false(T... alts)
         {
-            auto addr = this->image.resolve_sym(sym);
+            auto addr = this->image.resolve_sym(alts...);
             this->assembler.write_movz_incr(this->image.file, this->image.header, addr, GPReg::R0, false, 0);
             this->assembler.write_ret(this->image.file, this->image.header, addr);
         }
@@ -79,7 +80,8 @@ namespace
 
             if (!opengles) {
                 // Stop crash from assumption of OpenGLES availability.
-                this->patch_ret_false("_wrapGLIsUsable");
+                this->patch_ret_false("_wrapGLIsUsable",
+                                      "+[CIContext(Internal) internalContextWithEAGLContext:options:]");
                 try {
                     this->patch_ret_false("_wrapGLIsAccelerated");
                 }
@@ -103,10 +105,28 @@ namespace
         CacheAnalyser::Image image;
         Assembler&           assembler;
 
+        auto function_size(const std::uint64_t start) const -> std::uint64_t
+        {
+            std::uint64_t end = -1ULL;
+            for (const auto& sym : this->image.symbols) {
+                if (sym.second > start && sym.second < end) { end = sym.second; }
+            }
+            return end - start;
+        }
+
         void fix_async_dispatcher(std::istream& stream, const std::uint64_t renderer, const char* sym)
         {
-            auto renderer_call =
-                Assembler::find_bl_incr(stream, this->image.header, this->image.resolve_sym(sym), renderer);
+            const auto    start = this->image.resolve_sym(sym);
+            std::uint64_t renderer_call;
+            try {
+                renderer_call =
+                    Assembler::find_bl_incr(stream, this->image.header, start, renderer, false,
+                                            std::uint32_t(std::min(this->function_size(start) / 4, 0x400ULL)));
+            }
+            catch (std::out_of_range& e) {
+                std::cout << "`" << sym << "` doesn't call `CA::OGL::AsynchronousDispatcher::renderer`, skipping.\n";
+                return;
+            }
 
             try {
                 Assembler::find_cbz(stream, this->image.header, renderer_call, true, false, 1);
@@ -230,8 +250,9 @@ namespace
         void apply(const bool opengles)
         {
             // Neutralise CIF10 support which also neutralises framebuffer compression.
-            this->assembler.write_ret(this->image.file, this->image.header,
-                                      this->image.resolve_sym("___CADeviceSupportsCIF10_block_invoke"));
+            this->assembler.write_ret(
+                this->image.file, this->image.header,
+                this->image.resolve_sym("___CADeviceSupportsCIF10_block_invoke", "___CADeviceUseCIF10_block_invoke"));
 
             if (!opengles) {
                 // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
@@ -286,9 +307,19 @@ namespace
         CacheAnalyser::Image image;
         Assembler&           assembler;
 
+        static auto find_image(const CacheAnalyser& analyser) -> CacheAnalyser::Image
+        {
+            try {
+                return analyser.find_image(PrivateFrameworkMatch("CMCapture"));
+            }
+            catch (const std::out_of_range&) {
+                return analyser.find_image(PrivateFrameworkMatch("Celestial"));
+            }
+        }
+
     public:
         CMCapturePatches(const CacheAnalyser& analyser, Assembler& assembler) :
-            image(analyser.find_image(PrivateFrameworkMatch("CMCapture"))),
+            image(find_image(analyser)),
             assembler(assembler)
         { }
 
@@ -464,11 +495,16 @@ namespace
         }
 
     public:
-        static constexpr const char* PATH = "/System/Library/xpc/launchd.plist";
+        static constexpr std::array<const char*, 2> PATHS{
+            "/System/Library/xpc/launchd.plist",
+            "/System/Library/Caches/com.apple.xpc.launchd/mrm.plist",    // iOS <=13
+        };
 
-        LaunchdPatches(Storage& storage, Patcher& patcher) :
+        static auto sig_path(const char* path) -> std::string { return std::string(path) + ".sig"; }
+
+        LaunchdPatches(Storage& storage, Patcher& patcher, const char* path) :
             patcher(patcher),
-            file(storage, PATH)
+            file(storage, path)
         {
             auto stream = this->file.open();
             stream.seekg(0, std::ios::end);
@@ -490,14 +526,9 @@ namespace
         void apply()
         {
             static constexpr std::array<std::string_view, 8> LABELS{
-                "com.apple.CommCenter",
-                "com.apple.CommCenterMobileHelper",
-                "com.apple.CommCenterRootHelper",
-                "com.apple.locationd",
-                "com.apple.voicemail.vmd",
-                "com.apple.bluetoothd",
+                "com.apple.CommCenter", "com.apple.CommCenterMobileHelper", "com.apple.CommCenterRootHelper",
+                "com.apple.locationd",  "com.apple.voicemail.vmd",          "com.apple.bluetoothd",
                 "com.apple.nfcd",
-                "com.apple.audiomxd",
             };
 
             const auto daemons = this->find(this->top, "LaunchDaemons");
@@ -519,6 +550,80 @@ namespace
                     this->corrupt(this->ref(this->object(*arguments), 0));
                 }
             }
+        }
+
+        static void apply(Storage& storage, Patcher& patcher)
+        {
+            try {
+                LaunchdPatches(storage, patcher, PATHS[0]).apply();
+                patcher.sign_detached(FileRef(storage, PATHS[0]), FileRef(storage, sig_path(PATHS[0])));
+            }
+            catch (const std::exception& e) {
+                try {
+                    LaunchdPatches(storage, patcher, PATHS[1]).apply();
+                    patcher.sign_detached(FileRef(storage, PATHS[1]), FileRef(storage, sig_path(PATHS[1])));
+                }
+                catch (const std::exception& e_old) {
+                    throw std::runtime_error(std::string(e.what()) + "; " + e_old.what());
+                }
+            }
+        }
+    };
+
+    class BTAudioHALPluginPatches
+    {
+    public:
+        static constexpr std::array<const char*, 2> PATHS{
+            "/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/BTAudioHALPlugin",
+            "/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/BTAudioHALPlugin",    // iOS <=14
+        };
+
+        static auto find(Storage& storage) -> const char*
+        {
+            for (const auto* path : PATHS) {
+                try {
+                    static_cast<void>(FileRef(storage, path).open());
+                    return path;
+                }
+                catch (const std::exception&) {
+                }
+            }
+            return nullptr;
+        }
+
+        static void apply(Storage& storage, Patcher& patcher)
+        {
+            static constexpr std::array<std::uint8_t, 8> RET_NULL{
+                0x00, 0x00, 0x80, 0xD2,    // mov x0, #0
+                0xC0, 0x03, 0x5F, 0xD6,    // ret
+            };
+
+            const auto* path = find(storage);
+            if (path == nullptr) { throw std::out_of_range("plugin not found"); }
+
+            const FileRef    file(storage, path);
+            auto             stream = file.open();
+            const MachHeader header(stream);
+            if (!header.symtab) { throw std::runtime_error("no symbol table"); }
+
+            const auto& symtab = *header.symtab;
+            for (std::uint32_t i = 0; i < symtab.sym_count; ++i) {
+                const NList sym(seek_stream(stream, std::streamoff(symtab.sym_off + i * 16)));
+                if (sym.strx == 0 || sym.type_flags.bits.type != NList::Type::Section) { continue; }
+                if (read_cstr(seek_stream(stream, std::streamoff(symtab.str_off + sym.strx)))
+                    != "_AudioServerPlugIn_Create")
+                {
+                    continue;
+                }
+
+                for (const auto& [name, segment] : header.segments) {
+                    if (sym.value >= segment.vm_addr && sym.value < segment.vm_addr + segment.file_size) {
+                        patcher.write(file, std::streamoff(segment.file_off + (sym.value - segment.vm_addr)), RET_NULL);
+                        return;
+                    }
+                }
+            }
+            throw std::out_of_range("symbol `_AudioServerPlugIn_Create` not found");
         }
     };
 
@@ -557,7 +662,11 @@ namespace
         targets.reserve(analyser.caches.size());
         for (const auto& cache : analyser.caches) { targets.emplace_back(dyld_storage, cache.first); }
         if (analyser.symbols_cache) { targets.emplace_back(dyld_storage, analyser.symbols_cache->first); }
-        targets.emplace_back(storage, LaunchdPatches::PATH);
+        for (const auto* path : LaunchdPatches::PATHS) {
+            targets.emplace_back(storage, path);
+            targets.emplace_back(storage, LaunchdPatches::sig_path(path));
+        }
+        if (const auto* path = BTAudioHALPluginPatches::find(storage)) { targets.emplace_back(storage, path); }
 
         for (const auto& target : targets) {
             if (Patcher::revert(target)) { std::cout << "Reverted " << target.string() << ".\n"; }
@@ -593,10 +702,16 @@ namespace
         }
         if (unredact_logs) { LibSystemTracePatches(analyser, assembler).apply(); }
         try {
-            LaunchdPatches(storage, patcher).apply();
+            LaunchdPatches::apply(storage, patcher);
         }
         catch (const std::exception& e) {
             std::cerr << "Warning: Failed to apply launchd patches: " << e.what() << ".\n";
+        }
+        try {
+            BTAudioHALPluginPatches::apply(storage, patcher);
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to apply BTAudioHALPlugin patches: " << e.what() << ".\n";
         }
         std::cout << "Patches built successfully.\n";
 

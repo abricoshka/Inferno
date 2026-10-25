@@ -18,6 +18,7 @@
  */
 
 #pragma once
+#include "macho.hpp"
 #include "parse.hpp"
 #include "storage.hpp"
 #include <array>
@@ -34,6 +35,7 @@
 class Patcher
 {
     std::map<FileRef, std::map<std::streamoff, std::vector<std::uint8_t>>> write_queue;
+    std::map<FileRef, FileRef>                                             detached_sigs;
 
     static constexpr std::uint32_t CS_MAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0;
     static constexpr std::uint32_t CS_MAGIC_CODEDIRECTORY      = 0xFADE0C02;
@@ -173,31 +175,66 @@ public:
     void write(const FileRef& file, const std::streamoff file_off, const std::array<std::uint8_t, N> bytes)
     { this->write(file, file_off, bytes.data(), N); }
 
+    /// The code signature of `file` is in `sig`, to be rehashed along with it.
+    void sign_detached(const FileRef& file, const FileRef& sig) { this->detached_sigs.emplace(file, sig); }
+
     void rehash()
     {
-        for (auto& cache_entries : this->write_queue) {
-            auto file = cache_entries.first.open();
-            if (read_cstrn(seek_stream(file, 0), 4) != "dyld") { continue; }
+        std::vector<std::pair<const FileRef*, std::vector<std::pair<std::streamoff, std::vector<std::uint8_t>>>>>
+            pending;
 
-            const auto                sig_off  = std::streamoff(read_u64_le(seek_stream(file, 0x28)));
-            const auto                sig_size = read_u64_le(file);
-            std::vector<std::uint8_t> sig(sig_size);
-            read_stream(seek_stream(file, sig_off), sig.data(), std::streamsize(sig.size()));
+        for (const auto& cache_entries : this->write_queue) {
+            auto                      file = cache_entries.first.open();
+            const FileRef*            sig_ref;
+            std::streamoff            sig_off;
+            std::vector<std::uint8_t> sig;
 
-            if (be32(sig, 0) != CS_MAGIC_EMBEDDED_SIGNATURE) {
-                throw std::runtime_error("`" + cache_entries.first.string() + "` has no embedded code signature");
+            if (const auto detached = this->detached_sigs.find(cache_entries.first);
+                detached != this->detached_sigs.end())
+            {
+                auto sig_file = detached->second.open();
+                sig_file.seekg(0, std::ios::end);
+                sig.resize(std::size_t(sig_file.tellg()));
+                read_stream(seek_stream(sig_file, 0), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &detached->second;
+                sig_off = 0;
+            }
+            else if (read_cstrn(seek_stream(file, 0), 4) == "dyld") {
+                sig_off             = std::streamoff(read_u64_le(seek_stream(file, 0x28)));
+                const auto sig_size = read_u64_le(file);
+                sig.resize(sig_size);
+                read_stream(seek_stream(file, sig_off), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &cache_entries.first;
+            }
+            else if (read_u32_le(seek_stream(file, 0)) == MH_MAGIC_64) {
+                const MachHeader header(seek_stream(file, 0));
+                if (!header.code_signature) { continue; }
+                sig_off = std::streamoff(header.code_signature->data_off);
+                sig.resize(header.code_signature->data_size);
+                read_stream(seek_stream(file, sig_off), sig.data(), std::streamsize(sig.size()));
+                sig_ref = &cache_entries.first;
+            }
+            else {
+                continue;
             }
 
-            std::vector<std::pair<std::streamoff, std::vector<std::uint8_t>>> hashes;
-            const auto                                                        count = be32(sig, 8);
+            if (be32(sig, 0) != CS_MAGIC_EMBEDDED_SIGNATURE) {
+                throw std::runtime_error("`" + cache_entries.first.string() + "` has no code signature");
+            }
+
+            auto&      hashes = pending.emplace_back(sig_ref, decltype(pending)::value_type::second_type{}).second;
+            const auto count  = be32(sig, 8);
             for (std::uint32_t i = 0; i < count; ++i) {
                 const auto blob_off = be32(sig, 12 + std::size_t(i) * 8 + 4);
                 if (be32(sig, blob_off) == CS_MAGIC_CODEDIRECTORY) {
                     this->rehash_code_directory(cache_entries.first, file, sig, sig_off, blob_off, hashes);
                 }
             }
+        }
 
-            for (auto& hash : hashes) { cache_entries.second.emplace(hash.first, std::move(hash.second)); }
+        for (auto& [sig_ref, hashes] : pending) {
+            auto& entries = this->write_queue[*sig_ref];
+            for (auto& hash : hashes) { entries.emplace(hash.first, std::move(hash.second)); }
         }
     }
 

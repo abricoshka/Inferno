@@ -54,6 +54,7 @@ enum LoadCommand : std::uint32_t
 {
     LC_SYMTAB              = 0x2,
     LC_SEGMENT_64          = 0x19,
+    LC_CODE_SIGNATURE      = 0x1D,
     LC_REQ_DYLD            = 0x80000000,
     LC_DYLD_EXPORTS_TRIE   = 0x33 | LC_REQ_DYLD,
     LC_DYLD_CHAINED_FIXUPS = 0x34 | LC_REQ_DYLD,
@@ -154,10 +155,11 @@ struct LinkEditDataCommand
 
 struct MachHeader
 {
-    std::uint32_t                  magic{0};
-    CPUType                        cpu_type{0};
-    std::map<std::string, Segment> segments;
-    std::optional<SymTabCommand>   symtab;
+    std::uint32_t                      magic{0};
+    CPUType                            cpu_type{0};
+    std::map<std::string, Segment>     segments;
+    std::optional<SymTabCommand>       symtab;
+    std::optional<LinkEditDataCommand> code_signature;
     // std::optional<LinkEditDataCommand> exports_trie;
     // std::optional<LinkEditDataCommand> chained_fixups;
 
@@ -182,6 +184,9 @@ struct MachHeader
                 case LC_SEGMENT_64: {
                     auto seg_name = read_cstrn(stream, 16);
                     this->segments.emplace(std::move(seg_name), stream);
+                } break;
+                case LC_CODE_SIGNATURE: {
+                    this->code_signature = LinkEditDataCommand(stream);
                 } break;
                 // case LC_DYLD_EXPORTS_TRIE: {
                 //     this->exports_trie = LinkEditDataCommand(stream);
