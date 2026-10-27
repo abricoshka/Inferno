@@ -156,6 +156,11 @@
 #define SIO_SIZE   (0x114000)
 #define PANIC_SIZE (0x100000)
 
+#define T8030_MCA_MCLK_CFG_BASE     (0x23B0400B4)
+#define T8030_MCA_MCLK_CFG_CLUSTERS (6)
+#define T8030_MCA_MCLK_CFG_STRIDE   (4)
+#define T8030_MCA_MCLK_CFG_SIZE     (T8030_MCA_MCLK_CFG_CLUSTERS * T8030_MCA_MCLK_CFG_STRIDE)
+
 #define AMCC_BASE                              (0x200000000)
 #define AMCC_PLANE_COUNT                       (4)
 #define AMCC_PLANE_STRIDE                      (0x40000)
@@ -1493,8 +1498,6 @@ static uint64_t pmgr_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
             return pmgr_unk_e4800;
         case 0x23D2E4000 ... 0x23D2E417F:    // sep: something memory encryption and sepb
             return pmgr_unk_e4000[((base + addr) - 0x23D2E4000) / 4];
-        case 0x23C100C4C:    // Could that also have been for T8015? No idea anymore.
-            return 0x1;
         default:
             // eACC Temp Sensor
             if ((base + addr) >= 0x210ED0000 && (base + addr) < 0x210ED0000 + 0x10000) { return 0xAFAFAFAF; }
@@ -2109,39 +2112,42 @@ static void t8030_init(MachineState* machine)
     }
 
     /*
-     * PMGR, MINI, AOP Global AP Controls, ACC Power Control, ACC Impl, CPM Impl, ACC Debug,
-     * ACC DVFM, ACC CPU0..3, ACC PM1 Power Control, PACC Impl, PACC CPU0..1, PMP Ext SW Gen,
-     * (unlabelled), Dock FIFO, SOC DPE, ANE DPE PPT SYS, ANE DPE PPT LEE, Bridge 0..18
+     * DT reg indices:
+     * 0 PMGR, 1 MINI, 2 AOP Global AP Controls, 3 ACC Power Control, 4 ACC Impl, 5 CPM Impl, 6 ACC Debug,
+     * 7 ACC DVFM, 8..11 ACC CPU0..3, 12 ACC PM1 Power Control, 13 PACC Impl, 14..16 (unlabelled),
+     * 17..18 PACC CPU0..1, 19 PMP Ext SW Gen, 20 (unlabelled), 21 Dock FIFO, 22 SOC DPE, 23 ANE DPE PPT SYS,
+     * 24 ANE DPE PPT LEE, 25..43 Bridge 0..18
      */
     /* FIXME: Bridge 8 not arm-io, is APCIE */
     static const hwaddr pmgr_regs[][2] = {
-        {0x23B000000, 0x100000}, {0x23D200000, 0x100000}, {0x23D004000, 0x1000},  {0x210E20000, 0x15000},
-        {0x210F00000, 0x50000},  {0x210E40000, 0x10000},  {0x210E50000, 0x1000},  {0x210E70000, 0x90000},
-        {0x210050000, 0x10000},  {0x210150000, 0x10000},  {0x210250000, 0x10000}, {0x210350000, 0x10000},
-        {0x211E20000, 0x15000},  {0x211F00000, 0x50000},  {0x211E40000, 0x10000}, {0x211E50000, 0x1000},
-        {0x211E70000, 0x90000},  {0x211050000, 0x10000},  {0x211150000, 0x10000}, {0x23BC1C000, 0x40000},
-        {0x23B280000, 0x40000},  {0x23D180000, 0x2000},   {0x23D100000, 0x80000}, {0x23B204000, 0x10000},
-        {0x26B8EC000, 0x10000},  {0x26B8F4000, 0x10000},  {0x262000000, 0xD000},  {0x264000000, 0xD000},
-        {0x266000000, 0xD000},   {0x268000000, 0xD000},   {0x26A000000, 0xD000},  {0x22A000000, 0xD000},
-        {0x231000000, 0xD000},   {0x205000000, 0xD000},   {0x60C000000, 0xD000},  {0x234000000, 0xD000},
-        {0x200148000, 0xD000},   {0x279000000, 0xD000},   {0x225000000, 0x15000}, {0x225004000, 0x4000},
-        {0x225008000, 0x4000},   {0x226000000, 0x15000},  {0x226004000, 0x4000},  {0x226008000, 0x4000},
+        {0x23B000000, 0x100000}, {0x23D200000, 0xB0000}, {0x23D2B4000, 0x4020},  {0x23D2B8024, 0x47FDC},
+        {0x23D004000, 0x1000},   {0x210F00000, 0x50000}, {0x210E70000, 0x90000}, {0x210050000, 0x10000},
+        {0x210150000, 0x10000},  {0x210250000, 0x10000}, {0x210350000, 0x10000}, {0x211F00000, 0x50000},
+        {0x211E70000, 0x90000},  {0x211050000, 0x10000}, {0x211150000, 0x10000}, {0x23BC1C000, 0x40000},
+        {0x23B280000, 0x40000},  {0x23D100000, 0x80000}, {0x23B204000, 0x10000}, {0x26B8EC000, 0x8000},
+        {0x26B8F4000, 0x10000},  {0x262000000, 0xD000},  {0x264000000, 0xD000},  {0x266000000, 0xD000},
+        {0x268000000, 0xD000},   {0x26A000000, 0xD000},  {0x22A000000, 0xD000},  {0x231000000, 0xD000},
+        {0x205000000, 0xD000},   {0x60C000000, 0xD000},  {0x234000000, 0xD000},  {0x279000000, 0xD000},
+        {0x225000000, 0x15000},  {0x226000000, 0x15000},
     };
     /* 0: ASCWrap, 1: PMS CSR */
     static const hwaddr pmp_regs[][2] = {
-        {0x23B850000, 0x200000}, {0x23B500000, 0x60000}, {0x200020000, 0x4000},  {0x200060000, 0x4000},
-        {0x2000A0000, 0x4000},   {0x2000E0000, 0x4000},  {0x200154000, 0x4000},  {0x200204000, 0x4000},
-        {0x200244000, 0x4000},   {0x200284000, 0x4000},  {0x2002C4000, 0x4000},  {0x204D14000, 0x4000},
-        {0x210058000, 0x4000},   {0x210158000, 0x4000},  {0x210258000, 0x4000},  {0x210358000, 0x4000},
-        {0x210E20000, 0x60000},  {0x210E48000, 0x4000},  {0x211058000, 0x4000},  {0x211158000, 0x4000},
-        {0x211E20000, 0x60000},  {0x211E48000, 0x4000},  {0x23D100000, 0x14000}, {0x23D128000, 0x30000},
-        {0x23D180000, 0x4000},   {0x26B854000, 0x4000},  {0x26B8F0000, 0x4000},  {0x200170000, 0x4000},
-        {0x23500C000, 0x4000},   {0x23C100000, 0x4000},
+        {0x23B850000, 0x200000}, {0x23B500000, 0x60000}, {0x204D14000, 0x4000}, {0x210E20000, 0x50000},
+        {0x211E20000, 0x50000},  {0x26B854000, 0x4000},  {0x23500C000, 0x4000},
     };
-    MemoryRegion* mem = g_new(MemoryRegion, ARRAY_SIZE(pmgr_regs) + ARRAY_SIZE(pmp_regs));
+    MemoryRegion* mem = g_new(MemoryRegion, ARRAY_SIZE(pmgr_regs) + ARRAY_SIZE(pmp_regs) + 2);
     uint32_t      idx = 0;
 
-    t8030_pmgr_init_mmio(t8030, &mem[idx++], &pmgr_reg_ops, t8030, "pmgr-reg", pmgr_regs[0][0], pmgr_regs[0][1]);
+    MemoryRegion* pmgr_reg = &mem[idx++];
+    hwaddr        mclk_off = T8030_MCA_MCLK_CFG_BASE - pmgr_regs[0][0];
+    hwaddr        hi_off   = mclk_off + T8030_MCA_MCLK_CFG_SIZE;
+
+    memory_region_init_io(pmgr_reg, OBJECT(t8030), &pmgr_reg_ops, t8030, "pmgr-reg", pmgr_regs[0][1]);
+    memory_region_enable_lockless_io(pmgr_reg);
+    memory_region_init_alias(&mem[idx], OBJECT(t8030), "pmgr-reg-lo", pmgr_reg, 0, mclk_off);
+    memory_region_add_subregion(get_system_memory(), pmgr_regs[0][0], &mem[idx++]);
+    memory_region_init_alias(&mem[idx], OBJECT(t8030), "pmgr-reg-hi", pmgr_reg, hi_off, pmgr_regs[0][1] - hi_off);
+    memory_region_add_subregion(get_system_memory(), pmgr_regs[0][0] + hi_off, &mem[idx++]);
     for (size_t i = 1; i < ARRAY_SIZE(pmgr_regs); i++) {
         snprintf(name, sizeof(name), "pmgr-unk-reg-%zu", i - 1);
         t8030_pmgr_init_mmio(t8030, &mem[idx++], &pmgr_unk_reg_ops, NULL, name, pmgr_regs[i][0], pmgr_regs[i][1]);
@@ -2154,7 +2160,6 @@ static void t8030_init(MachineState* machine)
     }
     /* FIXME: Each "Temp Sensor" actually houses multiple, each with different offsets and IRQs */
     create_unimplemented_device_with_val("PMGR SOC Die Temp Sensor", 0x23B2C4000, 0x34000, 0xAFAFAFAFAFAFAFAF);
-    create_unimplemented_device_with_val("GPU MTR Temp Sensor", 0x23B2E0000, 0x8000, 0xAFAFAFAFAFAFAFAF);
 
     dart = APPLE_DART(qdev_new(TYPE_APPLE_DART));
     qdev_prop_set_uint32(DEVICE(dart), "page-size", 0x4000);
@@ -2537,7 +2542,7 @@ static void t8030_init(MachineState* machine)
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, APPLE_MCA_MMIO_SIO, 0x238400000);
     sysbus_mmio_map(sbd, APPLE_MCA_MMIO_DMA, 0x238300000);
-    sysbus_mmio_map(sbd, APPLE_MCA_MMIO_MCLK_CFG, 0x23B0400B4);
+    sysbus_mmio_map(sbd, APPLE_MCA_MMIO_MCLK_CFG, T8030_MCA_MCLK_CFG_BASE);
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_BUTTONS));
     object_property_set_link(OBJECT(sbd), "smc", object_property_get_link(OBJECT(t8030), "smc", &error_fatal),
