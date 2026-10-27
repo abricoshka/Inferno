@@ -436,25 +436,3 @@ typedef union
         uint32_t                      command_fifo;
     } QEMU_PACKED;
 } aes_reg_t;
-
-#define REG_AES_V3_SECURITY_AES_DISABLE                   (0x0)
-#define AES_V3_SECURITY_AES_DISABLE_UID                   BIT(0)
-#define AES_V3_SECURITY_AES_DISABLE_GID_SHIFT             (1)
-#define AES_V3_SECURITY_AES_DISABLE_GID0                  (1 << AES_V3_SECURITY_AES_DISABLE_GID_SHIFT)
-#define AES_V3_SECURITY_AES_DISABLE_GID1                  (2 << AES_V3_SECURITY_AES_DISABLE_GID_SHIFT)
-#define AES_V3_SECURITY_AES_DISABLE_GID2                  (3 << AES_V3_SECURITY_AES_DISABLE_GID_SHIFT)
-#define REG_AES_V3_SECURITY_MCC_BOOTROM_DIS               (0x10)
-#define AES_V3_SECURITY_MCC_BOOTROM_DIS                   BIT(0)
-#define REG_AES_V3_SECURITY_GPIO_STRAPS                   (0x20)
-#define AES_V3_SECURITY_GPIO_STRAPS_BOARD_ID_MASK         (0x1F)
-#define AES_V3_SECURITY_GPIO_STRAPS_BOARD_ID(v)           ((v) & AES_V3_SECURITY_GPIO_STRAPS_BOARD_ID_MASK)
-#define AES_V3_SECURITY_GPIO_STRAPS_UNTRUSTED_BOOT_CONFIG BIT(16)
-#define AES_V3_SECURITY_GPIO_STRAPS_VALID                 BIT(31)
-#define REG_AES_V3_SECURITY_SET_ONLY                      (0x30)
-#define AES_V3_SECURITY_SET_ONLY_MIX_AND_MATCH            BIT(31)
-#define REG_AES_V3_SECURITY_SEP                           (0x34)
-#define AES_V3_SECURITY_SEP_LOCK_SET                      BIT(8)
-#define AES_V3_SECURITY_SEP_SECURE_MODE_CLR               BIT(8)
-#define AES_V3_SECURITY_SEP_FIRST_BOOT                    BIT(24)
-#define AES_V3_SECURITY_SEP_FIRST_AWAKE_BOOT              BIT(25)
-#define AES_V3_SECURITY_SEP_ATTACK_CLK_GATE_DISABLE       BIT(31)

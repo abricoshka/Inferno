@@ -1404,6 +1404,28 @@ static void pmgr_unk_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
 #endif
 }
 
+#define REG_MINIPMGR_SECURITY_AES_DISABLE                   (0x0)
+#define MINIPMGR_SECURITY_AES_DISABLE_UID                   BIT(0)
+#define MINIPMGR_SECURITY_AES_DISABLE_GID_SHIFT             (1)
+#define MINIPMGR_SECURITY_AES_DISABLE_GID0                  (1 << MINIPMGR_SECURITY_AES_DISABLE_GID_SHIFT)
+#define MINIPMGR_SECURITY_AES_DISABLE_GID1                  (2 << MINIPMGR_SECURITY_AES_DISABLE_GID_SHIFT)
+#define MINIPMGR_SECURITY_AES_DISABLE_GID2                  (3 << MINIPMGR_SECURITY_AES_DISABLE_GID_SHIFT)
+#define REG_MINIPMGR_SECURITY_MCC_BOOTROM_DIS               (0x10)
+#define MINIPMGR_SECURITY_MCC_BOOTROM_DIS                   BIT(0)
+#define REG_MINIPMGR_SECURITY_GPIO_STRAPS                   (0x20)
+#define MINIPMGR_SECURITY_GPIO_STRAPS_BOARD_ID_MASK         (0x1F)
+#define MINIPMGR_SECURITY_GPIO_STRAPS_BOARD_ID(v)           ((v) & MINIPMGR_SECURITY_GPIO_STRAPS_BOARD_ID_MASK)
+#define MINIPMGR_SECURITY_GPIO_STRAPS_UNTRUSTED_BOOT_CONFIG BIT(16)
+#define MINIPMGR_SECURITY_GPIO_STRAPS_VALID                 BIT(31)
+#define REG_MINIPMGR_SECURITY_SET_ONLY                      (0x30)
+#define MINIPMGR_SECURITY_SET_ONLY_MIX_AND_MATCH            BIT(31)
+#define REG_MINIPMGR_SECURITY_SEP                           (0x34)
+#define MINIPMGR_SECURITY_SEP_LOCK_SET                      BIT(8)
+#define MINIPMGR_SECURITY_SEP_SECURE_MODE_CLR               BIT(8)
+#define MINIPMGR_SECURITY_SEP_FIRST_BOOT                    BIT(24)
+#define MINIPMGR_SECURITY_SEP_FIRST_AWAKE_BOOT              BIT(25)
+#define MINIPMGR_SECURITY_SEP_ATTACK_CLK_GATE_DISABLE       BIT(31)
+
 static uint64_t pmgr_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
 {
     AppleT8030MachineState* t8030 = APPLE_T8030(qdev_get_machine());
@@ -1498,7 +1520,21 @@ static uint64_t pmgr_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
             return pmgr_unk_e4800;
         case 0x23D2E4000 ... 0x23D2E417F:    // sep: something memory encryption and sepb
             return pmgr_unk_e4000[((base + addr) - 0x23D2E4000) / 4];
+        case 0x23D2D0000 + REG_MINIPMGR_SECURITY_AES_DISABLE:
+            return MINIPMGR_SECURITY_AES_DISABLE_GID1 | MINIPMGR_SECURITY_AES_DISABLE_UID;
+        case 0x23D2D0000 + REG_MINIPMGR_SECURITY_GPIO_STRAPS:
+            return MINIPMGR_SECURITY_GPIO_STRAPS_BOARD_ID(t8030->board_id) | MINIPMGR_SECURITY_GPIO_STRAPS_VALID;
+        case 0x23D2D0000 + REG_MINIPMGR_SECURITY_SET_ONLY: return 0x00;
+        case 0x23D2D0000 + REG_MINIPMGR_SECURITY_SEP:
+            return MINIPMGR_SECURITY_SEP_FIRST_BOOT | MINIPMGR_SECURITY_SEP_FIRST_AWAKE_BOOT;
+        case 0x23D2D0000 + REG_MINIPMGR_SECURITY_MCC_BOOTROM_DIS:
+            // normally 0x0 for SecureROM, but it only checks after writing to it
+            return MINIPMGR_SECURITY_MCC_BOOTROM_DIS;    // for iBoot (and SecureROM)
+        case 0x23D2D0000 + 0x4040:                       // PKA_SECU 0xd4040
+        case 0x23D2D0000 + 0x4084:                       // PKA_SECU 0xd4084
+            return 0x10000;                              // prevent (e.g. SEPOS 18.5) PKA panic
         default:
+            if (base >= 0x23D2D0000 && addr < 0x8000) { return 0xFF; }
             // eACC Temp Sensor
             if ((base + addr) >= 0x210ED0000 && (base + addr) < 0x210ED0000 + 0x10000) { return 0xAFAFAFAF; }
             // pACC Temp Sensor
@@ -2454,10 +2490,8 @@ static void t8030_init(MachineState* machine)
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_AES));
     object_property_add_const_link(OBJECT(sbd), "dma-mr", OBJECT(apple_dart_iommu_mr(dart, 1)));
-    qdev_prop_set_uint32(DEVICE(sbd), "board-id", t8030->board_id);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, 0x235008000);
-    sysbus_mmio_map(sbd, 1, 0x23D2D0000);
     sysbus_connect_irq(sbd, 0, t8030_irq(t8030, 0x1C7));
 
     spi             = apple_spi_create(0x235100000, t8030_irq(t8030, 0x1BC), APPLE_SIO(sio), 0x14, 0x15);    // SPI0

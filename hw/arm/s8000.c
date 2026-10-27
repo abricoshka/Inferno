@@ -512,6 +512,7 @@ static void pmgr_unk_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
 #endif
 }
 
+/* TODO: 0x2102D0000; MiniPMGR Security */
 static uint64_t pmgr_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
 {
     AppleS8000MachineState* s8000 = APPLE_S8000(qdev_get_machine());
@@ -968,10 +969,8 @@ static void s8000_create_devices(AppleS8000MachineState* s8000)
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_AES));
     object_property_add_child(OBJECT(s8000), "aes", OBJECT(sbd));
     object_property_add_const_link(OBJECT(sbd), "dma-mr", OBJECT(s8000->sys_mem));
-    qdev_prop_set_uint32(DEVICE(sbd), "board-id", s8000->board_id);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, 0x20A108000);
-    sysbus_mmio_map(sbd, 1, 0x2102D0000);
     sysbus_connect_irq(sbd, 0, s8000_irq(s8000, 0xD3));
 
     s8000_create_spi(s8000, "spi0", SPI0_BASE, SPI0_IRQ, gpio, GPIO_SPI0_CS);

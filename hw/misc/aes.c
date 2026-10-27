@@ -59,7 +59,7 @@ typedef struct
 struct AppleAESState
 {
     SysBusDevice  parent_obj;
-    MemoryRegion  iomems[2];
+    MemoryRegion  iomem;
     MemoryRegion* dma_mr;
     AddressSpace  dma_as;
     qemu_irq      irq;
@@ -77,7 +77,6 @@ struct AppleAESState
     AESKey    keys[2];
     uint8_t   iv[4][16];
     bool      stopped;
-    uint32_t  board_id;
 };
 
 static uint32_t key_size(uint8_t len)
@@ -349,33 +348,6 @@ static void* aes_thread(void* opaque)
     return NULL;
 }
 
-static void aes_security_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size) { }
-
-static uint64_t aes_security_reg_read(void* opaque, hwaddr addr, unsigned size)
-{
-    AppleAESState* s = opaque;
-
-#if 0
-    qemu_log_mask(LOG_GUEST_ERROR, "%s: Read 0x" HWADDR_FMT_plx "\n", __func__,
-                  addr);
-#endif
-
-    switch (addr) {
-        case REG_AES_V3_SECURITY_AES_DISABLE: return AES_V3_SECURITY_AES_DISABLE_GID1 | AES_V3_SECURITY_AES_DISABLE_UID;
-        case REG_AES_V3_SECURITY_GPIO_STRAPS:
-            return AES_V3_SECURITY_GPIO_STRAPS_BOARD_ID(s->board_id) | AES_V3_SECURITY_GPIO_STRAPS_VALID;
-        case REG_AES_V3_SECURITY_SET_ONLY: return 0x00;
-        case REG_AES_V3_SECURITY_SEP     : return AES_V3_SECURITY_SEP_FIRST_BOOT | AES_V3_SECURITY_SEP_FIRST_AWAKE_BOOT;
-        case REG_AES_V3_SECURITY_MCC_BOOTROM_DIS:
-            // normally 0x0 for SecureROM, but it only checks after writing to it
-            return AES_V3_SECURITY_MCC_BOOTROM_DIS;    // for iBoot (and SecureROM)
-        case 0x4040:                                   // PKA_SECU 0xd4040
-        case 0x4084:                                   // PKA_SECU 0xd4084
-            return 0x10000;                            // prevent (e.g. SEPOS 18.5) PKA panic
-        default: return 0xFF;
-    }
-}
-
 static void aes_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned size)
 {
     AppleAESState* s     = opaque;
@@ -558,17 +530,6 @@ static const MemoryRegionOps aes_reg_ops = {
     .valid.unaligned       = false,
 };
 
-static const MemoryRegionOps aes_security_reg_ops = {
-    .write                 = aes_security_reg_write,
-    .read                  = aes_security_reg_read,
-    .endianness            = DEVICE_LITTLE_ENDIAN,
-    .impl.min_access_size  = 4,
-    .impl.max_access_size  = 4,
-    .valid.min_access_size = 4,
-    .valid.max_access_size = 4,
-    .valid.unaligned       = false,
-};
-
 static void apple_aes_reset_enter(Object* obj, ResetType type)
 {
     AppleAESState* s = APPLE_AES(obj);
@@ -620,10 +581,6 @@ static void apple_aes_unrealize(DeviceState* dev)
     qemu_mutex_destroy(&s->queue_mutex);
 }
 
-static const Property apple_aes_props[] = {
-    DEFINE_PROP_UINT32("board-id", AppleAESState, board_id, 0),
-};
-
 static void apple_aes_class_init(ObjectClass* klass, const void* data)
 {
     ResettableClass* rc = RESETTABLE_CLASS(klass);
@@ -636,7 +593,6 @@ static void apple_aes_class_init(ObjectClass* klass, const void* data)
     dc->unrealize = apple_aes_unrealize;
     dc->desc      = "Apple AES Accelerator";
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
-    device_class_set_props(dc, apple_aes_props);
 }
 
 static void apple_aes_init(Object* obj)
@@ -644,14 +600,8 @@ static void apple_aes_init(Object* obj)
     AppleAESState* s   = APPLE_AES(obj);
     SysBusDevice*  sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomems[0], obj, &aes_reg_ops, s, TYPE_APPLE_AES ".mmio", 0x4000);
-
-    sysbus_init_mmio(sbd, &s->iomems[0]);
-
-    // also called PKA_SECU, but with size 0x8000 instead of 0x4000
-    // PKA (e.g. SEPOS 18.5) starts to really require it to be 0x8000
-    memory_region_init_io(&s->iomems[1], obj, &aes_security_reg_ops, s, TYPE_APPLE_AES ".security.mmio", 0x8000);
-    sysbus_init_mmio(sbd, &s->iomems[1]);
+    memory_region_init_io(&s->iomem, obj, &aes_reg_ops, s, TYPE_APPLE_AES ".mmio", 0x4000);
+    sysbus_init_mmio(sbd, &s->iomem);
 
     sysbus_init_irq(sbd, &s->irq);
 
