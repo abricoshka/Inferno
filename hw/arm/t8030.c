@@ -1948,6 +1948,10 @@ static AddressSpace    pmp_dma_as;
 //     0x00: Ready
 //     0x01: Init Memory
 //     0x02: Init Memory Ack
+//     0x03: Set Property
+//     0x04: Set Property Ack
+//     0x05: Ping
+//     0x06: Ping Ack
 // 1: eHub Command
 //     0x00/0x02: Node
 //     0x04/0x06: Time Series
@@ -1966,22 +1970,25 @@ static void pmp_rtk_ep0_handler(void* opaque, uint8_t ep, uint64_t msg)
     };
     AppleRTKit* rtk        = opaque;
     uint8_t     buf[0x510] = {0};
-    uint64_t    cmd;
+    uint8_t     cmd;
 
     switch (extract64(msg, 52, 4)) {
         case 0:
-            if (extract64(msg, 48, 4) != 1) { break; }
-
-            // fill the domain/device tables, ack without eHub
-            for (size_t i = 0; i < ARRAY_SIZE(domains); i++) {
-                strncpy((char*)buf + i * 0x2C, domains[i], 8);
-                for (size_t j = 0; j < ARRAY_SIZE(states); j++) {
-                    strncpy((char*)buf + i * 0x2C + 8 + j * 0xC, states[j], 8);
+            cmd = extract64(msg, 48, 4);
+            // init memory: fill the domain/device tables, ack without eHub
+            if (cmd == 1) {
+                for (size_t i = 0; i < ARRAY_SIZE(domains); i++) {
+                    strncpy((char*)buf + i * 0x2C, domains[i], 8);
+                    for (size_t j = 0; j < ARRAY_SIZE(states); j++) {
+                        strncpy((char*)buf + i * 0x2C + 8 + j * 0xC, states[j], 8);
+                    }
                 }
+                for (size_t i = 0; i < ARRAY_SIZE(devices); i++) {
+                    strncpy((char*)buf + 0xB0 + i * 0x18, devices[i], 8);
+                }
+                dma_memory_write(&pmp_dma_as, extract64(msg, 0, 48) + 0x4000, buf, sizeof(buf), MEMTXATTRS_UNSPECIFIED);
             }
-            for (size_t i = 0; i < ARRAY_SIZE(devices); i++) { strncpy((char*)buf + 0xB0 + i * 0x18, devices[i], 8); }
-            dma_memory_write(&pmp_dma_as, extract64(msg, 0, 48) + 0x4000, buf, sizeof(buf), MEMTXATTRS_UNSPECIFIED);
-            apple_rtkit_send_user_msg(rtk, ep, deposit64(0, 48, 4, 2));
+            apple_rtkit_send_user_msg(rtk, ep, deposit64(0, 48, 4, cmd + 1));
             break;
         case 2:
             cmd = extract64(msg, 44, 8);
