@@ -39,7 +39,6 @@ struct sdl2_console
     int                   ignore_hotkeys;
     bool                  gui_keysym;
     QKbdState*            kbd;
-    bool                  has_dmabuf;
 };
 
 void sdl2_window_create(struct sdl2_console* scon);
