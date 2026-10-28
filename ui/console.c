@@ -571,27 +571,6 @@ void dpy_gfx_replace_surface(QemuConsole* con, DisplaySurface* surface)
     qemu_free_displaysurface(old_surface);
 }
 
-bool dpy_gfx_check_format(QemuConsole* con, pixman_format_code_t format)
-{
-    DisplayChangeListener* dcl;
-    DisplayState*          s = con->ds;
-
-    QLIST_FOREACH (dcl, &s->listeners, next) {
-        if (dcl->con && dcl->con != con) {
-            /* dcl bound to another console -> skip */
-            continue;
-        }
-        if (dcl->ops->dpy_gfx_check_format) {
-            if (!dcl->ops->dpy_gfx_check_format(dcl, format)) { return false; }
-        }
-        else {
-            /* default is to allow native 32 bpp only */
-            if (format != qemu_default_pixman_format(32, true)) { return false; }
-        }
-    }
-    return true;
-}
-
 static void dpy_refresh(DisplayState* s)
 {
     DisplayChangeListener* dcl;

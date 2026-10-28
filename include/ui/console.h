@@ -166,8 +166,6 @@ typedef struct DisplayChangeListenerOps
     void (*dpy_gfx_update)(DisplayChangeListener* dcl, int x, int y, int w, int h);
     /* optional */
     void (*dpy_gfx_switch)(DisplayChangeListener* dcl, struct DisplaySurface* new_surface);
-    /* optional */
-    bool (*dpy_gfx_check_format)(DisplayChangeListener* dcl, pixman_format_code_t format);
 
     /* optional */
     void (*dpy_text_cursor)(DisplayChangeListener* dcl, int x, int y);
@@ -211,7 +209,6 @@ void dpy_text_update(QemuConsole* con, int x, int y, int w, int h);
 void dpy_text_resize(QemuConsole* con, int w, int h);
 void dpy_mouse_set(QemuConsole* con, int x, int y, bool on);
 void dpy_cursor_define(QemuConsole* con, QEMUCursor* cursor);
-bool dpy_gfx_check_format(QemuConsole* con, pixman_format_code_t format);
 
 typedef uint32_t console_ch_t;
 

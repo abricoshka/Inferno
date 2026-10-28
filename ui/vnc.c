@@ -2846,7 +2846,6 @@ static const DisplayChangeListenerOps dcl_ops = {
     .dpy_refresh          = vnc_refresh,
     .dpy_gfx_update       = vnc_dpy_update,
     .dpy_gfx_switch       = vnc_dpy_switch,
-    .dpy_gfx_check_format = qemu_pixman_check_format,
     .dpy_mouse_set        = vnc_mouse_set,
     .dpy_cursor_define    = vnc_dpy_cursor_define,
 };
