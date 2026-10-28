@@ -1095,7 +1095,7 @@ private:
         menubar->Append(view, "&View");
 
         wxMenu* help = new wxMenu;
-        help->Append(ID_DOCUMENTATION, "QEMU &Documentation");
+        help->Append(ID_DOCUMENTATION, "Inferno &Documentation");
         help->Append(wxID_ABOUT, "&About ChefKiss Inferno");
         menubar->Append(help, "&Help");
 
@@ -1132,7 +1132,7 @@ private:
                 canvas->setInterpolation(m_smooth);
             },
             ID_INTERPOLATION);
-        Bind(wxEVT_MENU, [this](wxCommandEvent&) { openDocumentation("index.html"); }, ID_DOCUMENTATION);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&) { openDocumentation(); }, ID_DOCUMENTATION);
         Bind(wxEVT_MENU, [this](wxCommandEvent&) { showAbout(); }, wxID_ABOUT);
 
         Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent& event) { event.Enable(!m_paused); }, ID_PAUSE);
@@ -1166,18 +1166,11 @@ private:
         if (!CKIUIChangeMedia(device.c_str(), path.data(), error, sizeof error)) { showError(error); }
     }
 
-    void openDocumentation(const wxString& file)
+    void openDocumentation()
     {
-        static const char* const directories[] = {"../share/doc/qemu/", "../doc/qemu/", "docs/"};
-
-        const wxFileName executable(wxStandardPaths::Get().GetExecutablePath());
-        for (const char* directory : directories) {
-            wxFileName target(executable.GetPath() + "/" + directory + file);
-            target.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
-            if (target.FileExists() && wxLaunchDefaultApplication(target.GetFullPath())) { return; }
-        }
+        if (wxLaunchDefaultBrowser("https://chefkiss.dev/applehax/inferno/")) { return; }
         wxBell();
-        wxMessageBox("Failed to open file", "ChefKiss Inferno", wxOK | wxICON_ERROR, this);
+        wxMessageBox("Failed to open website", "ChefKiss Inferno", wxOK | wxICON_ERROR, this);
     }
 
     void showAbout()
@@ -1465,7 +1458,7 @@ private:
 
     bool confirmQuit()
     {
-        wxMessageDialog dialog(this, "Are you sure you want to quit QEMU?", "ChefKiss Inferno",
+        wxMessageDialog dialog(this, "Are you sure you want to quit?", "ChefKiss Inferno",
                                wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION);
         dialog.SetYesNoLabels("Quit", "Cancel");
         return dialog.ShowModal() == wxID_YES;
