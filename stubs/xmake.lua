@@ -11,5 +11,5 @@ target("qemuutil")
 		add_files("linux-aio.c")
 	end
 	add_files("monitor-internal.c", "qmp-command-available.c", "vm-stop.c")
-	add_files("target-get-monitor-def.c", "target-monitor-defs.c", "win32-kbd-hook.c")
+	add_files("target-get-monitor-def.c", "target-monitor-defs.c")
 target_end()

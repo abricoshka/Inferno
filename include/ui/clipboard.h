@@ -11,7 +11,7 @@
  * clipboard peer.  Subsequently they can set the clipboard content
  * and get notifications for clipboard updates.
  *
- * Typical users are user interfaces (gtk), remote access protocols
+ * Typical users are user interfaces (wxwidgets), remote access protocols
  * (vnc) and devices talking to the guest (vdagent).
  *
  * Even though the design allows different data types only plain text

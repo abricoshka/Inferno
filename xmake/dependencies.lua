@@ -60,11 +60,6 @@ pkgconfig_feature("usb_redir", "libusbredirparser-0.5 >=0.6", "USB network redir
 pkgconfig_feature("png", "libpng >=1.6.34", "PNG screendumps and VNC encoding")
 pkgconfig_feature("vnc_jpeg", "libjpeg", "JPEG lossy compression for VNC")
 pkgconfig_feature("slirp", "slirp", "User-mode networking via libslirp")
-pkgconfig_feature("sdl", "sdl2", "SDL user interface")
-pkgconfig_feature("sdl_image", "SDL2_image", "SDL window icon support")
-pkgconfig_feature("gtk", "gtk+-3.0 >=3.22.0", "GTK user interface")
-pkgconfig_feature("vte", "vte-2.91", "VTE terminal support for the GTK UI")
-pkgconfig_feature("x11", "x11", "X11 keyboard mapping for the SDL and GTK UIs")
 pkgconfig_feature("curses", "ncursesw", "curses user interface")
 pkgconfig_feature("xkbcommon", "xkbcommon", "Generate the VNC and curses keymaps with inferno-keymap")
 pkgconfig_feature("seccomp", "libseccomp >=2.3.0", "seccomp sandboxing")
@@ -76,18 +71,6 @@ pkgconfig_feature("sndio", "sndio", "sndio audio backend")
 pkgconfig_feature("pa", "libpulse", "PulseAudio audio backend", "linux")
 pkgconfig_feature("alsa", "alsa", "ALSA audio backend", "linux")
 
-if has_config("gtk") then
-	add_requires("pkgconfig::gtk+-x11-3.0 >=3.22.0", {alias = "gtkx11", optional = true})
-end
-
-option("gtk_clipboard")
-	set_default(false)
-	set_showmenu(true)
-	set_category("Features")
-	set_description("Clipboard support for the GTK UI (known to hang with some clipboard managers)")
-	set_configvar("CONFIG_GTK_CLIPBOARD", "", {quote = false})
-option_end()
-
 option("vnc")
 	set_default(true)
 	set_showmenu(true)
@@ -95,13 +78,79 @@ option("vnc")
 	set_description("VNC server")
 option_end()
 
-option("cocoa")
+option("wxwidgets")
 	set_default(true)
 	set_showmenu(true)
 	set_category("Features")
-	set_description("Cocoa user interface (macOS)")
-	after_check(inferno_restrict_host("macosx"))
+	set_description("wxWidgets user interface")
 option_end()
+
+option("wxconfig")
+    set_showmenu(true)
+    set_default("wx-config")
+    set_description("Path to the wx-config script")
+option_end()
+
+package("wxwidgets")
+    set_kind("library")
+    set_description("wxWidgets resolved through wx-config")
+
+    on_fetch(function (package)
+        import("core.project.config")
+        local wxconfig = config.get("wxconfig") or "wx-config"
+        local cxxflags = try { function () return os.iorunv(wxconfig, {"--cxxflags"}) end }
+        local libs     = try { function () return os.iorunv(wxconfig, {"--libs", "core", "base"}) end }
+        if not cxxflags or not libs then
+            return
+        end
+
+        local info = {
+            includedirs = {},
+            defines     = {},
+            cxxflags    = {},
+            linkdirs    = {},
+            links       = {},
+            frameworks  = {},
+            ldflags     = {}
+        }
+
+        for _, flag in ipairs(os.argv(cxxflags:trim())) do
+            if flag:startswith("-I") then
+                table.insert(info.includedirs, flag:sub(3))
+            elseif flag:startswith("-D") then
+                table.insert(info.defines, flag:sub(3))
+            elseif not flag:startswith("-std=") then
+                table.insert(info.cxxflags, flag)
+            end
+        end
+
+        local args = os.argv(libs:trim())
+        local index = 1
+        while index <= #args do
+            local flag = args[index]
+            if flag == "-framework" then
+                table.insert(info.frameworks, args[index + 1])
+                index = index + 1
+            elseif flag:startswith("-L") then
+                table.insert(info.linkdirs, flag:sub(3))
+            elseif flag:startswith("-l") then
+                table.insert(info.links, flag:sub(3))
+            else
+                table.insert(info.ldflags, flag)
+            end
+            index = index + 1
+        end
+        return info
+    end)
+
+    on_install(function (package)
+        raise("wx-config not found; set it with: xmake f --wxconfig=<path> or disable wxWidgets (--wxwidgets=n)")
+    end)
+package_end()
+
+if has_config("wxwidgets") then
+    add_requires("wxwidgets")
+end
 
 option("coreaudio")
 	set_default(true)

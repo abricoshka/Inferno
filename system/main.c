@@ -27,15 +27,6 @@
 #include "qemu/main-loop.h"
 #include "system/system.h"
 
-#ifdef CONFIG_SDL
-    /*
-     * SDL insists on wrapping the main() function with its own implementation on
-     * some platforms; it does so via a macro that renames our main function, so
-     * <SDL.h> must be #included here even with no SDL code called from this file.
-     */
-    #include <SDL.h>
-#endif
-
 #ifdef CONFIG_DARWIN
     #include <CoreFoundation/CoreFoundation.h>
 #endif
@@ -52,7 +43,7 @@ static void* qemu_default_main(void* opaque)
     exit(status);
 }
 
-int (*qemu_main)(void);
+int (*qemu_main)(void) = NULL;
 
 #ifdef CONFIG_DARWIN
 static int os_darwin_cfrunloop_main(void)
@@ -60,11 +51,14 @@ static int os_darwin_cfrunloop_main(void)
     CFRunLoopRun();
     assert_not_reached();
 }
-int (*qemu_main)(void) = os_darwin_cfrunloop_main;
 #endif
 
 int main(int argc, char** argv)
 {
+#ifdef CONFIG_DARWIN
+    qemu_main = os_darwin_cfrunloop_main;
+#endif
+
     qemu_init(argc, argv);
 
     /*

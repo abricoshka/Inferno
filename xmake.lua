@@ -1,6 +1,6 @@
 set_project("Inferno")
 set_xmakever("3.0.0")
-set_languages("gnu11")
+set_languages("gnu11", "cxx17")
 set_warnings("all", "extra")
 set_policy("build.progress_style", "multirow")
 add_rules("inferno.dependir")
@@ -258,7 +258,7 @@ target("system")
 	set_kind("object")
 	add_deps("genh", "authz", "blockdev", "chardev", "crypto", "io", "qmp", "qom", "qemuutil")
 	add_defines("CONFIG_SOFTMMU")
-	add_packages("glib", "pixman", "zlib", "png", "vnc_jpeg", "slirp", "sdl", "sdl_image", "gtk", "gtkx11", "vte", "x11",
+	add_packages("glib", "pixman", "zlib", "png", "vnc_jpeg", "slirp", "wxwidgets", "x11",
 		"curses", "libusb", "usb_redir", "libpmem", "libdaxctl", "seccomp", "lz4", "avahi", "avahi_glib",
 		"jack", "pipewire", "sndio", "pa", "alsa", "libffi", "libyuv", {public = true})
 	add_options("vnc_sasl", "vde", "iconv", "oss", "dsound", "dnsapi")
@@ -380,9 +380,6 @@ local function emulator(name, gui)
 			if has_config("hvf") then
 				add_frameworks("Hypervisor")
 			end
-			if has_config("cocoa") then
-				add_frameworks("Cocoa", "CoreVideo", "QuartzCore")
-			end
 			if has_config("coreaudio") then
 				add_frameworks("CoreAudio")
 			end
@@ -429,7 +426,7 @@ local function emulator(name, gui)
 end
 
 emulator("inferno-aarch64")
-if is_plat("windows", "mingw") and (has_package("sdl") or has_package("gtk")) then
+if is_plat("windows", "mingw") and has_config("wxwidgets") then
 	emulator("inferno-aarch64w", true)
 end
 

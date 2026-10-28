@@ -659,7 +659,7 @@ static DisplayState* get_alloc_displaystate(void)
 
 /*
  * Called by main(), after creating QemuConsoles
- * and before initializing ui (sdl/vnc/...).
+ * and before initializing ui (wxwidgets/vnc/...).
  */
 DisplayState* init_displaystate(void)
 {
@@ -925,14 +925,8 @@ void qemu_display_register(QemuDisplay* ui)
 bool qemu_display_find_default(DisplayOptions* opts)
 {
     static DisplayType prio[] = {
-#if defined(CONFIG_COCOA)
-        DISPLAY_TYPE_COCOA,
-#endif
-#if defined(CONFIG_GTK)
-        DISPLAY_TYPE_GTK,
-#endif
-#if defined(CONFIG_SDL)
-        DISPLAY_TYPE_SDL,
+#if defined(CONFIG_WXWIDGETS)
+        DISPLAY_TYPE_WXWIDGETS,
 #endif
     };
     int i;

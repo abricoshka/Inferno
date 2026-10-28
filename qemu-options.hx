@@ -165,10 +165,6 @@ DEF("audiodev", HAS_ARG, QEMU_OPTION_audiodev,
     "                in|out.stream-name= name of pipewire stream\n"
     "                in|out.latency= desired latency in microseconds\n"
 #endif
-#ifdef CONFIG_AUDIO_SDL
-    "-audiodev sdl,id=id[,prop[=value][,...]]\n"
-    "                in|out.buffer-count= number of buffers\n"
-#endif
 #ifdef CONFIG_AUDIO_SNDIO
     "-audiodev sndio,id=id[,prop[=value][,...]]\n"
 #endif
@@ -263,35 +259,20 @@ DEFHEADING()
 DEFHEADING(Display options:)
 
 DEF("display", HAS_ARG, QEMU_OPTION_display,
-#if defined(CONFIG_SDL)
-    "-display sdl[,gl=on|core|es|off][,grab-mod=<mod>][,show-cursor=on|off]\n"
-    "            [,window-close=on|off]\n"
-#endif
-#if defined(CONFIG_GTK)
-    "-display gtk[,full-screen=on|off][,gl=on|off][,grab-on-hover=on|off]\n"
-    "            [,show-tabs=on|off][,show-cursor=on|off][,window-close=on|off]\n"
-    "            [,show-menubar=on|off][,zoom-to-fit=on|off]\n"
-#endif
 #if defined(CONFIG_VNC)
     "-display vnc=<display>[,<optargs>]\n"
 #endif
 #if defined(CONFIG_CURSES)
     "-display curses[,charset=<encoding>]\n"
 #endif
-#if defined(CONFIG_COCOA)
-    "-display cocoa[,full-grab=on|off][,swap-opt-cmd=on|off]\n"
-    "              [,show-cursor=on|off][,left-command-key=on|off]\n"
-    "              [,full-screen=on|off][,zoom-to-fit=on|off]\n"
+#if defined(CONFIG_WXWIDGETS)
+    "-display wxwidgets\n"
 #endif
     "-display none\n"
     "                select display backend type\n"
     "                The default display is equivalent to\n                "
-#if defined(CONFIG_GTK)
-            "\"-display gtk\"\n"
-#elif defined(CONFIG_SDL)
-            "\"-display sdl\"\n"
-#elif defined(CONFIG_COCOA)
-            "\"-display cocoa\"\n"
+#if defined(CONFIG_WXWIDGETS)
+            "\"-display wxwidgets\"\n"
 #elif defined(CONFIG_VNC)
             "\"-vnc localhost:0,to=99,id=default\"\n"
 #else

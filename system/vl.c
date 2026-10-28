@@ -252,7 +252,7 @@ static QemuOptsList qemu_name_opts = {
                              .name = "guest",
                              .type = QEMU_OPT_STRING,
                              .help = "Sets the name of the guest.\n"
-                                     "This name will be displayed in the SDL window caption.\n"
+                                     "This name will be displayed in the window caption.\n"
                                      "The name will also be used for the VNC server",
                          },
                          {
@@ -1282,21 +1282,6 @@ static void qemu_apply_machine_options(QDict* qdict)
 static void qemu_create_early_backends(void)
 {
     MachineClass* machine_class = MACHINE_GET_CLASS(current_machine);
-#if defined(CONFIG_SDL)
-    const bool use_sdl = (dpy.type == DISPLAY_TYPE_SDL);
-#else
-    const bool use_sdl = false;
-#endif
-#if defined(CONFIG_GTK)
-    const bool use_gtk = (dpy.type == DISPLAY_TYPE_GTK);
-#else
-    const bool use_gtk = false;
-#endif
-
-    if (dpy.has_window_close && !use_gtk && !use_sdl) {
-        error_report("window-close is only valid for GTK and SDL, "
-                     "ignoring option");
-    }
 
     qemu_console_early_init();
 

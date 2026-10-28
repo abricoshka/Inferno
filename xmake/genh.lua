@@ -107,7 +107,7 @@ target("genh")
 	add_configfiles("../configs/config-devices.h.in", {filename = inferno_target .. "-config-devices.h"})
 
 	add_options("tcg", "tcg_interpreter", "hvf", "kvm", "debug_tcg", "debug_mutex", "debug_graph_lock",
-		"debug_stack_usage", "qom_cast_debug", "coroutine_pool", "membarrier", "gtk_clipboard",
+		"debug_stack_usage", "qom_cast_debug", "coroutine_pool", "membarrier",
 		"__io_prep_pwritev2", "__rbd_namespace_exists")
 	add_options(table.unpack(inferno_devices))
 	if has_config("seccomp") then
@@ -168,7 +168,6 @@ int main(void) {
 		oss = has_config("oss"),
 		pa = has_package("pa"),
 		pipewire = has_package("pipewire"),
-		sdl = has_package("sdl"),
 		sndio = has_package("sndio"),
 	}
 	for driver, found in pairs(audio) do
@@ -178,7 +177,7 @@ int main(void) {
 	end
 	local audio_default = {}
 	for _, driver in ipairs(is_plat("linux") and {"pa", "coreaudio", "dsound", "sndio", "oss"} or
-			{"pa", "coreaudio", "dsound", "sndio", "oss", "sdl"}) do
+			{"pa", "coreaudio", "dsound", "sndio", "oss"}) do
 		if audio[driver] then
 			table.insert(audio_default, driver)
 		end
@@ -188,11 +187,10 @@ int main(void) {
 	for name, found in pairs({
 		CONFIG_AVAHI = has_package("avahi") and has_package("avahi_glib"),
 		CONFIG_BLKIO = has_package("blkio"),
-		CONFIG_COCOA = has_config("cocoa"),
+		CONFIG_WXWIDGETS = has_config("wxwidgets"),
 		CONFIG_CURSES = inferno_have_curses,
 		CONFIG_FUSE = has_package("fuse"),
 		CONFIG_GNUTLS = has_package("gnutls"),
-		CONFIG_GTK = has_package("gtk"),
 		CONFIG_HOGWEED = inferno_have_hogweed,
 		CONFIG_LIBCAP_NG = has_config("cap_ng"),
 		CONFIG_LIBDAXCTL = has_package("libdaxctl"),
@@ -200,8 +198,6 @@ int main(void) {
 		CONFIG_LINUX_AIO = has_config("linux_aio"),
 		CONFIG_LINUX_IO_URING = inferno_have_io_uring,
 		CONFIG_PNG = has_package("png"),
-		CONFIG_SDL = has_package("sdl"),
-		CONFIG_SDL_IMAGE = has_package("sdl") and has_package("sdl_image"),
 		CONFIG_SECRET_KEYRING = has_config("__keyring"),
 		CONFIG_SECCOMP = has_package("seccomp"),
 		CONFIG_SLIRP = has_package("slirp"),
@@ -210,7 +206,6 @@ int main(void) {
 		CONFIG_VNC = inferno_have_vnc,
 		CONFIG_VNC_JPEG = inferno_have_vnc and has_package("vnc_jpeg"),
 		CONFIG_VNC_SASL = has_config("vnc_sasl"),
-		CONFIG_VTE = has_package("gtk") and has_package("vte"),
 		CONFIG_X11 = has_package("x11"),
 		CONFIG_ZSTD = has_package("zstd"),
 	}) do

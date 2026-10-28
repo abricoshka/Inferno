@@ -15,9 +15,6 @@ target("system")
 	if has_package("pa") then
 		add_files("paaudio.c")
 	end
-	if has_package("sdl") then
-		add_files("sdlaudio.c")
-	end
 	if has_package("jack") then
 		add_files("jackaudio.c")
 	end
