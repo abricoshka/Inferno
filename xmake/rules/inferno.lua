@@ -76,10 +76,6 @@ rule("inferno.genh")
 			raise("mingw must provide setjmp/longjmp for windows-arm64")
 		end
 
-		if target:values("inferno.keymaps_missing") and option.taskname() == "config" then
-			wprint("xkbcommon was not found, so no keymaps are generated and VNC (and curses on macOS) cannot start")
-		end
-
 		local linux_arch = target:values("inferno.linux_arch")
 		if target:is_plat("linux") and linux_arch then
 			local headers = codegen.srcfile("linux-headers", "asm-" .. linux_arch)

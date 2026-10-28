@@ -87,9 +87,6 @@ target("genh")
 	set_values("inferno.target", inferno_target)
 	set_values("inferno.cpu", inferno_cpu)
 	set_values("inferno.coroutine_backend", inferno_coroutine_backend)
-	if (inferno_have_vnc or inferno_have_curses) and not has_package("xkbcommon") then
-		set_values("inferno.keymaps_missing", "1")
-	end
 	if inferno_stap then
 		set_values("inferno.traceable", "inferno-aarch64")
 		if has_config("tools") then
