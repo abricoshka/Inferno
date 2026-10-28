@@ -449,6 +449,8 @@ const char* CKIUIVersion(void) { return QEMU_FULL_VERSION; }
 
 const char* CKIUICopyright(void) { return QEMU_COPYRIGHT; }
 
+static void wxwidgets_shutdown(void) { CKIUIShutdown(wxwidgets_state.app); }
+
 static int wxwidgets_main(void)
 {
     CKIUIRun(wxwidgets_state.app);
@@ -477,6 +479,7 @@ static void wxwidgets_display_init(DisplayState* ds, DisplayOptions* opts)
     qemu_clipboard_peer_register(&wxwidgets_clipboard_peer);
     wxwidgets_clipboard_ready = true;
 
+    atexit(wxwidgets_shutdown);
     qemu_main = wxwidgets_main;
 }
 

@@ -67,6 +67,7 @@ extern "C"
 
     void* CKIUICreate(const CKIUIOptions* options);
     int   CKIUIRun(void* app);
+    void  CKIUIShutdown(void* app);
 
     /*
      * Takes ownership of one reference to `image` (a pixman_image_t*), which keeps `data` alive.

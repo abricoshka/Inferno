@@ -28,7 +28,9 @@
 #include <wx/rawbmp.h>
 #include <wx/stdpaths.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -37,6 +39,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -1489,7 +1492,36 @@ extern "C" void* CKIUICreate(const CKIUIOptions* options)
     return app;
 }
 
-extern "C" int CKIUIRun(void* app) { return static_cast<CKIUIApp*>(app)->MainLoop(); }
+namespace
+{
+
+    std::mutex              loopMutex;
+    std::condition_variable loopCondition;
+    std::atomic<bool>       loopRunning{false};
+    bool                    loopExited{false};
+
+}    // namespace
+
+extern "C" int CKIUIRun(void* app)
+{
+    loopRunning = true;
+    static_cast<CKIUIApp*>(app)->MainLoop();
+    {
+        std::lock_guard<std::mutex> lock(loopMutex);
+        loopExited = true;
+    }
+    loopCondition.notify_all();
+    for (;;) { pause(); }
+}
+
+extern "C" void CKIUIShutdown(void* app)
+{
+    if (!loopRunning || wxIsMainThread()) { return; }
+    const auto ui = static_cast<CKIUIApp*>(app);
+    ui->CallAfter([ui] { ui->ExitMainLoop(); });
+    std::unique_lock<std::mutex> lock(loopMutex);
+    loopCondition.wait(lock, [] { return loopExited; });
+}
 
 extern "C" void CKIUISetSurface(void* app, void* image, const void* data, int width, int height, int stride)
 { static_cast<CKIUIApp*>(app)->window->canvas->setSurface({image, data, width, height, stride}); }
