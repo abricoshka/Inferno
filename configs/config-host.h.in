@@ -102,7 +102,7 @@ ${define CONFIG_SECCOMP_SYSRAWRC}
 ${define CONFIG_SECRET_KEYRING}
 ${define CONFIG_SIGNALFD}
 ${define CONFIG_SLIRP}
-#define CONFIG_SMBD_COMMAND "/usr/sbin/smbd"
+${define CONFIG_SMBD_COMMAND}
 ${define CONFIG_SYSCONFDIR}
 ${define CONFIG_SYSMACROS}
 ${define CONFIG_TCG}

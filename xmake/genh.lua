@@ -74,6 +74,18 @@ local function probe_links(name, code, opt)
 	end)
 end
 
+local function find_smbd()
+	local configured = get_config("smbd")
+	if configured and configured ~= "" then
+		return configured
+	end
+	for _, dir in ipairs({"/usr/sbin", "/usr/local/sbin", "/opt/homebrew/sbin", "/opt/local/sbin"}) do
+		local candidate = path.join(dir, "smbd")
+		if os.isfile(candidate) then
+			return candidate
+		end
+	end
+end
 
 target("genh")
 	set_kind("phony")
@@ -209,6 +221,11 @@ int main(void) {
 		if found then
 			define(name)
 		end
+	end
+
+	local smbd = find_smbd()
+	if smbd then
+		set_configvar("CONFIG_SMBD_COMMAND", smbd)
 	end
 
 	probe_header("CONFIG_EPOLL", "sys/epoll.h")
