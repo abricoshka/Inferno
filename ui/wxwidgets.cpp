@@ -28,6 +28,7 @@
 #include <wx/rawbmp.h>
 #include <wx/stdpaths.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -924,6 +925,7 @@ public:
         const auto sizer = new wxBoxSizer(wxVERTICAL);
         sizer->Add(canvas, 1, wxEXPAND);
         SetSizer(sizer);
+        buildMenus();
         SetClientSize(FromDIP(wxSize(640, 480)));
         Center();
 
@@ -933,8 +935,6 @@ public:
             scheduleUIInfo();
         };
         canvas->onGrabChange = [this](bool grabbed) { SetTitle(makeTitle(grabbed)); };
-
-        buildMenus();
 
         Bind(wxEVT_SIZE, &CKIUIFrame::onSize, this);
         Bind(wxEVT_CLOSE_WINDOW, &CKIUIFrame::onClose, this);
@@ -953,6 +953,7 @@ public:
 
         applyConstraints();
         applyNativeAspect();
+        scheduleSettle();
         canvas->SetFocus();
     }
 
@@ -979,6 +980,7 @@ public:
         }
         applyConstraints();
         applyNativeAspect();
+        scheduleSettle();
         scheduleUIInfo();
     }
 
@@ -1310,6 +1312,7 @@ private:
         applyNativeAspect();
         resizeToGuest();
         applyConstraints();
+        scheduleSettle();
     }
 
     void setZoomToFit(bool enable)
@@ -1317,6 +1320,23 @@ private:
         m_zoomToFit = enable;
         if (!enable) { resizeToGuest(); }
         applyConstraints();
+        scheduleSettle();
+    }
+
+    void scheduleSettle()
+    {
+        if (m_settleQueued) { return; }
+        m_settleQueued = true;
+        CallAfter([this] { settle(); });
+    }
+
+    void settle()
+    {
+        m_settleQueued = false;
+        applyConstraints();
+        applyNativeAspect();
+        Layout();
+        scheduleUIInfo();
     }
 
     void onSize(wxSizeEvent& event)
@@ -1342,9 +1362,6 @@ private:
             }
             return;
         }
-#else
-        if (IsMaximized()) { return; }
-#endif
 
         if (m_nativeAspect || !m_zoomToFit || m_aspect.x <= 0 || m_aspect.y <= 0) { return; }
 
@@ -1355,6 +1372,9 @@ private:
         m_adjusting = true;
         SetClientSize(wanted);
         m_adjusting = false;
+#else
+        if (!IsMaximized() && !m_zoomToFit && GetClientSize() != m_guestSize) { scheduleSettle(); }
+#endif
     }
 
     void fitToDisplay()
@@ -1400,8 +1420,11 @@ private:
         const wxDisplay display(this);
         if (display.IsOk()) { refresh = display.GetCurrentMode().refresh; }
 
-        CKIUISetUIInfo(wxRound(client.x * scale), wxRound(client.y * scale), widthMM, heightMM,
-                       refresh > 0 ? refresh : 0);
+        const std::array<int, 5> info{wxRound(client.x * scale), wxRound(client.y * scale), widthMM, heightMM,
+                                      std::max(refresh, 0)};
+        if (info == m_lastUIInfo) { return; }
+        m_lastUIInfo = info;
+        CKIUISetUIInfo(info[0], info[1], info[2], info[3], info[4]);
     }
 
     bool confirmQuit()
@@ -1440,6 +1463,9 @@ private:
     bool        m_adjusting{false};
     bool        m_uiInfoQueued{false};
     bool        m_zoomFixQueued{false};
+    bool        m_settleQueued{false};
+
+    std::array<int, 5> m_lastUIInfo{};
 };
 
 class CKIUIApp : public wxApp
