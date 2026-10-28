@@ -451,11 +451,13 @@ const char* CKIUICopyright(void) { return QEMU_COPYRIGHT; }
 
 static void wxwidgets_shutdown(void) { CKIUIShutdown(wxwidgets_state.app); }
 
+#if defined(CONFIG_DARWIN) || defined(CONFIG_WIN32)
 static int wxwidgets_main(void)
 {
     CKIUIRun(wxwidgets_state.app);
     assert_not_reached();
 }
+#endif
 
 static void wxwidgets_display_init(DisplayState* ds, DisplayOptions* opts)
 {
@@ -480,7 +482,9 @@ static void wxwidgets_display_init(DisplayState* ds, DisplayOptions* opts)
     wxwidgets_clipboard_ready = true;
 
     atexit(wxwidgets_shutdown);
+#if defined(CONFIG_DARWIN) || defined(CONFIG_WIN32)
     qemu_main = wxwidgets_main;
+#endif
 }
 
 static QemuDisplay qemu_display_wxwidgets = {
