@@ -926,7 +926,8 @@ public:
         sizer->Add(canvas, 1, wxEXPAND);
         SetSizer(sizer);
         buildMenus();
-        SetClientSize(FromDIP(wxSize(640, 480)));
+        m_guestSize = FromDIP(m_guestSize);
+        SetClientSize(m_guestSize);
         Center();
 
         canvas->onModeChange = [this](const wxSize& logical)
@@ -936,6 +937,8 @@ public:
         };
         canvas->onGrabChange = [this](bool grabbed) { SetTitle(makeTitle(grabbed)); };
 
+        m_snapTimer.SetOwner(this);
+        Bind(wxEVT_TIMER, &CKIUIFrame::onSnap, this);
         Bind(wxEVT_SIZE, &CKIUIFrame::onSize, this);
         Bind(wxEVT_CLOSE_WINDOW, &CKIUIFrame::onClose, this);
         Bind(wxEVT_ACTIVATE, &CKIUIFrame::onActivate, this);
@@ -1307,10 +1310,14 @@ private:
 
     void setGuestSize(const wxSize& logical)
     {
-        m_guestSize = logical;
-        m_aspect    = logical;
+        const bool keepSize = m_zoomToFit && GetClientSize() != m_guestSize;
+        m_guestSize         = logical;
+        m_aspect            = logical;
         applyNativeAspect();
-        resizeToGuest();
+        if (keepSize) { snapToAspect(); }
+        else {
+            resizeToGuest();
+        }
         applyConstraints();
         scheduleSettle();
     }
@@ -1373,8 +1380,37 @@ private:
         SetClientSize(wanted);
         m_adjusting = false;
 #else
-        if (!IsMaximized() && !m_zoomToFit && GetClientSize() != m_guestSize) { scheduleSettle(); }
+        if (IsMaximized()) { return; }
+        if (m_zoomToFit) { m_snapTimer.StartOnce(150); }
+        else if (GetClientSize() != m_guestSize) {
+            scheduleSettle();
+        }
 #endif
+    }
+
+    void onSnap(wxTimerEvent&)
+    {
+        if (IsFullScreen() || IsMaximized() || !m_zoomToFit) { return; }
+
+        const wxMouseState mouse = wxGetMouseState();
+        if (mouse.LeftIsDown() || mouse.MiddleIsDown() || mouse.RightIsDown()) {
+            m_snapTimer.StartOnce(150);
+            return;
+        }
+        snapToAspect();
+    }
+
+    void snapToAspect()
+    {
+        if (IsFullScreen() || IsMaximized()) { return; }
+
+        const wxSize client = GetClientSize();
+        const wxSize wanted = fitAspect(client, m_aspect);
+        if (std::abs(wanted.x - client.x) <= 1 && std::abs(wanted.y - client.y) <= 1) { return; }
+
+        m_adjusting = true;
+        SetClientSize(wanted);
+        m_adjusting = false;
     }
 
     void fitToDisplay()
@@ -1464,6 +1500,7 @@ private:
     bool        m_uiInfoQueued{false};
     bool        m_zoomFixQueued{false};
     bool        m_settleQueued{false};
+    wxTimer     m_snapTimer;
 
     std::array<int, 5> m_lastUIInfo{};
 };
