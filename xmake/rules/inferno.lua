@@ -17,12 +17,10 @@ rule("inferno.genh")
 		end
 
 		local version = genh.version()
-		local major, minor, micro = version:match("QEMU%-(%d+)%.(%d+)%.(%d+)")
-		assert(major, "cannot parse the QEMU version from VERSION")
 		target:set("configvar", "QEMU_VERSION", version)
-		target:set("configvar", "QEMU_VERSION_MAJOR", tonumber(major))
-		target:set("configvar", "QEMU_VERSION_MINOR", tonumber(minor))
-		target:set("configvar", "QEMU_VERSION_MICRO", tonumber(micro))
+		target:set("configvar", "QEMU_VERSION_MAJOR", 10) -- for compat
+		target:set("configvar", "QEMU_VERSION_MINOR", 2)
+		target:set("configvar", "QEMU_VERSION_MICRO", 2)
 
 		local prefix = path.unix(config.get("prefix"))
 		local sysconfdir = prefix == "/usr" and "/etc" or prefix .. "/etc"

@@ -590,9 +590,9 @@ static MachineClass* find_default_machine(GSList* machines)
 
 static void version(void)
 {
-    printf("QEMU emulator version " QEMU_FULL_VERSION "\n" QEMU_COPYRIGHT "\n\n"
-           "ChefKiss Inferno\n"
-           "Copyright (c) 2023-2026 Visual Ehrmanntraut and Inferno team\n\n");
+    printf("ChefKiss Inferno version " QEMU_FULL_VERSION "\n"
+           "Copyright (c) 2023-2026 ChefKiss and the Inferno team\n\n"
+           "based on the QEMU emulator\n" QEMU_COPYRIGHT "\n\n");
 }
 
 static void help(int exitcode)
