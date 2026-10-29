@@ -161,8 +161,7 @@
 #define T8030_MCA_MCLK_CFG_STRIDE   (4)
 #define T8030_MCA_MCLK_CFG_SIZE     (T8030_MCA_MCLK_CFG_CLUSTERS * T8030_MCA_MCLK_CFG_STRIDE)
 
-#define AMCC_BASE (0x200000000)
-// 0-based: 4 == non-plane region, 5 == non-plane GFX region
+#define AMCC_BASE                               (0x200000000)
 #define AMCC_PLANE_COUNT                        (4)
 #define AMCC_PLANE_STRIDE                       (0x40000)
 #define AMCC_SIZE                               (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE + 0x80000)
