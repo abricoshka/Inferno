@@ -86,70 +86,70 @@ option("wxwidgets")
 option_end()
 
 option("wxconfig")
-    set_showmenu(true)
-    set_default("wx-config")
-    set_description("Path to the wx-config script")
+	set_showmenu(true)
+	set_default("wx-config")
+	set_description("Path to the wx-config script")
 option_end()
 
 package("wxwidgets")
-    set_kind("library")
-    set_description("wxWidgets resolved through wx-config")
+	set_kind("library")
+	set_description("wxWidgets resolved through wx-config")
 
-    on_fetch(function (package)
-        import("core.project.config")
-        local wxconfig = config.get("wxconfig") or "wx-config"
-        local cxxflags = try { function () return os.iorunv(wxconfig, {"--cxxflags"}) end }
-        local libs     = try { function () return os.iorunv(wxconfig, {"--libs", "core", "base"}) end }
-        if not cxxflags or not libs then
-            return
-        end
+	on_fetch(function (package)
+		import("core.project.config")
+		local wxconfig = config.get("wxconfig") or "wx-config"
+		local cxxflags = try { function () return os.iorunv(wxconfig, {"--cxxflags"}) end }
+		local libs	 = try { function () return os.iorunv(wxconfig, {"--libs", "core", "base"}) end }
+		if not cxxflags or not libs then
+			return
+		end
 
-        local info = {
-            includedirs = {},
-            defines     = {},
-            cxxflags    = {},
-            linkdirs    = {},
-            links       = {},
-            frameworks  = {},
-            ldflags     = {}
-        }
+		local info = {
+			includedirs = {},
+			defines	 = {},
+			cxxflags	= {},
+			linkdirs	= {},
+			links	   = {},
+			frameworks  = {},
+			ldflags	 = {}
+		}
 
-        for _, flag in ipairs(os.argv(cxxflags:trim())) do
-            if flag:startswith("-I") then
-                table.insert(info.includedirs, flag:sub(3))
-            elseif flag:startswith("-D") then
-                table.insert(info.defines, flag:sub(3))
-            elseif not flag:startswith("-std=") then
-                table.insert(info.cxxflags, flag)
-            end
-        end
+		for _, flag in ipairs(os.argv(cxxflags:trim())) do
+			if flag:startswith("-I") then
+				table.insert(info.includedirs, flag:sub(3))
+			elseif flag:startswith("-D") then
+				table.insert(info.defines, flag:sub(3))
+			elseif not flag:startswith("-std=") then
+				table.insert(info.cxxflags, flag)
+			end
+		end
 
-        local args = os.argv(libs:trim())
-        local index = 1
-        while index <= #args do
-            local flag = args[index]
-            if flag == "-framework" then
-                table.insert(info.frameworks, args[index + 1])
-                index = index + 1
-            elseif flag:startswith("-L") then
-                table.insert(info.linkdirs, flag:sub(3))
-            elseif flag:startswith("-l") then
-                table.insert(info.links, flag:sub(3))
-            else
-                table.insert(info.ldflags, flag)
-            end
-            index = index + 1
-        end
-        return info
-    end)
+		local args = os.argv(libs:trim())
+		local index = 1
+		while index <= #args do
+			local flag = args[index]
+			if flag == "-framework" then
+				table.insert(info.frameworks, args[index + 1])
+				index = index + 1
+			elseif flag:startswith("-L") then
+				table.insert(info.linkdirs, flag:sub(3))
+			elseif flag:startswith("-l") then
+				table.insert(info.links, flag:sub(3))
+			else
+				table.insert(info.ldflags, flag)
+			end
+			index = index + 1
+		end
+		return info
+	end)
 
-    on_install(function (package)
-        raise("wx-config not found; set it with: xmake f --wxconfig=<path> or disable wxWidgets (--wxwidgets=n)")
-    end)
+	on_install(function (package)
+		raise("wx-config not found; set it with: xmake f --wxconfig=<path> or disable wxWidgets (--wxwidgets=n)")
+	end)
 package_end()
 
 if has_config("wxwidgets") then
-    add_requires("wxwidgets")
+	add_requires("wxwidgets")
 end
 
 option("coreaudio")
