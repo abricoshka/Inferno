@@ -357,13 +357,12 @@ option("lzfse")
 	add_links("lzfse")
 	add_cincludes("lzfse.h")
 	add_csnippets("lzfse", "int main(void) { lzfse_decode_scratch_size(); return 0; }")
-	if is_plat("macosx") then
-		for _, prefix in ipairs({is_arch("arm64") and "/opt/homebrew" or "/usr/local", "/opt/local"}) do
-			if os.isfile(path.join(prefix, "include", "lzfse.h")) then
-				add_includedirs(prefix .. "/include")
-				add_linkdirs(prefix .. "/lib")
-				break
-			end
+	local prefixes = is_plat("macosx") and {is_arch("arm64") and "/opt/homebrew" or "/usr/local", "/opt/local"} or {"/usr/local"}
+	for _, prefix in ipairs(prefixes) do
+		if os.isfile(path.join(prefix, "include", "lzfse.h")) then
+			add_includedirs(prefix .. "/include")
+			add_linkdirs(prefix .. "/lib")
+			break
 		end
 	end
 	after_check(function (option)
