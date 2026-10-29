@@ -13,6 +13,15 @@
         #include <asm/hwcap.h>
         #include "elf.h"
     #endif
+    #ifndef HWCAP_ASIMDRDM
+        #define HWCAP_ASIMDRDM 0
+    #endif
+    #ifndef HWCAP_ASIMDHP
+        #define HWCAP_ASIMDHP 0
+    #endif
+    #ifndef HWCAP_ASIMDDP
+        #define HWCAP_ASIMDDP 0
+    #endif
     #ifndef HWCAP2_BTI
         #define HWCAP2_BTI 0 /* added in glibc 2.32 */
     #endif
@@ -68,6 +77,9 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
     info                |= (hwcap & HWCAP_PMULL ? CPUINFO_PMULL : 0);
     info                |= (hwcap & HWCAP_SHA2 ? CPUINFO_SHA256 : 0);
     info                |= (hwcap & HWCAP_SHA512 ? CPUINFO_SHA512 : 0);
+    info                |= (hwcap & HWCAP_ASIMDRDM ? CPUINFO_RDM : 0);
+    info                |= (hwcap & HWCAP_ASIMDHP ? CPUINFO_FP16 : 0);
+    info                 |= (hwcap & HWCAP_ASIMDDP ? CPUINFO_DOTPROD : 0);
 
     unsigned long hwcap2  = qemu_getauxval(AT_HWCAP2);
     info                 |= (hwcap2 & HWCAP2_BTI ? CPUINFO_BTI : 0);
@@ -80,6 +92,9 @@ unsigned __attribute__((constructor)) cpuinfo_init(void)
     info |= sysctl_for_bool("hw.optional.arm.FEAT_SHA256") * CPUINFO_SHA256;
     info |= sysctl_for_bool("hw.optional.arm.FEAT_SHA512") * CPUINFO_SHA512;
     info |= sysctl_for_bool("hw.optional.arm.FEAT_BTI") * CPUINFO_BTI;
+    info |= sysctl_for_bool("hw.optional.arm.FEAT_RDM") * CPUINFO_RDM;
+    info |= sysctl_for_bool("hw.optional.arm.FEAT_FP16") * CPUINFO_FP16;
+    info |= sysctl_for_bool("hw.optional.arm.FEAT_DotProd") * CPUINFO_DOTPROD;
 #endif
 #if defined(__OpenBSD__) && !defined(CONFIG_ELF_AUX_INFO)
     int      mib[2];

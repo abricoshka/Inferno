@@ -448,6 +448,8 @@ typedef enum
     I3312_LDRSHX = 0x38000000 | LDST_LD_S_X << 22 | MO_16 << 30,
     I3312_LDRSWX = 0x38000000 | LDST_LD_S_X << 22 | MO_32 << 30,
 
+    I3312_LDRVH = 0x3c000000 | LDST_LD << 22 | MO_16 << 30,
+    I3312_STRVH = 0x3c000000 | LDST_ST << 22 | MO_16 << 30,
     I3312_LDRVS = 0x3c000000 | LDST_LD << 22 | MO_32 << 30,
     I3312_STRVS = 0x3c000000 | LDST_ST << 22 | MO_32 << 30,
 
@@ -628,6 +630,211 @@ typedef enum
     I3616_UQADD = 0x2e200c00,
     I3616_UQSUB = 0x2e202c00,
     I3616_USHL  = 0x2e204400,
+    /*
+     * Scalar FP, base | ftype << 22. FP16 vector forms occupy a distinct
+     * opcode field from the FP32/64 ones and so cannot share a base.
+     */
+    I3F_FMUL_S   = 0x1e200800,
+    I3F_FDIV_S   = 0x1e201800,
+    I3F_FADD_S   = 0x1e202800,
+    I3F_FSUB_S   = 0x1e203800,
+    I3F_FMAX_S   = 0x1e204800,
+    I3F_FMIN_S   = 0x1e205800,
+    I3F_FMAXNM_S = 0x1e206800,
+    I3F_FMINNM_S = 0x1e207800,
+    I3F_FSQRT_S  = 0x1e21c000,
+
+    /* Vector FP32/64, base | q << 30 | sz << 22. */
+    I3F_FADD_V   = 0x0e20d400,
+    I3F_FSUB_V   = 0x0ea0d400,
+    I3F_FMUL_V   = 0x2e20dc00,
+    I3F_FDIV_V   = 0x2e20fc00,
+    I3F_FMAX_V   = 0x0e20f400,
+    I3F_FMIN_V   = 0x0ea0f400,
+    I3F_FMAXNM_V = 0x0e20c400,
+    I3F_FMINNM_V = 0x0ea0c400,
+    I3F_FSQRT_V  = 0x2ea1f800,
+
+    /* Vector FP16, base | q << 30. */
+    I3F_FADD_H   = 0x0e401400,
+    I3F_FSUB_H   = 0x0ec01400,
+    I3F_FMUL_H   = 0x2e401c00,
+    I3F_FDIV_H   = 0x2e403c00,
+    I3F_FMAX_H   = 0x0e403400,
+    I3F_FMIN_H   = 0x0ec03400,
+    I3F_FMAXNM_H = 0x0e400400,
+    I3F_FMINNM_H = 0x0ec00400,
+    I3F_FSQRT_H  = 0x2ef9f800,
+
+    /*
+     * Conversions, AdvSIMD two-reg misc. One base each; scalar, unsigned and
+     * element size are uniform adjustments (see tcg_fp_cvt_insn).
+     */
+    I3F_CVTF  = 0x0e21d800, /* SCVTF, int -> fp          */
+    I3F_FCVTN = 0x0e21a800, /* fp -> int, nearest even   */
+    I3F_FCVTM = 0x0e21b800, /* fp -> int, toward -inf    */
+    I3F_FCVTP = 0x0ea1a800, /* fp -> int, toward +inf    */
+    I3F_FCVTZ = 0x0ea1b800, /* fp -> int, toward zero    */
+    I3F_FCVTA = 0x0e21c800, /* fp -> int, nearest away   */
+
+    /* Compares and FMA: vector-shaped bases, fp16 in its own opcode field. */
+    I3F_FCMEQ_V = 0x0e20e400,
+    I3F_FCMGE_V = 0x2e20e400,
+    I3F_FCMGT_V = 0x2ea0e400,
+    I3F_FCMEQ_H = 0x0e402400,
+    I3F_FCMGE_H = 0x2e402400,
+    I3F_FCMGT_H = 0x2ec02400,
+
+    I3F_FMLA_V = 0x0e20cc00,
+    I3F_FMLA_H = 0x0e400c00,
+    /* FCVT between formats: | src ftype << 22 | dst ftype << 15. */
+    I3F_FCVT_S = 0x1e224000,
+
+    /*
+     * Against a general register: | sf << 31 | ftype << 22 | opc << 16.
+     * Bit 21 set is the integer form; clear is fixed-point, which adds
+     * (64 - fbits) << 10.
+     */
+    I3F_GP_INT   = 0x1e200000,
+    I3F_GP_FIXED = 0x1e000000,
+
+    I3F_GP_SCVTF  = 0x02,
+    I3F_GP_FCVTNS = 0x00,
+    I3F_GP_FCVTPS = 0x08,
+    I3F_GP_FCVTMS = 0x10,
+    I3F_GP_FCVTZS = 0x18,
+    I3F_GP_FCVTAS = 0x04,
+
+    I3F_FMLS_V  = 0x0ea0cc00,
+    I3F_FMLS_H  = 0x0ec00c00,
+    I3F_FMADD_S = 0x1f000000, /* | ftype << 22 */
+    I3F_FMSUB_S = 0x1f008000,
+
+    /* FRINT: scalar in FP data-processing (| ftype << 22), vector in AdvSIMD. */
+    I3F_FRINTN_S = 0x1e244000,
+    I3F_FRINTP_S = 0x1e24c000,
+    I3F_FRINTM_S = 0x1e254000,
+    I3F_FRINTZ_S = 0x1e25c000,
+    I3F_FRINTA_S = 0x1e264000,
+    I3F_FRINTX_S = 0x1e274000,
+    I3F_FRINTI_S = 0x1e27c000,
+
+    I3F_FRINTN_V = 0x0e218800,
+    I3F_FRINTP_V = 0x0ea18800,
+    I3F_FRINTM_V = 0x0e219800,
+    I3F_FRINTZ_V = 0x0ea19800,
+    I3F_FRINTA_V = 0x2e218800,
+    I3F_FRINTX_V = 0x2e219800,
+    I3F_FRINTI_V = 0x2ea19800,
+
+    /* Sign-bit ops: scalar | ftype << 22; vector like the arithmetic above. */
+    I3F_FNEG_S = 0x1e214000,
+    I3F_FABS_S = 0x1e20c000,
+    I3F_FNEG_V = 0x2ea0f800,
+    I3F_FABS_V = 0x0ea0f800,
+    I3F_FNEG_H = 0x2ef8f800,
+    I3F_FABS_H = 0x0ef8f800,
+
+    /* Pairwise, vector only. */
+    I3F_FADDP_V   = 0x2e20d400,
+    I3F_FMAXP_V   = 0x2e20f400,
+    I3F_FMINP_V   = 0x2ea0f400,
+    I3F_FMAXNMP_V = 0x2e20c400,
+    I3F_FMINNMP_V = 0x2ea0c400,
+    I3F_FADDP_H   = 0x2e401400,
+    I3F_FMAXP_H   = 0x2e403400,
+    I3F_FMINP_H   = 0x2ec03400,
+    I3F_FMAXNMP_H = 0x2e400400,
+    I3F_FMINNMP_H = 0x2ec00400,
+
+    /* AdvSIMD-shaped; the scalar forms set I3_SCALAR. */
+    I3F_FMULX_V   = 0x0e20dc00,
+    I3F_FMULX_H   = 0x0e401c00,
+    I3F_FRECPS_V  = 0x0e20fc00,
+    I3F_FRECPS_H  = 0x0e403c00,
+    I3F_FRSQRTS_V = 0x0ea0fc00,
+    I3F_FRSQRTS_H = 0x0ec03c00,
+    I3F_FRECPE_V  = 0x0ea1d800,
+    I3F_FRECPE_H  = 0x0ef9d800,
+    I3F_FRSQRTE_V = 0x2ea1d800,
+    I3F_FRSQRTE_H = 0x2ef9d800,
+    I3F_FRECPX_V  = 0x0ea1f800, /* scalar only */
+    I3F_FRECPX_H  = 0x0ef9f800,
+
+    /* | ftype << 22 | rm << 16 | rn << 5; FCMPE signals on quiet NaNs. */
+    I3F_FCMP     = 0x1e202000,
+    I3F_FCMPE    = 0x1e202010,
+    I3F_MRS_NZCV = 0xd53b4200,
+
+    /* | q << 30 | sz << 22, sz set for double <-> single. */
+    I3F_FCVTN_V  = 0x0e216800,
+    I3F_FCVTL_V  = 0x0e217800,
+    I3F_FCVTXN_V = 0x2e616800, /* double to single only */
+
+    /* | q << 30 | (2 * esize - fbits) << 16; unsigned adds I3F_CVT_UNSIGNED. */
+    I3F_SCVTF_FIXED_V  = 0x0f00e400,
+    I3F_FCVTZS_FIXED_V = 0x0f00fc00,
+
+    /* Integer AdvSIMD: | q << 30 | size << 22 unless noted; the scalar forms add I3_SCALAR. */
+    I3I_SQSHL   = 0x0e204c00,
+    I3I_UQSHL   = 0x2e204c00,
+    I3I_SQRSHL  = 0x0e205c00,
+    I3I_UQRSHL  = 0x2e205c00,
+    I3I_SRSHL   = 0x0e205400,
+    I3I_URSHL   = 0x2e205400,
+    I3I_ADDP    = 0x0e20bc00,
+    I3I_SMAXP   = 0x0e20a400,
+    I3I_UMAXP   = 0x2e20a400,
+    I3I_SMINP   = 0x0e20ac00,
+    I3I_UMINP   = 0x2e20ac00,
+    I3I_PMUL    = 0x2e209c00,
+    I3I_SQABS   = 0x0e207800,
+    I3I_SQNEG   = 0x2e207800,
+    I3I_CLS     = 0x0e204800,
+    I3I_CLZ     = 0x2e204800,
+    I3I_CNT     = 0x0e205800,
+    I3I_RBIT    = 0x2e605800, /* size field fixed */
+    I3I_URECPE  = 0x0ea1c800, /* size field fixed */
+    I3I_URSQRTE = 0x2ea1c800,
+    /* | q << 30 | (esize + shift) << 16 */
+    I3I_SQSHLI  = 0x0f007400,
+    I3I_UQSHLI  = 0x2f007400,
+    I3I_SQSHLUI = 0x2f006400,
+    /* | top << 30 | (2 * narrow esize - shift) << 16 */
+    I3I_SQSHRN   = 0x0f009400,
+    I3I_UQSHRN   = 0x2f009400,
+    I3I_SQRSHRN  = 0x0f009c00,
+    I3I_UQRSHRN  = 0x2f009c00,
+    I3I_SQSHRUN  = 0x2f008400,
+    I3I_SQRSHRUN = 0x2f008c00,
+    /* | top << 30 | narrow size << 22 */
+    I3I_PMULL   = 0x0e20e000,
+    I3I_SHLL    = 0x2e213800,
+    I3I_SQDMULL = 0x0e20d000,
+    I3I_SQDMLAL = 0x0e209000,
+    I3I_SQDMLSL = 0x0e20b000,
+    /* | q << 30, size fixed */
+    I3I_SDOT     = 0x0e809400,
+    I3I_UDOT     = 0x2e809400,
+    I3I_TBX1     = 0x0e001000,
+
+    I3_SCALAR        = 0x50000000,
+    I3F_CVT_UNSIGNED = 0x20000000,
+    I3F_CVT_SZ16     = 0x00580000,
+    I3F_CVT_SZ64     = 0x00400000,
+
+    /* AdvSIMD three same extra (FEAT_RDM); same q/size/Rm/Rn/Rd layout. */
+    I3616_SQRDMLAH = 0x2e008400,
+    I3616_SQRDMLSH = 0x2e008c00,
+
+    /* Narrowing, | q << 30 | dst_esz << 22. The "2" form is q == 1. */
+    I3617_XTN    = 0x0e212800,
+    I3617_SQXTUN = 0x2e212800,
+    I3617_SQXTN  = 0x0e214800,
+    I3617_UQXTN  = 0x2e214800,
+
+    I3616_SQDMULH  = 0x0e20b400,
+    I3616_SQRDMULH = 0x2e20b400,
 
     /* AdvSIMD two-reg misc.  */
     I3617_CMGT0 = 0x0e208800,
@@ -978,6 +1185,9 @@ fail_bytes:
 static bool tcg_out_dup_vec(TCGContext* s, TCGType type, unsigned vece, TCGReg rd, TCGReg rs)
 {
     int is_q = type - TCG_TYPE_V64;
+
+    /* DUP has no single 64-bit lane form; that is a move. */
+    if (!is_q && vece == MO_64) { return tcg_out_mov(s, rs < 32 ? TCG_TYPE_I64 : TCG_TYPE_V64, rd, rs); }
     tcg_out_insn(s, 3605, DUP, is_q, rd, rs, 1 << vece, 0);
     return true;
 }
@@ -1150,6 +1360,9 @@ static bool tcg_out_mov(TCGContext* s, TCGType type, TCGReg ret, TCGReg arg)
             }
             /* FALLTHRU */
 
+        case TCG_TYPE_F16:
+        case TCG_TYPE_F32:
+        case TCG_TYPE_F64:
         case TCG_TYPE_V64:
             tcg_debug_assert(ret >= 32 && arg >= 32);
             tcg_out_insn(s, 3616, ORR, 0, 0, ret, arg, arg);
@@ -1178,6 +1391,15 @@ static void tcg_out_ld(TCGContext* s, TCGType type, TCGReg ret, TCGReg base, int
             insn = (ret < 32 ? I3312_LDRX : I3312_LDRVD);
             lgsz = 3;
             break;
+        case TCG_TYPE_F16:
+            insn = I3312_LDRVH;
+            lgsz = 1;
+            break;
+        case TCG_TYPE_F32:
+            insn = I3312_LDRVS;
+            lgsz = 2;
+            break;
+        case TCG_TYPE_F64:
         case TCG_TYPE_V64:
             insn = I3312_LDRVD;
             lgsz = 3;
@@ -1205,6 +1427,15 @@ static void tcg_out_st(TCGContext* s, TCGType type, TCGReg src, TCGReg base, int
             insn = (src < 32 ? I3312_STRX : I3312_STRVD);
             lgsz = 3;
             break;
+        case TCG_TYPE_F16:
+            insn = I3312_STRVH;
+            lgsz = 1;
+            break;
+        case TCG_TYPE_F32:
+            insn = I3312_STRVS;
+            lgsz = 2;
+            break;
+        case TCG_TYPE_F64:
         case TCG_TYPE_V64:
             insn = I3312_STRVD;
             lgsz = 3;
@@ -2470,6 +2701,447 @@ static const TCGOutOpStore outop_st = {
     .out_r                  = tcg_out_st,
 };
 
+typedef struct
+{
+    uint32_t scalar; /* base | ftype << 22       */
+    uint32_t v3264;  /* base | q << 30 | sz << 22 */
+    uint32_t v16;    /* base | q << 30           */
+} AArch64FPInsn;
+
+static const AArch64FPInsn fp_insn_add   = {I3F_FADD_S, I3F_FADD_V, I3F_FADD_H};
+static const AArch64FPInsn fp_insn_sub   = {I3F_FSUB_S, I3F_FSUB_V, I3F_FSUB_H};
+static const AArch64FPInsn fp_insn_mul   = {I3F_FMUL_S, I3F_FMUL_V, I3F_FMUL_H};
+static const AArch64FPInsn fp_insn_div   = {I3F_FDIV_S, I3F_FDIV_V, I3F_FDIV_H};
+static const AArch64FPInsn fp_insn_max   = {I3F_FMAX_S, I3F_FMAX_V, I3F_FMAX_H};
+static const AArch64FPInsn fp_insn_min   = {I3F_FMIN_S, I3F_FMIN_V, I3F_FMIN_H};
+static const AArch64FPInsn fp_insn_maxnm = {I3F_FMAXNM_S, I3F_FMAXNM_V, I3F_FMAXNM_H};
+static const AArch64FPInsn fp_insn_minnm = {I3F_FMINNM_S, I3F_FMINNM_V, I3F_FMINNM_H};
+static const AArch64FPInsn fp_insn_sqrt  = {I3F_FSQRT_S, I3F_FSQRT_V, I3F_FSQRT_H};
+
+static bool tcg_fp_type_is_scalar(TCGType type)
+{ return type == TCG_TYPE_F16 || type == TCG_TYPE_F32 || type == TCG_TYPE_F64; }
+
+static unsigned tcg_fp_ftype(TCGType type)
+{
+    switch (type) {
+        case TCG_TYPE_F32: return 0;
+        case TCG_TYPE_F64: return 1;
+        case TCG_TYPE_F16: return 3;
+        default          : assert_not_reached();
+    }
+}
+
+static uint32_t tcg_fp_insn_base(const AArch64FPInsn* i, TCGType type, unsigned vece)
+{
+    if (tcg_fp_type_is_scalar(type)) { return i->scalar | tcg_fp_ftype(type) << 22; }
+    else {
+        bool q = type == TCG_TYPE_V128;
+
+        if (vece == MO_16) { return i->v16 | (uint32_t)q << 30; }
+        return i->v3264 | (uint32_t)q << 30 | (uint32_t)(vece == MO_64) << 22;
+    }
+}
+
+static void tcg_out_fp3(TCGContext* s, const AArch64FPInsn* i, TCGType type, unsigned vece, TCGReg rd, TCGReg rn,
+                        TCGReg rm)
+{ tcg_out32(s, tcg_fp_insn_base(i, type, vece) | (rm & 0x1f) << 16 | (rn & 0x1f) << 5 | (rd & 0x1f)); }
+
+static void tcg_out_fp2(TCGContext* s, const AArch64FPInsn* i, TCGType type, unsigned vece, TCGReg rd, TCGReg rn)
+{ tcg_out32(s, tcg_fp_insn_base(i, type, vece) | (rn & 0x1f) << 5 | (rd & 0x1f)); }
+
+bool tcg_can_emit_fp_op(TCGOpcode opc, TCGType type, unsigned vece)
+{
+    switch (opc) {
+        case INDEX_op_cvt_s_i2f:
+        case INDEX_op_cvt_u_i2f: return type != TCG_TYPE_F16 || (cpuinfo & CPUINFO_FP16);
+        case INDEX_op_cvt_f2i_s:
+        case INDEX_op_cvt_f2i_u: return type == TCG_TYPE_I32 || type == TCG_TYPE_I64;
+        case INDEX_op_cvtn_fp  :
+        case INDEX_op_cvtl_fp  : return type == TCG_TYPE_V128 && (vece == MO_16 || vece == MO_32);
+        case INDEX_op_cvtxn_fp : return type == TCG_TYPE_V128 && vece == MO_32;
+        case INDEX_op_fcmp_fp  :
+        case INDEX_op_recpx_fp:
+            if (!tcg_fp_type_is_scalar(type)) { return false; }
+            break;
+        case INDEX_op_addp_fp   :
+        case INDEX_op_maxp_fp   :
+        case INDEX_op_minp_fp   :
+        case INDEX_op_maxnump_fp:
+        case INDEX_op_minnump_fp:
+            if (tcg_fp_type_is_scalar(type)) { return false; }
+            break;
+        default: break;
+    }
+
+    if (tcg_fp_type_is_scalar(type)) {
+        if (type == TCG_TYPE_F16 && !(cpuinfo & CPUINFO_FP16)) { return false; }
+    }
+    else if (type == TCG_TYPE_V64 || type == TCG_TYPE_V128) {
+        switch (vece) {
+            case MO_16:
+                if (!(cpuinfo & CPUINFO_FP16)) { return false; }
+                break;
+            case MO_32: break;
+            case MO_64:
+                if (type != TCG_TYPE_V128) { return false; }
+                break;
+            default: return false;
+        }
+    }
+    else {
+        return false;
+    }
+
+    switch (opc) {
+        case INDEX_op_add_fp    :
+        case INDEX_op_sub_fp    :
+        case INDEX_op_mul_fp    :
+        case INDEX_op_div_fp    :
+        case INDEX_op_min_fp    :
+        case INDEX_op_max_fp    :
+        case INDEX_op_minnum_fp :
+        case INDEX_op_maxnum_fp :
+        case INDEX_op_sqrt_fp   :
+        case INDEX_op_cvt_s_fp  :
+        case INDEX_op_cvt_u_fp  :
+        case INDEX_op_cvt_fp_s  :
+        case INDEX_op_cvt_fp_u  :
+        case INDEX_op_rint_fp   :
+        case INDEX_op_cvt_fp    :
+        case INDEX_op_cmp_fp    :
+        case INDEX_op_fma_fp    :
+        case INDEX_op_fms_fp    :
+        case INDEX_op_addp_fp   :
+        case INDEX_op_maxp_fp   :
+        case INDEX_op_minp_fp   :
+        case INDEX_op_maxnump_fp:
+        case INDEX_op_minnump_fp:
+        case INDEX_op_neg_fp    :
+        case INDEX_op_abs_fp    :
+        case INDEX_op_mulx_fp   :
+        case INDEX_op_recps_fp  :
+        case INDEX_op_rsqrts_fp :
+        case INDEX_op_recpe_fp  :
+        case INDEX_op_rsqrte_fp :
+        case INDEX_op_recpx_fp  :
+        case INDEX_op_fcmp_fp   : return true;
+        default                 : return false;
+    }
+}
+
+bool tcg_can_emit_fp_cvt(TCGOpcode opc, TCGType type, unsigned other, TCGArg round, TCGArg fbits)
+{
+    switch (opc) {
+        case INDEX_op_cvt_s_i2f:
+        case INDEX_op_cvt_u_i2f: return tcg_can_emit_fp_op(opc, type, 0) && fbits <= (other == TCG_TYPE_I32 ? 32 : 64);
+        case INDEX_op_cvt_f2i_s:
+        case INDEX_op_cvt_f2i_u:
+            if (round > TCG_FP_ROUND_TIES_AWAY) { return false; }
+            if (type == TCG_TYPE_F16 && !(cpuinfo & CPUINFO_FP16)) { return false; }
+            /* Only FCVTZ* has fixed-point forms. */
+            if (fbits && (round != TCG_FP_ROUND_TO_ZERO || fbits > (other == TCG_TYPE_I32 ? 32 : 64))) { return false; }
+            return tcg_fp_type_is_scalar(type) && tcg_can_emit_fp_op(opc, other, 0);
+        case INDEX_op_cvt_fp:
+            if ((type == TCG_TYPE_F16 || other == TCG_TYPE_F16) && !(cpuinfo & CPUINFO_FP16)) { return false; }
+            return other != type && tcg_fp_type_is_scalar(other) && tcg_can_emit_fp_op(opc, type, 0);
+        case INDEX_op_rint_fp : return tcg_can_emit_fp_op(opc, type, other);
+        case INDEX_op_cvt_s_fp:
+        case INDEX_op_cvt_u_fp:
+        case INDEX_op_cvt_fp_s:
+        case INDEX_op_cvt_fp_u: {
+            bool to_int = opc == INDEX_op_cvt_fp_s || opc == INDEX_op_cvt_fp_u;
+
+            if (to_int && round > TCG_FP_ROUND_TIES_AWAY) { return false; }
+            /* Fixed-point forms are vector only and truncate toward zero. */
+            if (fbits && (tcg_fp_type_is_scalar(type) || fbits > (8u << other))) { return false; }
+            if (fbits && to_int && round != TCG_FP_ROUND_TO_ZERO) { return false; }
+            return tcg_can_emit_fp_op(opc, type, other);
+        }
+        default: assert_not_reached();
+    }
+}
+
+static uint32_t tcg_fp_cvt_insn(uint32_t base, TCGType type, unsigned vece, bool uns)
+{
+    uint32_t insn = base;
+    unsigned sz;
+
+    if (tcg_fp_type_is_scalar(type)) {
+        insn  |= I3_SCALAR;
+        sz    = type == TCG_TYPE_F16 ? MO_16 : type == TCG_TYPE_F32 ? MO_32 : MO_64;
+    }
+    else {
+        insn |= (uint32_t)(type == TCG_TYPE_V128) << 30;
+        sz    = vece;
+    }
+
+    if (sz == MO_16) { insn |= I3F_CVT_SZ16; }
+    else if (sz == MO_64) {
+        insn |= I3F_CVT_SZ64;
+    }
+    return insn | (uns ? I3F_CVT_UNSIGNED : 0);
+}
+
+/*
+ * Bases shaped like the AdvSIMD vector encoding: scalar is the same opcode
+ * with the scalar bits set, fp64 sets the size bit, fp16 has its own base.
+ */
+static uint32_t tcg_fp_simd_base(uint32_t v3264, uint32_t v16, TCGType type, unsigned vece)
+{
+    unsigned sz;
+    uint32_t insn;
+
+    if (tcg_fp_type_is_scalar(type)) {
+        sz   = type == TCG_TYPE_F16 ? MO_16 : type == TCG_TYPE_F32 ? MO_32 : MO_64;
+        insn = (sz == MO_16 ? v16 : v3264) | I3_SCALAR;
+    }
+    else {
+        sz   = vece;
+        insn = (sz == MO_16 ? v16 : v3264) | (uint32_t)(type == TCG_TYPE_V128) << 30;
+    }
+    return insn | (sz == MO_64 ? I3F_CVT_SZ64 : 0);
+}
+
+static void tcg_fp_rint_bases(TCGArg mode, uint32_t* scalar, uint32_t* vec)
+{
+    switch (mode) {
+        case TCG_FP_ROUND_NEAREST_EVEN : *scalar = I3F_FRINTN_S, *vec = I3F_FRINTN_V; break;
+        case TCG_FP_ROUND_UP           : *scalar = I3F_FRINTP_S, *vec = I3F_FRINTP_V; break;
+        case TCG_FP_ROUND_DOWN         : *scalar = I3F_FRINTM_S, *vec = I3F_FRINTM_V; break;
+        case TCG_FP_ROUND_TO_ZERO      : *scalar = I3F_FRINTZ_S, *vec = I3F_FRINTZ_V; break;
+        case TCG_FP_ROUND_TIES_AWAY    : *scalar = I3F_FRINTA_S, *vec = I3F_FRINTA_V; break;
+        case TCG_FP_ROUND_CURRENT      : *scalar = I3F_FRINTI_S, *vec = I3F_FRINTI_V; break;
+        case TCG_FP_ROUND_CURRENT_EXACT: *scalar = I3F_FRINTX_S, *vec = I3F_FRINTX_V; break;
+        default                        : assert_not_reached();
+    }
+}
+
+/* ftype: single 00, double 01, half 11. */
+static uint32_t tcg_fp_gp_opc(TCGArg mode)
+{
+    switch (mode) {
+        case TCG_FP_ROUND_NEAREST_EVEN: return I3F_GP_FCVTNS;
+        case TCG_FP_ROUND_UP          : return I3F_GP_FCVTPS;
+        case TCG_FP_ROUND_DOWN        : return I3F_GP_FCVTMS;
+        case TCG_FP_ROUND_TO_ZERO     : return I3F_GP_FCVTZS;
+        case TCG_FP_ROUND_TIES_AWAY   : return I3F_GP_FCVTAS;
+        default                       : assert_not_reached();
+    }
+}
+
+/* opc already selects signed; unsigned is the next opcode value. */
+static uint32_t tcg_fp_gp_insn(uint32_t opc, bool uns, TCGType ftype, TCGType itype, TCGArg fbits)
+{
+    uint32_t insn = fbits ? I3F_GP_FIXED : I3F_GP_INT;
+
+    insn |= (uint32_t)(itype == TCG_TYPE_I64) << 31;
+    insn |= tcg_fp_ftype(ftype) << 22;
+    insn |= (opc + (uns ? 1 : 0)) << 16;
+    if (fbits) { insn |= (uint32_t)(64 - fbits) << 10; }
+    return insn;
+}
+
+static uint32_t tcg_fp_round_base(TCGArg mode)
+{
+    switch (mode) {
+        case TCG_FP_ROUND_NEAREST_EVEN: return I3F_FCVTN;
+        case TCG_FP_ROUND_DOWN        : return I3F_FCVTM;
+        case TCG_FP_ROUND_UP          : return I3F_FCVTP;
+        case TCG_FP_ROUND_TO_ZERO     : return I3F_FCVTZ;
+        case TCG_FP_ROUND_TIES_AWAY   : return I3F_FCVTA;
+        default                       : assert_not_reached();
+    }
+}
+
+static void tcg_out_fp_simd3(TCGContext* s, uint32_t v3264, uint32_t v16, TCGType type, unsigned vece, TCGReg rd,
+                             TCGReg rn, TCGReg rm)
+{ tcg_out32(s, tcg_fp_simd_base(v3264, v16, type, vece) | (rm & 0x1f) << 16 | (rn & 0x1f) << 5 | (rd & 0x1f)); }
+
+static void tcg_out_fp_fixed_v(TCGContext* s, uint32_t base, bool uns, TCGType type, unsigned vece, TCGArg fbits,
+                               TCGReg rd, TCGReg rn)
+{
+    unsigned esize = 8 << vece;
+
+    tcg_debug_assert(!tcg_fp_type_is_scalar(type));
+    tcg_debug_assert(fbits >= 1 && fbits <= esize);
+    tcg_out32(s, base | (uns ? I3F_CVT_UNSIGNED : 0) | (uint32_t)(type == TCG_TYPE_V128) << 30
+                     | (uint32_t)(2 * esize - fbits) << 16 | (rn & 0x1f) << 5 | (rd & 0x1f));
+}
+
+static void tcg_out_fp_op(TCGContext* s, TCGOpcode opc, TCGType type, unsigned vece, const TCGArg args[TCG_MAX_OP_ARGS],
+                          const int const_args[TCG_MAX_OP_ARGS])
+{
+    TCGReg a0 = args[0], a1 = args[1], a2 = args[2];
+
+    switch (opc) {
+        case INDEX_op_add_fp   : tcg_out_fp3(s, &fp_insn_add, type, vece, a0, a1, a2); break;
+        case INDEX_op_sub_fp   : tcg_out_fp3(s, &fp_insn_sub, type, vece, a0, a1, a2); break;
+        case INDEX_op_mul_fp   : tcg_out_fp3(s, &fp_insn_mul, type, vece, a0, a1, a2); break;
+        case INDEX_op_div_fp   : tcg_out_fp3(s, &fp_insn_div, type, vece, a0, a1, a2); break;
+        case INDEX_op_max_fp   : tcg_out_fp3(s, &fp_insn_max, type, vece, a0, a1, a2); break;
+        case INDEX_op_min_fp   : tcg_out_fp3(s, &fp_insn_min, type, vece, a0, a1, a2); break;
+        case INDEX_op_maxnum_fp: tcg_out_fp3(s, &fp_insn_maxnm, type, vece, a0, a1, a2); break;
+        case INDEX_op_minnum_fp: tcg_out_fp3(s, &fp_insn_minnm, type, vece, a0, a1, a2); break;
+        case INDEX_op_sqrt_fp  : tcg_out_fp2(s, &fp_insn_sqrt, type, vece, a0, a1); break;
+
+        case INDEX_op_cmp_fp: {
+            uint32_t v3264, v16;
+            TCGReg   rn = a1, rm = a2;
+
+            switch (args[3]) {
+                case TCG_COND_EQ: v3264 = I3F_FCMEQ_V, v16 = I3F_FCMEQ_H; break;
+                case TCG_COND_GE: v3264 = I3F_FCMGE_V, v16 = I3F_FCMGE_H; break;
+                case TCG_COND_GT: v3264 = I3F_FCMGT_V, v16 = I3F_FCMGT_H; break;
+                case TCG_COND_LE:
+                    v3264 = I3F_FCMGE_V, v16 = I3F_FCMGE_H;
+                    rn = a2, rm = a1;
+                    break;
+                case TCG_COND_LT:
+                    v3264 = I3F_FCMGT_V, v16 = I3F_FCMGT_H;
+                    rn = a2, rm = a1;
+                    break;
+                default: assert_not_reached();
+            }
+            tcg_out32(s, tcg_fp_simd_base(v3264, v16, type, vece) | (rm & 0x1f) << 16 | (rn & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        }
+
+        case INDEX_op_fma_fp:
+        case INDEX_op_fms_fp: {
+            bool sub = opc == INDEX_op_fms_fp;
+
+            if (tcg_fp_type_is_scalar(type)) {
+                unsigned ftype = tcg_fp_ftype(type);
+
+                tcg_out32(s, (sub ? I3F_FMSUB_S : I3F_FMADD_S) | ftype << 22 | (args[3] & 0x1f) << 16
+                                 | (a1 & 0x1f) << 10 | (args[2] & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            else {
+                tcg_out32(s, tcg_fp_simd_base(sub ? I3F_FMLS_V : I3F_FMLA_V, sub ? I3F_FMLS_H : I3F_FMLA_H, type, vece)
+                                 | (args[3] & 0x1f) << 16 | (args[2] & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            break;
+        }
+
+        case INDEX_op_rint_fp: {
+            uint32_t sc, vc;
+
+            tcg_fp_rint_bases(a2, &sc, &vc);
+            if (tcg_fp_type_is_scalar(type)) {
+                unsigned ftype = tcg_fp_ftype(type);
+
+                tcg_out32(s, sc | ftype << 22 | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            else {
+                tcg_out32(s, tcg_fp_cvt_insn(vc, type, vece, false) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            break;
+        }
+
+        case INDEX_op_cvt_fp:
+            tcg_out32(s, I3F_FCVT_S | tcg_fp_ftype((TCGType)a2) << 22 | tcg_fp_ftype(type) << 15 | (a1 & 0x1f) << 5
+                             | (a0 & 0x1f));
+            break;
+
+        case INDEX_op_cvt_s_i2f:
+        case INDEX_op_cvt_u_i2f:
+            tcg_out32(s, tcg_fp_gp_insn(I3F_GP_SCVTF, opc == INDEX_op_cvt_u_i2f, type, (TCGType)a2, args[3])
+                             | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+
+        case INDEX_op_cvt_f2i_s:
+        case INDEX_op_cvt_f2i_u:
+            tcg_out32(s, tcg_fp_gp_insn(tcg_fp_gp_opc(args[3]), opc == INDEX_op_cvt_f2i_u, (TCGType)a2, type, args[4])
+                             | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+
+        case INDEX_op_cvt_s_fp:
+        case INDEX_op_cvt_u_fp: {
+            bool uns = opc == INDEX_op_cvt_u_fp;
+
+            if (a2) { tcg_out_fp_fixed_v(s, I3F_SCVTF_FIXED_V, uns, type, vece, a2, a0, a1); }
+            else {
+                tcg_out32(s, tcg_fp_cvt_insn(I3F_CVTF, type, vece, uns) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            break;
+        }
+        case INDEX_op_cvt_fp_s:
+        case INDEX_op_cvt_fp_u: {
+            bool uns = opc == INDEX_op_cvt_fp_u;
+
+            if (args[3]) {
+                tcg_debug_assert(a2 == TCG_FP_ROUND_TO_ZERO);
+                tcg_out_fp_fixed_v(s, I3F_FCVTZS_FIXED_V, uns, type, vece, args[3], a0, a1);
+            }
+            else {
+                tcg_out32(s, tcg_fp_cvt_insn(tcg_fp_round_base(a2), type, vece, uns) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            break;
+        }
+
+        case INDEX_op_cvtn_fp:
+            tcg_out32(s, I3F_FCVTN_V | (uint32_t)(args[3] != 0) << 30 | (uint32_t)(vece == MO_32) << 22
+                             | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_cvtxn_fp:
+            tcg_out32(s, I3F_FCVTXN_V | (uint32_t)(args[3] != 0) << 30 | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_cvtl_fp:
+            tcg_out32(s, I3F_FCVTL_V | (uint32_t)(a2 != 0) << 30 | (uint32_t)(vece == MO_32) << 22 | (a1 & 0x1f) << 5
+                             | (a0 & 0x1f));
+            break;
+
+        case INDEX_op_neg_fp:
+        case INDEX_op_abs_fp: {
+            bool neg = opc == INDEX_op_neg_fp;
+
+            if (tcg_fp_type_is_scalar(type)) {
+                tcg_out32(s,
+                          (neg ? I3F_FNEG_S : I3F_FABS_S) | tcg_fp_ftype(type) << 22 | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            else {
+                tcg_out32(s, tcg_fp_simd_base(neg ? I3F_FNEG_V : I3F_FABS_V, neg ? I3F_FNEG_H : I3F_FABS_H, type, vece)
+                                 | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            }
+            break;
+        }
+
+        case INDEX_op_addp_fp   : tcg_out_fp_simd3(s, I3F_FADDP_V, I3F_FADDP_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_maxp_fp   : tcg_out_fp_simd3(s, I3F_FMAXP_V, I3F_FMAXP_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_minp_fp   : tcg_out_fp_simd3(s, I3F_FMINP_V, I3F_FMINP_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_maxnump_fp: tcg_out_fp_simd3(s, I3F_FMAXNMP_V, I3F_FMAXNMP_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_minnump_fp: tcg_out_fp_simd3(s, I3F_FMINNMP_V, I3F_FMINNMP_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_mulx_fp   : tcg_out_fp_simd3(s, I3F_FMULX_V, I3F_FMULX_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_recps_fp  : tcg_out_fp_simd3(s, I3F_FRECPS_V, I3F_FRECPS_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_rsqrts_fp : tcg_out_fp_simd3(s, I3F_FRSQRTS_V, I3F_FRSQRTS_H, type, vece, a0, a1, a2); break;
+        case INDEX_op_recpe_fp:
+            tcg_out32(s, tcg_fp_simd_base(I3F_FRECPE_V, I3F_FRECPE_H, type, vece) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_rsqrte_fp:
+            tcg_out32(s, tcg_fp_simd_base(I3F_FRSQRTE_V, I3F_FRSQRTE_H, type, vece) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_recpx_fp:
+            tcg_out32(s, tcg_fp_simd_base(I3F_FRECPX_V, I3F_FRECPX_H, type, vece) | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+
+        case INDEX_op_fcmp_fp:
+            tcg_out32(s, (args[3] ? I3F_FCMPE : I3F_FCMP) | tcg_fp_ftype(type) << 22 | (a2 & 0x1f) << 16
+                             | (a1 & 0x1f) << 5);
+            tcg_out32(s, I3F_MRS_NZCV | a0);
+            break;
+
+        default: assert_not_reached();
+    }
+}
+
+/* Three-same or two-register-misc shape; rm unused for the latter. */
+static void tcg_out_vec_rrr(TCGContext* s, uint32_t insn, unsigned is_q, bool is_scalar, unsigned vece, TCGReg rd,
+                            TCGReg rn, TCGReg rm)
+{
+    tcg_out32(s, insn | (is_scalar ? I3_SCALAR : 0) | is_q << 30 | vece << 22 | (rm & 0x1f) << 16 | (rn & 0x1f) << 5
+                     | (rd & 0x1f));
+}
+
 static void tcg_out_vec_op(TCGContext* s, TCGOpcode opc, unsigned vecl, unsigned vece,
                            const TCGArg args[TCG_MAX_OP_ARGS], const int const_args[TCG_MAX_OP_ARGS])
 {
@@ -2517,6 +3189,102 @@ static void tcg_out_vec_op(TCGContext* s, TCGOpcode opc, unsigned vecl, unsigned
             }
             break;
         case INDEX_op_mul_vec: tcg_out_insn(s, 3616, MUL, is_q, vece, a0, a1, a2); break;
+
+        case INDEX_op_sqshl_vec   : tcg_out_vec_rrr(s, I3I_SQSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_uqshl_vec   : tcg_out_vec_rrr(s, I3I_UQSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_sqrshl_vec  : tcg_out_vec_rrr(s, I3I_SQRSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_uqrshl_vec  : tcg_out_vec_rrr(s, I3I_UQRSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_srshl_vec   : tcg_out_vec_rrr(s, I3I_SRSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_urshl_vec   : tcg_out_vec_rrr(s, I3I_URSHL, is_q, is_scalar, vece, a0, a1, a2); break;
+        case INDEX_op_addp_vec    : tcg_out_vec_rrr(s, I3I_ADDP, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_smaxp_vec   : tcg_out_vec_rrr(s, I3I_SMAXP, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_umaxp_vec   : tcg_out_vec_rrr(s, I3I_UMAXP, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_sminp_vec   : tcg_out_vec_rrr(s, I3I_SMINP, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_uminp_vec   : tcg_out_vec_rrr(s, I3I_UMINP, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_pmul_vec    : tcg_out_vec_rrr(s, I3I_PMUL, is_q, false, vece, a0, a1, a2); break;
+        case INDEX_op_sqabs_vec   : tcg_out_vec_rrr(s, I3I_SQABS, is_q, is_scalar, vece, a0, a1, 0); break;
+        case INDEX_op_sqneg_vec   : tcg_out_vec_rrr(s, I3I_SQNEG, is_q, is_scalar, vece, a0, a1, 0); break;
+        case INDEX_op_cls_vec     : tcg_out_vec_rrr(s, I3I_CLS, is_q, false, vece, a0, a1, 0); break;
+        case INDEX_op_clz_vec     : tcg_out_vec_rrr(s, I3I_CLZ, is_q, false, vece, a0, a1, 0); break;
+        case INDEX_op_cnt_vec     : tcg_out_vec_rrr(s, I3I_CNT, is_q, false, 0, a0, a1, 0); break;
+        case INDEX_op_rbit_vec    : tcg_out_vec_rrr(s, I3I_RBIT, is_q, false, 0, a0, a1, 0); break;
+        case INDEX_op_urecpe_vec  : tcg_out_vec_rrr(s, I3I_URECPE, is_q, false, 0, a0, a1, 0); break;
+        case INDEX_op_ursqrte_vec : tcg_out_vec_rrr(s, I3I_URSQRTE, is_q, false, 0, a0, a1, 0); break;
+        case INDEX_op_sqshli_vec  :
+        case INDEX_op_uqshli_vec  :
+        case INDEX_op_sqshlui_vec : {
+            uint32_t insn = opc == INDEX_op_sqshli_vec ? I3I_SQSHLI :
+                            opc == INDEX_op_uqshli_vec ? I3I_UQSHLI :
+                                                         I3I_SQSHLUI;
+
+            tcg_out32(s, insn | (is_scalar ? I3_SCALAR : 0) | is_q << 30 | (uint32_t)((8 << vece) + a2) << 16
+                             | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        }
+        case INDEX_op_sqshrn_vec  :
+        case INDEX_op_uqshrn_vec  :
+        case INDEX_op_sqrshrn_vec :
+        case INDEX_op_uqrshrn_vec :
+        case INDEX_op_sqshrun_vec :
+        case INDEX_op_sqrshrun_vec: {
+            uint32_t insn;
+
+            switch (opc) {
+                case INDEX_op_sqshrn_vec : insn = I3I_SQSHRN; break;
+                case INDEX_op_uqshrn_vec : insn = I3I_UQSHRN; break;
+                case INDEX_op_sqrshrn_vec: insn = I3I_SQRSHRN; break;
+                case INDEX_op_uqrshrn_vec: insn = I3I_UQRSHRN; break;
+                case INDEX_op_sqshrun_vec: insn = I3I_SQSHRUN; break;
+                default                  : insn = I3I_SQRSHRUN; break;
+            }
+            /* a1, the old destination, is tied to a0. */
+            tcg_out32(s, insn | (uint32_t)(args[4] != 0) << 30 | (uint32_t)((16 << vece) - args[3]) << 16
+                             | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        }
+        case INDEX_op_pmull_vec:
+            tcg_out32(s, I3I_PMULL | (uint32_t)(args[3] != 0) << 30 | (vece == MO_64 ? 3u : 0u) << 22
+                             | (a2 & 0x1f) << 16 | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_sqdmull_vec:
+            tcg_out32(s, I3I_SQDMULL | (uint32_t)(args[3] != 0) << 30 | vece << 22 | (a2 & 0x1f) << 16
+                             | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_shll_vec:
+            tcg_out32(s, I3I_SHLL | (uint32_t)(a2 != 0) << 30 | vece << 22 | (a1 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_sqdmlal_vec:
+        case INDEX_op_sqdmlsl_vec:
+            /* a1, the accumulator, is tied to a0. */
+            tcg_out32(s, (opc == INDEX_op_sqdmlal_vec ? I3I_SQDMLAL : I3I_SQDMLSL) | (uint32_t)(args[4] != 0) << 30
+                             | vece << 22 | (args[3] & 0x1f) << 16 | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_sdot_vec:
+        case INDEX_op_udot_vec:
+            tcg_out32(s, (opc == INDEX_op_sdot_vec ? I3I_SDOT : I3I_UDOT) | is_q << 30 | (args[3] & 0x1f) << 16
+                             | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_tbx_vec:
+            tcg_out32(s, I3I_TBX1 | is_q << 30 | (args[3] & 0x1f) << 16 | (a2 & 0x1f) << 5 | (a0 & 0x1f));
+            break;
+        case INDEX_op_sqdmulh_vec : tcg_out_insn(s, 3616, SQDMULH, is_q, vece, a0, a1, a2); break;
+        case INDEX_op_sqrdmulh_vec: tcg_out_insn(s, 3616, SQRDMULH, is_q, vece, a0, a1, a2); break;
+        case INDEX_op_xtn_vec     :
+        case INDEX_op_sqxtn_vec   :
+        case INDEX_op_uqxtn_vec   :
+        case INDEX_op_sqxtun_vec  : {
+            static const uint32_t bases[] = {I3617_XTN, I3617_SQXTN, I3617_UQXTN, I3617_SQXTUN};
+            unsigned              idx     = opc == INDEX_op_xtn_vec   ? 0 :
+                                            opc == INDEX_op_sqxtn_vec ? 1 :
+                                            opc == INDEX_op_uqxtn_vec ? 2 :
+                                                                        3;
+
+            tcg_out32(s, bases[idx] | (uint32_t)(args[3] != 0) << 30 | (uint32_t)vece << 22 | (a2 & 0x1f) << 5
+                             | (a0 & 0x1f));
+            break;
+        }
+        case INDEX_op_sqrdmlah_vec: tcg_out_insn(s, 3616, SQRDMLAH, is_q, vece, a0, a2, args[3]); break;
+        case INDEX_op_sqrdmlsh_vec: tcg_out_insn(s, 3616, SQRDMLSH, is_q, vece, a0, a2, args[3]); break;
         case INDEX_op_neg_vec:
             if (is_scalar) { tcg_out_insn(s, 3612, NEG, vece, a0, a1); }
             else {
@@ -2799,6 +3567,52 @@ int tcg_can_emit_vec_op(TCGOpcode opc, TCGType type, unsigned vece)
         case INDEX_op_sha512h2_vec :
         case INDEX_op_sha512su0_vec:
         case INDEX_op_sha512su1_vec: return type == TCG_TYPE_V128 && TCG_TARGET_HAS_sha512_vec;
+        case INDEX_op_sqshl_vec    :
+        case INDEX_op_uqshl_vec    :
+        case INDEX_op_sqrshl_vec   :
+        case INDEX_op_uqrshl_vec   :
+        case INDEX_op_srshl_vec    :
+        case INDEX_op_urshl_vec    :
+        case INDEX_op_sqshli_vec   :
+        case INDEX_op_uqshli_vec   :
+        case INDEX_op_sqshlui_vec  :
+        case INDEX_op_sqabs_vec    :
+        case INDEX_op_sqneg_vec    : return 1;
+        case INDEX_op_addp_vec     : return type == TCG_TYPE_V128 || vece < MO_64;
+        case INDEX_op_smaxp_vec    :
+        case INDEX_op_umaxp_vec    :
+        case INDEX_op_sminp_vec    :
+        case INDEX_op_uminp_vec    :
+        case INDEX_op_cls_vec      :
+        case INDEX_op_clz_vec      : return vece < MO_64;
+        case INDEX_op_cnt_vec      :
+        case INDEX_op_rbit_vec     :
+        case INDEX_op_pmul_vec     :
+        case INDEX_op_tbx_vec      : return vece == MO_8;
+        case INDEX_op_urecpe_vec   :
+        case INDEX_op_ursqrte_vec  : return vece == MO_32;
+        case INDEX_op_pmull_vec:
+            return type == TCG_TYPE_V128 && (vece == MO_8 || (vece == MO_64 && (cpuinfo & CPUINFO_PMULL)));
+        case INDEX_op_shll_vec     :
+        case INDEX_op_sqshrn_vec   :
+        case INDEX_op_uqshrn_vec   :
+        case INDEX_op_sqrshrn_vec  :
+        case INDEX_op_uqrshrn_vec  :
+        case INDEX_op_sqshrun_vec  :
+        case INDEX_op_sqrshrun_vec : return type == TCG_TYPE_V128 && vece < MO_64;
+        case INDEX_op_sqdmull_vec  :
+        case INDEX_op_sqdmlal_vec  :
+        case INDEX_op_sqdmlsl_vec  : return type == TCG_TYPE_V128 && (vece == MO_16 || vece == MO_32);
+        case INDEX_op_sdot_vec     :
+        case INDEX_op_udot_vec     : return vece == MO_32 && (cpuinfo & CPUINFO_DOTPROD);
+        case INDEX_op_sqdmulh_vec  :
+        case INDEX_op_sqrdmulh_vec : return vece == MO_16 || vece == MO_32;
+        case INDEX_op_xtn_vec      :
+        case INDEX_op_sqxtn_vec    :
+        case INDEX_op_uqxtn_vec    :
+        case INDEX_op_sqxtun_vec   : return type == TCG_TYPE_V128 && vece <= MO_32;
+        case INDEX_op_sqrdmlah_vec :
+        case INDEX_op_sqrdmlsh_vec : return (cpuinfo & CPUINFO_RDM) && (vece == MO_16 || vece == MO_32);
 
         default: return 0;
     }
@@ -2884,7 +3698,91 @@ static TCGConstraintSetIndex tcg_target_op_def(TCGOpcode op, TCGType type, unsig
         case INDEX_op_shlv_vec     :
         case INDEX_op_shrv_vec     :
         case INDEX_op_sarv_vec     :
+        case INDEX_op_sqdmulh_vec  :
+        case INDEX_op_sqrdmulh_vec :
         case INDEX_op_aa64_sshl_vec: return C_O1_I2(w, w, w);
+        case INDEX_op_add_fp       :
+        case INDEX_op_sub_fp       :
+        case INDEX_op_mul_fp       :
+        case INDEX_op_div_fp       :
+        case INDEX_op_min_fp       :
+        case INDEX_op_max_fp       :
+        case INDEX_op_minnum_fp    :
+        case INDEX_op_maxnum_fp    :
+        case INDEX_op_addp_fp      :
+        case INDEX_op_maxp_fp      :
+        case INDEX_op_minp_fp      :
+        case INDEX_op_maxnump_fp   :
+        case INDEX_op_minnump_fp   :
+        case INDEX_op_mulx_fp      :
+        case INDEX_op_recps_fp     :
+        case INDEX_op_rsqrts_fp    :
+        case INDEX_op_sqshl_vec    :
+        case INDEX_op_uqshl_vec    :
+        case INDEX_op_sqrshl_vec   :
+        case INDEX_op_uqrshl_vec   :
+        case INDEX_op_srshl_vec    :
+        case INDEX_op_urshl_vec    :
+        case INDEX_op_addp_vec     :
+        case INDEX_op_smaxp_vec    :
+        case INDEX_op_umaxp_vec    :
+        case INDEX_op_sminp_vec    :
+        case INDEX_op_uminp_vec    :
+        case INDEX_op_pmul_vec     :
+        case INDEX_op_pmull_vec    :
+        case INDEX_op_sqdmull_vec  :
+        case INDEX_op_cmp_fp       : return C_O1_I2(w, w, w);
+        case INDEX_op_neg_fp       :
+        case INDEX_op_abs_fp       :
+        case INDEX_op_recpe_fp     :
+        case INDEX_op_rsqrte_fp    :
+        case INDEX_op_recpx_fp     :
+        case INDEX_op_cvtl_fp      :
+        case INDEX_op_sqabs_vec    :
+        case INDEX_op_sqneg_vec    :
+        case INDEX_op_cls_vec      :
+        case INDEX_op_clz_vec      :
+        case INDEX_op_cnt_vec      :
+        case INDEX_op_rbit_vec     :
+        case INDEX_op_urecpe_vec   :
+        case INDEX_op_ursqrte_vec  :
+        case INDEX_op_sqshli_vec   :
+        case INDEX_op_uqshli_vec   :
+        case INDEX_op_sqshlui_vec  :
+        case INDEX_op_shll_vec     :
+        case INDEX_op_sqrt_fp      :
+        case INDEX_op_cvt_s_fp     :
+        case INDEX_op_cvt_u_fp     :
+        case INDEX_op_cvt_fp_s     :
+        case INDEX_op_cvt_fp_u     :
+        case INDEX_op_rint_fp      :
+        case INDEX_op_cvt_fp       : return C_O1_I1(w, w);
+        case INDEX_op_sqshrn_vec   :
+        case INDEX_op_uqshrn_vec   :
+        case INDEX_op_sqrshrn_vec  :
+        case INDEX_op_uqrshrn_vec  :
+        case INDEX_op_sqshrun_vec  :
+        case INDEX_op_sqrshrun_vec :
+        case INDEX_op_cvtxn_fp     :
+        case INDEX_op_cvtn_fp      :
+        case INDEX_op_xtn_vec      :
+        case INDEX_op_sqxtn_vec    :
+        case INDEX_op_uqxtn_vec    :
+        case INDEX_op_sqxtun_vec   : return C_O1_I2(w, 0, w);
+        case INDEX_op_sqdmlal_vec  :
+        case INDEX_op_sqdmlsl_vec  :
+        case INDEX_op_sdot_vec     :
+        case INDEX_op_udot_vec     :
+        case INDEX_op_tbx_vec      :
+        case INDEX_op_sqrdmlah_vec :
+        case INDEX_op_sqrdmlsh_vec : return C_O1_I3(w, 0, w, w);
+        case INDEX_op_fcmp_fp      : return C_O1_I2(r, w, w);
+        case INDEX_op_cvt_s_i2f    :
+        case INDEX_op_cvt_u_i2f    : return C_O1_I1(w, r);
+        case INDEX_op_cvt_f2i_s    :
+        case INDEX_op_cvt_f2i_u    : return C_O1_I1(r, w);
+        case INDEX_op_fma_fp       :
+        case INDEX_op_fms_fp       : return tcg_fp_type_is_scalar(type) ? C_O1_I3(w, w, w, w) : C_O1_I3(w, 0, w, w);
         case INDEX_op_not_vec      :
         case INDEX_op_neg_vec      :
         case INDEX_op_abs_vec      :
@@ -2925,6 +3823,9 @@ static void tcg_target_init(TCGContext* s)
     tcg_target_available_regs[TCG_TYPE_I64]  = 0xffffffffu;
     tcg_target_available_regs[TCG_TYPE_V64]  = 0xffffffff00000000ull;
     tcg_target_available_regs[TCG_TYPE_V128] = 0xffffffff00000000ull;
+    tcg_target_available_regs[TCG_TYPE_F16]  = 0xffffffff00000000ull;
+    tcg_target_available_regs[TCG_TYPE_F32]  = 0xffffffff00000000ull;
+    tcg_target_available_regs[TCG_TYPE_F64]  = 0xffffffff00000000ull;
 
     tcg_target_call_clobber_regs = -1ull;
     tcg_regset_reset_reg(tcg_target_call_clobber_regs, TCG_REG_X19);

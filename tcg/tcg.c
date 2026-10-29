@@ -153,6 +153,14 @@ static inline void tcg_out_vec_op(TCGContext* s, TCGOpcode opc, unsigned vecl, u
 { assert_not_reached(); }
 int tcg_can_emit_vec_op(TCGOpcode o, TCGType t, unsigned ve) { return 0; }
 #endif
+#if TCG_TARGET_HAS_fp
+static void tcg_out_fp_op(TCGContext* s, TCGOpcode opc, TCGType type, unsigned vece, const TCGArg args[TCG_MAX_OP_ARGS],
+                          const int const_args[TCG_MAX_OP_ARGS]);
+#else
+static inline void tcg_out_fp_op(TCGContext* s, TCGOpcode opc, TCGType type, unsigned vece,
+                                 const TCGArg args[TCG_MAX_OP_ARGS], const int const_args[TCG_MAX_OP_ARGS])
+{ assert_not_reached(); }
+#endif
 static void   tcg_out_st(TCGContext* s, TCGType type, TCGReg arg, TCGReg arg1, intptr_t arg2);
 static bool   tcg_out_sti(TCGContext* s, TCGType type, TCGArg val, TCGReg base, intptr_t ofs);
 static void   tcg_out_call(TCGContext* s, const tcg_insn_unit* target, const TCGHelperInfo* info);
@@ -998,6 +1006,14 @@ typedef struct TCGOutOpSubtract
 } TCGOutOpSubtract;
 
 #include "tcg-target.c.inc"
+
+#if !TCG_TARGET_HAS_fp
+bool tcg_can_emit_fp_op(TCGOpcode opc, TCGType type, unsigned vece) { return false; }
+
+bool tcg_can_emit_fp_cvt(TCGOpcode opc, TCGType type, unsigned other, TCGArg round, TCGArg fbits) { return false; }
+#endif
+
+bool tcg_fp_arm_exact(void) { return TCG_TARGET_FP_ARM_EXACT; }
 
 #ifndef CONFIG_TCG_INTERPRETER
 /* Validate CPUTLBDescFast placement. */
@@ -1913,7 +1929,10 @@ TCGTemp* tcg_temp_new_internal(TCGType type, TCGTempKind kind)
         case TCG_TYPE_I32 :
         case TCG_TYPE_V64 :
         case TCG_TYPE_V128:
-        case TCG_TYPE_V256: n = 1; break;
+        case TCG_TYPE_V256:
+        case TCG_TYPE_F16 :
+        case TCG_TYPE_F32 :
+        case TCG_TYPE_F64 : n = 1; break;
         case TCG_TYPE_I64 : n = 64 / TCG_TARGET_REG_BITS; break;
         case TCG_TYPE_I128: n = 128 / TCG_TARGET_REG_BITS; break;
         default           : assert_not_reached();
@@ -1967,6 +1986,9 @@ TCGv_vec tcg_temp_new_vec(TCGType type)
         case TCG_TYPE_V64 : assert(TCG_TARGET_HAS_v64); break;
         case TCG_TYPE_V128: assert(TCG_TARGET_HAS_v128); break;
         case TCG_TYPE_V256: assert(TCG_TARGET_HAS_v256); break;
+        case TCG_TYPE_F16 :
+        case TCG_TYPE_F32 :
+        case TCG_TYPE_F64 : assert(TCG_TARGET_HAS_fp); break;
         default           : assert_not_reached();
     }
 #endif
@@ -2127,6 +2149,9 @@ bool tcg_op_supported(TCGOpcode op, TCGType type, unsigned flags)
         case TCG_TYPE_V64 : has_type = TCG_TARGET_HAS_v64; break;
         case TCG_TYPE_V128: has_type = TCG_TARGET_HAS_v128; break;
         case TCG_TYPE_V256: has_type = TCG_TARGET_HAS_v256; break;
+        case TCG_TYPE_F16 :
+        case TCG_TYPE_F32 :
+        case TCG_TYPE_F64 : has_type = TCG_TARGET_HAS_fp; break;
         default           : has_type = false; break;
     }
 
@@ -2241,6 +2266,94 @@ bool tcg_op_supported(TCGOpcode op, TCGType type, unsigned flags)
         case INDEX_op_sha512h2_vec :
         case INDEX_op_sha512su0_vec:
         case INDEX_op_sha512su1_vec: return type == TCG_TYPE_V128 && TCG_TARGET_HAS_sha512_vec;
+
+        /* No all_outop entry; flags is the vece. */
+        case INDEX_op_add_fp    :
+        case INDEX_op_sub_fp    :
+        case INDEX_op_mul_fp    :
+        case INDEX_op_div_fp    :
+        case INDEX_op_sqrt_fp   :
+        case INDEX_op_rint_fp   :
+        case INDEX_op_min_fp    :
+        case INDEX_op_max_fp    :
+        case INDEX_op_minnum_fp :
+        case INDEX_op_maxnum_fp :
+        case INDEX_op_fma_fp    :
+        case INDEX_op_fms_fp    :
+        case INDEX_op_cmp_fp    :
+        case INDEX_op_cvt_fp    :
+        case INDEX_op_cvt_s_fp  :
+        case INDEX_op_cvt_u_fp  :
+        case INDEX_op_cvt_fp_s  :
+        case INDEX_op_cvt_fp_u  :
+        case INDEX_op_cvt_s_i2f :
+        case INDEX_op_cvt_u_i2f :
+        case INDEX_op_cvt_f2i_s :
+        case INDEX_op_cvt_f2i_u :
+        case INDEX_op_cvtn_fp   :
+        case INDEX_op_cvtl_fp   :
+        case INDEX_op_cvtxn_fp  :
+        case INDEX_op_addp_fp   :
+        case INDEX_op_maxp_fp   :
+        case INDEX_op_minp_fp   :
+        case INDEX_op_maxnump_fp:
+        case INDEX_op_minnump_fp:
+        case INDEX_op_neg_fp    :
+        case INDEX_op_abs_fp    :
+        case INDEX_op_mulx_fp   :
+        case INDEX_op_recps_fp  :
+        case INDEX_op_rsqrts_fp :
+        case INDEX_op_recpe_fp  :
+        case INDEX_op_rsqrte_fp :
+        case INDEX_op_recpx_fp  :
+        case INDEX_op_fcmp_fp   :
+        case INDEX_op_fpchk_fp  : return has_type && tcg_can_emit_fp_op(op, type, flags);
+
+        case INDEX_op_sqdmulh_vec :
+        case INDEX_op_sqrdmulh_vec:
+        case INDEX_op_sqrdmlah_vec:
+        case INDEX_op_sqrdmlsh_vec:
+        case INDEX_op_xtn_vec     :
+        case INDEX_op_sqxtn_vec   :
+        case INDEX_op_uqxtn_vec   :
+        case INDEX_op_sqxtun_vec  :
+        case INDEX_op_sqshl_vec   :
+        case INDEX_op_uqshl_vec   :
+        case INDEX_op_sqrshl_vec  :
+        case INDEX_op_uqrshl_vec  :
+        case INDEX_op_srshl_vec   :
+        case INDEX_op_urshl_vec   :
+        case INDEX_op_addp_vec    :
+        case INDEX_op_smaxp_vec   :
+        case INDEX_op_sminp_vec   :
+        case INDEX_op_umaxp_vec   :
+        case INDEX_op_uminp_vec   :
+        case INDEX_op_pmul_vec    :
+        case INDEX_op_sqabs_vec   :
+        case INDEX_op_sqneg_vec   :
+        case INDEX_op_clz_vec     :
+        case INDEX_op_cls_vec     :
+        case INDEX_op_cnt_vec     :
+        case INDEX_op_rbit_vec    :
+        case INDEX_op_urecpe_vec  :
+        case INDEX_op_ursqrte_vec :
+        case INDEX_op_sqshli_vec  :
+        case INDEX_op_uqshli_vec  :
+        case INDEX_op_sqshlui_vec :
+        case INDEX_op_sqshrn_vec  :
+        case INDEX_op_uqshrn_vec  :
+        case INDEX_op_sqrshrn_vec :
+        case INDEX_op_uqrshrn_vec :
+        case INDEX_op_sqshrun_vec :
+        case INDEX_op_sqrshrun_vec:
+        case INDEX_op_pmull_vec   :
+        case INDEX_op_sqdmull_vec :
+        case INDEX_op_sqdmlal_vec :
+        case INDEX_op_sqdmlsl_vec :
+        case INDEX_op_sdot_vec    :
+        case INDEX_op_udot_vec    :
+        case INDEX_op_shll_vec    :
+        case INDEX_op_tbx_vec     : return has_type && tcg_can_emit_vec_op(op, type, flags) > 0;
 
         default:
             if (op < INDEX_op_last_generic) {
@@ -2439,6 +2552,11 @@ static char* tcg_get_arg_str_ptr(TCGContext* s, char* buf, int buf_size, TCGTemp
                 case TCG_TYPE_V128:
                 case TCG_TYPE_V256:
                     snprintf(buf, buf_size, "v%d$0x%" PRIx64, 64 << (ts->type - TCG_TYPE_V64), ts->val);
+                    break;
+                case TCG_TYPE_F16:
+                case TCG_TYPE_F32:
+                case TCG_TYPE_F64:
+                    snprintf(buf, buf_size, "f%d$0x%" PRIx64, 8 * tcg_type_size(ts->type), ts->val);
                     break;
                 default: assert_not_reached();
             }
@@ -3976,9 +4094,12 @@ static void temp_allocate_frame(TCGContext* s, TCGTemp* ts)
     /* When allocating an object, look at the full type. */
     size = tcg_type_size(ts->base_type);
     switch (ts->base_type) {
-        case TCG_TYPE_I32 : align = 4; break;
+        case TCG_TYPE_F16 : align = 2; break;
+        case TCG_TYPE_I32 :
+        case TCG_TYPE_F32 : align = 4; break;
         case TCG_TYPE_I64 :
-        case TCG_TYPE_V64 : align = 8; break;
+        case TCG_TYPE_V64 :
+        case TCG_TYPE_F64 : align = 8; break;
         case TCG_TYPE_I128:
         case TCG_TYPE_V128:
         case TCG_TYPE_V256:
@@ -5128,8 +5249,19 @@ static void tcg_reg_alloc_op(TCGContext* s, const TCGOp* op)
             break;
 
         default:
-            tcg_debug_assert(def->flags & TCG_OPF_VECTOR);
-            tcg_out_vec_op(s, op->opc, type - TCG_TYPE_V64, TCGOP_VECE(op), new_args, const_args);
+            if (def->flags & TCG_OPF_FLOAT) { tcg_out_fp_op(s, op->opc, type, TCGOP_VECE(op), new_args, const_args); }
+            else if (type >= TCG_TYPE_F16) {
+                /* ld_vec/st_vec of a scalar FP type have no vecl. */
+                switch (op->opc) {
+                    case INDEX_op_ld_vec: tcg_out_ld(s, type, new_args[0], new_args[1], new_args[2]); break;
+                    case INDEX_op_st_vec: tcg_out_st(s, type, new_args[0], new_args[1], new_args[2]); break;
+                    default             : assert_not_reached();
+                }
+            }
+            else {
+                tcg_debug_assert(def->flags & TCG_OPF_VECTOR);
+                tcg_out_vec_op(s, op->opc, type - TCG_TYPE_V64, TCGOP_VECE(op), new_args, const_args);
+            }
             break;
     }
 

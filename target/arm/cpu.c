@@ -45,6 +45,7 @@
 #include "cpregs.h"
 #include "target/arm/cpu-qom.h"
 #include "target/arm/gtimer.h"
+#include "tcg/host-fpcr.h"
 
 static void arm_cpu_set_pc(CPUState* cs, vaddr value)
 {
@@ -1489,6 +1490,10 @@ static vaddr aprofile_pointer_wrap(CPUState* cs, int mmu_idx, vaddr result, vadd
     return result;
 }
 
+static void arm_cpu_exec_enter(CPUState* cs) { arm_host_fpcr_enter(&ARM_CPU(cs)->env); }
+
+static void arm_cpu_exec_exit(CPUState* cs) { arm_host_fpcr_exit(&ARM_CPU(cs)->env); }
+
 static const TCGCPUOps arm_tcg_ops = {
     .mttcg_supported = true,
     /* ARM processors have a weak memory model */
@@ -1504,6 +1509,8 @@ static const TCGCPUOps arm_tcg_ops = {
     .tlb_fill_align            = arm_cpu_tlb_fill_align,
     .pointer_wrap              = aprofile_pointer_wrap,
     .cpu_exec_interrupt        = arm_cpu_exec_interrupt,
+    .cpu_exec_enter            = arm_cpu_exec_enter,
+    .cpu_exec_exit             = arm_cpu_exec_exit,
     .cpu_exec_halt             = arm_cpu_exec_halt,
     .cpu_exec_reset            = cpu_reset,
     .do_interrupt              = arm_cpu_do_interrupt,

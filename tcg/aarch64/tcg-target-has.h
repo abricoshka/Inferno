@@ -37,6 +37,8 @@
 #define TCG_TARGET_HAS_shs_vec    0
 #define TCG_TARGET_HAS_shv_vec    1
 #define TCG_TARGET_HAS_mul_vec    1
+#define TCG_TARGET_HAS_fp         1
+#define TCG_TARGET_FP_ARM_EXACT   1
 #define TCG_TARGET_HAS_sat_vec    1
 #define TCG_TARGET_HAS_minmax_vec 1
 #define TCG_TARGET_HAS_bitsel_vec 1

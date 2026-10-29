@@ -13,6 +13,9 @@
 #define CPUINFO_BTI    (1u << 5)
 #define CPUINFO_SHA256 (1u << 6)
 #define CPUINFO_SHA512 (1u << 7)
+#define CPUINFO_RDM    (1u << 8)
+#define CPUINFO_FP16   (1u << 9)
+#define CPUINFO_DOTPROD (1u << 10)
 
 /* Initialized with a constructor. */
 extern unsigned cpuinfo;

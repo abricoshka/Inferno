@@ -20,6 +20,7 @@
 #include "qemu/osdep.h"
 #include "exec/log.h"
 #include "system/tcg.h"
+#include "accel/tcg/cpu-ops.h"
 #include "internal-common.h"
 
 bool tcg_allowed;
@@ -59,7 +60,10 @@ void cpu_loop_exit_noexc(CPUState* cpu)
 
 void cpu_loop_exit(CPUState* cpu)
 {
-    /* Undo the setting in cpu_tb_exec.  */
+    const TCGCPUOps* tcg_ops = cpu->cc->tcg_ops;
+
+    /* longjmp may restore host state that cpu_exec_enter set up. */
+    if (tcg_ops->cpu_exec_exit) { tcg_ops->cpu_exec_exit(cpu); }
     siglongjmp(cpu->jmp_env, 1);
 }
 

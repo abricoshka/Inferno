@@ -788,6 +788,11 @@ typedef struct CPUArchState
 
     /* Fields after this point are preserved across CPU reset. */
 
+    /* Host FPCR (MXCSR on x86) and FPSR saved across a run of generated code, which a reset can happen inside. */
+    uint64_t host_fpcr_saved;
+    uint64_t host_fpsr_saved;
+    bool     host_fp_active;
+
     /* Internal CPU feature flags.  */
     uint64_t features;
 
@@ -2510,6 +2515,10 @@ REG_FIELD(TBFLAG_A64, NV2_MEM_BE, 36, 1)
 REG_FIELD(TBFLAG_A64, AH, 37, 1)  /* FPCR.AH */
 REG_FIELD(TBFLAG_A64, NEP, 38, 1) /* FPCR.NEP */
 REG_FIELD(TBFLAG_A64, ZT0EXC_EL, 39, 2)
+REG_FIELD(TBFLAG_A64, FZ, 41, 1)   /* FPCR.FZ */
+REG_FIELD(TBFLAG_A64, FZ16, 42, 1) /* FPCR.FZ16 */
+REG_FIELD(TBFLAG_A64, AHP, 43, 1)  /* FPCR.AHP */
+REG_FIELD(TBFLAG_A64, FIZ, 44, 1)  /* FPCR.FIZ */
 
 /*
  * Helpers for using the above. Note that only the A64 accessors use

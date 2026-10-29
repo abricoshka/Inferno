@@ -728,7 +728,10 @@ static int __attribute__((noinline)) cpu_exec_loop(CPUState* cpu)
 static int cpu_exec_setjmp(CPUState* cpu)
 {
     /* Prepare setjmp context for exception handling. */
-    if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) { cpu_exec_longjmp_cleanup(cpu); }
+    if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
+        cpu_exec_longjmp_cleanup(cpu);
+        cpu_exec_enter(cpu);
+    }
 
     return cpu_exec_loop(cpu);
 }

@@ -284,13 +284,15 @@ static void gen_usqadd_vec(unsigned vece, TCGv_vec t, TCGv_vec qc, TCGv_vec a, T
     TCGv_vec u = tcg_temp_new_vec_matching(t);
     TCGv_vec z = tcg_constant_vec_matching(t, vece, 0);
 
-    /* Compute unsigned saturation of add for +b and sub for -b. */
-    tcg_gen_neg_vec(vece, t, b);
-    tcg_gen_usadd_vec(vece, u, a, b);
-    tcg_gen_ussub_vec(vece, t, a, t);
-
-    /* Select the correct result depending on the sign of b. */
-    tcg_gen_cmpsel_vec(TCG_COND_LT, vece, t, b, z, t, u);
+    /*
+     * Add +b and subtract -b, each saturating; the one that doesn't apply gets zero, since the host's saturation
+     * flag sees both.
+     */
+    tcg_gen_neg_vec(vece, u, b);
+    tcg_gen_cmpsel_vec(TCG_COND_LT, vece, u, b, z, u, z);
+    tcg_gen_cmpsel_vec(TCG_COND_LT, vece, t, b, z, z, b);
+    tcg_gen_usadd_vec(vece, t, a, t);
+    tcg_gen_ussub_vec(vece, t, t, u);
 
     /* Compute QC by comparing against the non-saturated result. */
     tcg_gen_add_vec(vece, u, a, b);

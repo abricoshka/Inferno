@@ -21,6 +21,7 @@
 #include "cpu.h"
 #include "internals.h"
 #include "cpu-features.h"
+#include "tcg/host-fpcr.h"
 
 uint32_t vfp_get_fpcr(CPUARMState* env)
 { return env->vfp.fpcr | (env->vfp.vec_len << 16) | (env->vfp.vec_stride << 20); }
@@ -52,6 +53,8 @@ void vfp_set_fpsr(CPUARMState* env, uint32_t val)
         env->vfp.qc[2] = 0;
         env->vfp.qc[3] = 0;
     }
+
+    arm_host_fpsr_ack(env);
 
     /*
      * NZCV lives only in env->vfp.fpsr. The cumulative exception flags
@@ -111,6 +114,8 @@ static void vfp_set_fpcr_masked(CPUARMState* env, uint32_t val, uint32_t mask)
     val &= FPCR_AHP | FPCR_DN | FPCR_FZ | FPCR_RMODE_MASK | FPCR_FZ16 | FPCR_EBF | FPCR_FIZ | FPCR_AH | FPCR_NEP;
     env->vfp.fpcr &= ~mask;
     env->vfp.fpcr |= val;
+
+    arm_host_fpcr_reload(env);
 }
 
 void vfp_set_fpcr(CPUARMState* env, uint32_t val) { vfp_set_fpcr_masked(env, val, MAKE_64BIT_MASK(0, 32)); }

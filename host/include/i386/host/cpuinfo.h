@@ -15,6 +15,7 @@
 #define CPUINFO_BMI1           (1u << 5)
 #define CPUINFO_BMI2           (1u << 6)
 #define CPUINFO_SSE2           (1u << 7)
+#define CPUINFO_SSE41          (1u << 8)
 #define CPUINFO_AVX1           (1u << 9)
 #define CPUINFO_AVX2           (1u << 10)
 #define CPUINFO_AVX512F        (1u << 11)
@@ -29,6 +30,8 @@
 #define CPUINFO_GFNI           (1u << 20)
 #define CPUINFO_SHA            (1u << 21)
 #define CPUINFO_SHA512         (1u << 22)
+#define CPUINFO_FMA            (1u << 23)
+#define CPUINFO_F16C           (1u << 24)
 
 /* Initialized with a constructor. */
 extern unsigned cpuinfo;

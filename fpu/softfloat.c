@@ -215,6 +215,10 @@ GEN_INPUT_FLUSH3(float64_input_flush3, float64)
     IEEE implementation
     #define QEMU_NO_HARDFLOAT   1
     #define QEMU_SOFTFLOAT_ATTR QEMU_FLATTEN
+#elif (defined(__aarch64__) || defined(__x86_64__)) && defined(CONFIG_TCG)
+/* Helpers run with the guest's rounding mode in the host FPU (target/arm/tcg/host-fpcr.h). */
+    #define QEMU_NO_HARDFLOAT   1
+    #define QEMU_SOFTFLOAT_ATTR QEMU_FLATTEN
 #else
     #define QEMU_NO_HARDFLOAT   0
     #define QEMU_SOFTFLOAT_ATTR QEMU_FLATTEN __attribute__((noinline))

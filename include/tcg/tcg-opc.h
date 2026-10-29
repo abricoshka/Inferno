@@ -176,6 +176,60 @@ DEF(sarv_vec, 1, 2, 0, TCG_OPF_VECTOR)
 DEF(rotlv_vec, 1, 2, 0, TCG_OPF_VECTOR)
 DEF(rotrv_vec, 1, 2, 0, TCG_OPF_VECTOR)
 
+DEF(sqdmulh_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sqrdmulh_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(xtn_vec, 1, 2, 1, TCG_OPF_VECTOR)
+DEF(sqxtn_vec, 1, 2, 1, TCG_OPF_VECTOR)
+DEF(uqxtn_vec, 1, 2, 1, TCG_OPF_VECTOR)
+DEF(sqxtun_vec, 1, 2, 1, TCG_OPF_VECTOR)
+
+DEF(sqrdmlah_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(sqrdmlsh_vec, 1, 3, 0, TCG_OPF_VECTOR)
+
+/* Integer AdvSIMD shapes, saturating into QC as the AArch64 instructions do. */
+DEF(sqshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(uqshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sqrshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(uqrshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(srshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(urshl_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(addp_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(smaxp_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sminp_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(umaxp_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(uminp_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(pmul_vec, 1, 2, 0, TCG_OPF_VECTOR)
+DEF(sqabs_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(sqneg_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(clz_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(cls_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(cnt_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(rbit_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(urecpe_vec, 1, 1, 0, TCG_OPF_VECTOR)
+DEF(ursqrte_vec, 1, 1, 0, TCG_OPF_VECTOR)
+/* carg: the shift. */
+DEF(sqshli_vec, 1, 1, 1, TCG_OPF_VECTOR)
+DEF(uqshli_vec, 1, 1, 1, TCG_OPF_VECTOR)
+DEF(sqshlui_vec, 1, 1, 1, TCG_OPF_VECTOR)
+/* Narrowing as xtn, vece the narrow size; cargs: shift, top. */
+DEF(sqshrn_vec, 1, 2, 2, TCG_OPF_VECTOR)
+DEF(uqshrn_vec, 1, 2, 2, TCG_OPF_VECTOR)
+DEF(sqrshrn_vec, 1, 2, 2, TCG_OPF_VECTOR)
+DEF(uqrshrn_vec, 1, 2, 2, TCG_OPF_VECTOR)
+DEF(sqshrun_vec, 1, 2, 2, TCG_OPF_VECTOR)
+DEF(sqrshrun_vec, 1, 2, 2, TCG_OPF_VECTOR)
+/* Widening, vece the narrow size; carg top reads the high half. The accumulating forms take it first. */
+DEF(pmull_vec, 1, 2, 1, TCG_OPF_VECTOR)
+DEF(sqdmull_vec, 1, 2, 1, TCG_OPF_VECTOR)
+DEF(shll_vec, 1, 1, 1, TCG_OPF_VECTOR)
+DEF(sqdmlal_vec, 1, 3, 1, TCG_OPF_VECTOR)
+DEF(sqdmlsl_vec, 1, 3, 1, TCG_OPF_VECTOR)
+/* Byte dot products into 32-bit lanes, accumulating into the first input. */
+DEF(sdot_vec, 1, 3, 0, TCG_OPF_VECTOR)
+DEF(udot_vec, 1, 3, 0, TCG_OPF_VECTOR)
+/* Bytes of the first input replaced by the 16-byte table entries the indices select. */
+DEF(tbx_vec, 1, 3, 0, TCG_OPF_VECTOR)
+
 DEF(cmp_vec, 1, 2, 1, TCG_OPF_VECTOR)
 
 DEF(bitsel_vec, 1, 3, 0, TCG_OPF_VECTOR)
@@ -194,6 +248,66 @@ DEF(sha512h_vec, 1, 3, 0, TCG_OPF_VECTOR)
 DEF(sha512h2_vec, 1, 3, 0, TCG_OPF_VECTOR)
 DEF(sha512su0_vec, 1, 2, 0, TCG_OPF_VECTOR)
 DEF(sha512su1_vec, 1, 3, 0, TCG_OPF_VECTOR)
+
+DEF(add_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(sub_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(mul_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(div_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(sqrt_fp, 1, 1, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(rint_fp, 1, 1, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(min_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(max_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(minnum_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(maxnum_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(addp_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(maxp_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(minp_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(maxnump_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(minnump_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(neg_fp, 1, 1, 0, TCG_OPF_FLOAT)
+DEF(abs_fp, 1, 1, 0, TCG_OPF_FLOAT)
+
+DEF(mulx_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(recps_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(rsqrts_fp, 1, 2, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(recpe_fp, 1, 1, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(rsqrte_fp, 1, 1, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(recpx_fp, 1, 1, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(fma_fp, 1, 3, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(fms_fp, 1, 3, 0, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(cmp_fp, 1, 2, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+/* Scalar compare into an integer: NZCV in bits 31:28. carg: signal on quiet NaN. */
+DEF(fcmp_fp, 1, 2, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+/* Nonzero integer if any lane matches; carg: TCGFPCheck. Only signaling NaNs may raise. */
+DEF(fpchk_fp, 1, 2, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+DEF(cvt_fp, 1, 1, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+/* Same-width int <-> fp. cargs: fbits; fp -> int adds rounding first. */
+DEF(cvt_s_fp, 1, 1, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_u_fp, 1, 1, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_fp_s, 1, 1, 2, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_fp_u, 1, 1, 2, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+/*
+ * Vector precision change between vece and vece + 1. Narrowing writes the
+ * bottom half (zeroing the top) or, with the top carg, the top half of the
+ * first input; lengthening reads the bottom or top half.
+ */
+DEF(cvtn_fp, 1, 2, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvtl_fp, 1, 1, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+/* As cvtn_fp, double to single rounding to odd. */
+DEF(cvtxn_fp, 1, 2, 1, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+
+/* Conversions against a general register. cargs: the integer type, the rounding (f2i only), fbits. */
+DEF(cvt_s_i2f, 1, 1, 2, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_u_i2f, 1, 1, 2, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_f2i_s, 1, 1, 3, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
+DEF(cvt_f2i_u, 1, 1, 3, TCG_OPF_FLOAT | TCG_OPF_SIDE_EFFECTS)
 
 DEF(last_generic, 0, 0, 0, TCG_OPF_NOT_PRESENT)
 
