@@ -73,7 +73,11 @@ static void wxwidgets_gfx_switch(DisplayChangeListener* dcl, DisplaySurface* sur
                     surface_stride(surface));
 }
 
-void CKIUIReleaseSurface(void* image) { pixman_image_unref((pixman_image_t*)image); }
+static void wxwidgets_release_surface(void* opaque) { pixman_image_unref(opaque); }
+
+/* pixman refcounts aren't atomic, drop it where QEMU drops its own. */
+void CKIUIReleaseSurface(void* image)
+{ aio_bh_schedule_oneshot(qemu_get_aio_context(), wxwidgets_release_surface, image); }
 
 static void wxwidgets_gfx_update(DisplayChangeListener* dcl, int x, int y, int w, int h)
 {

@@ -70,7 +70,7 @@ extern "C"
 
     /*
      * Takes ownership of one reference to `image` (a pixman_image_t*), which keeps `data` alive.
-     * The UI side must hand it back with CKIUIReleaseSurface once it stops using `data`.
+     * The UI side must hand it back with CKIUIReleaseSurface, from any thread, once it stops using `data`.
      */
     void CKIUISetSurface(void* app, void* image, const void* data, int width, int height, int stride);
     void CKIUIInvalidate(void* app, int x, int y, int width, int height);

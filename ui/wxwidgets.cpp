@@ -24,7 +24,6 @@
 #include <wx/filedlg.h>
 #include <wx/graphics.h>
 #include <wx/mstream.h>
-#include <wx/rawbmp.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -40,8 +39,15 @@
 #include <utility>
 #include <vector>
 
+#if defined(__WXGTK__)
+    #include <cairo.h>
+#elif defined(__WXMSW__)
+    #include <wx/msw/wrapgdip.h>
+#elif defined(__WXOSX__)
+    #include <CoreGraphics/CoreGraphics.h>
+#endif
+
 #if defined(__WXOSX_COCOA__)
-    #include <CoreGraphics/CGGeometry.h>
     #include <objc/message.h>
     #include <objc/runtime.h>
 #endif
@@ -183,6 +189,42 @@ namespace
         const long long scaledHeight = static_cast<long long>(aspect.y) * max.x;
         if (scaledWidth < scaledHeight) { return wxSize(wxRound(static_cast<double>(scaledWidth) / aspect.y), max.y); }
         return wxSize(max.x, wxRound(static_cast<double>(scaledHeight) / aspect.x));
+    }
+
+    // The renderer whose native bitmaps wrapFramebuffer creates.
+    wxGraphicsRenderer* framebufferRenderer()
+    {
+#if defined(__WXGTK__)
+        return wxGraphicsRenderer::GetCairoRenderer();
+#elif defined(__WXMSW__)
+        return wxGraphicsRenderer::GetGDIPlusRenderer();
+#else
+        return wxGraphicsRenderer::GetDefaultRenderer();
+#endif
+    }
+
+    // Wraps x8r8g8b8 pixels without copying them, they must outlive the drawing.
+    wxGraphicsBitmap wrapFramebuffer(wxGraphicsRenderer* renderer, const void* data, int width, int height, int stride)
+    {
+        void* pixels = const_cast<void*>(data);
+#if defined(__WXGTK__)
+        return renderer->CreateBitmapFromNativeBitmap(cairo_image_surface_create_for_data(
+            static_cast<unsigned char*>(pixels), CAIRO_FORMAT_RGB24, width, height, stride));
+#elif defined(__WXMSW__)
+        return renderer->CreateBitmapFromNativeBitmap(
+            new Gdiplus::Bitmap(width, height, stride, PixelFormat32bppRGB, static_cast<BYTE*>(pixels)));
+#elif defined(__WXOSX__)
+        static const CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGDataProviderRef            provider =
+            CGDataProviderCreateWithData(nullptr, pixels, static_cast<size_t>(height) * stride, nullptr);
+        CGImageRef image =
+            CGImageCreate(width, height, 8, 32, stride, space, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little,
+                          provider, nullptr, false, kCGRenderingIntentDefault);
+        CGDataProviderRelease(provider);
+        return renderer->CreateBitmapFromNativeBitmap(image);
+#else
+    #error "No native bitmap wrapper for this wxWidgets port"
+#endif
     }
 
     using ItemVisitor = std::function<void(const char*)>;
@@ -365,15 +407,15 @@ public:
 
     void setSurface(Framebuffer framebuffer)
     {
-        void* previous;
+        void* superseded;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            previous      = m_framebuffer.image;
-            m_framebuffer = framebuffer;
-            m_dirty       = wxRect();
+            superseded = m_pending.image;
+            m_pending  = framebuffer;
+            m_dirty    = wxRect();
         }
-        if (previous != nullptr) { CKIUIReleaseSurface(previous); }
-        CallAfter([this] { rebuild(); });
+        if (superseded != nullptr) { CKIUIReleaseSurface(superseded); }
+        CallAfter([this] { present(); });
     }
 
     void invalidate(int x, int y, int w, int h)
@@ -461,10 +503,13 @@ private:
         double y;
     };
 
+    wxSize logicalSize() const
+    { return wxSize(wxRound(m_framebuffer.width / m_scale), wxRound(m_framebuffer.height / m_scale)); }
+
     Placement placement() const
     {
         const wxSize client = GetClientSize();
-        const wxSize source = m_bitmap.IsOk() ? m_bitmap.GetLogicalSize() : wxSize(0, 0);
+        const wxSize source = m_framebuffer.data != nullptr ? logicalSize() : wxSize(0, 0);
         if (source.x <= 0 || source.y <= 0 || client.x <= 0 || client.y <= 0) { return {0, 0, 0}; }
         const double ratio =
             std::min(static_cast<double>(client.x) / source.x, static_cast<double>(client.y) / source.y);
@@ -474,22 +519,26 @@ private:
     static int scaleToRange(double fraction, int extent)
     { return std::max(0, std::min(extent - 1, static_cast<int>(fraction * extent))); }
 
-    void rebuild()
+    void present()
     {
-        wxSize size;
+        Framebuffer next;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            size = wxSize(m_framebuffer.width, m_framebuffer.height);
+            if (m_pending.image == nullptr) { return; }
+            next = std::exchange(m_pending, Framebuffer{});
         }
-        if (size.x == 0 || size.y == 0) { return; }
+        if (m_framebuffer.image != nullptr) { CKIUIReleaseSurface(m_framebuffer.image); }
 
+        // Page flips switch the surface every frame, only a mode change resizes the window.
         const double scale = GetContentScaleFactor();
-        m_bitmap.Create(size.x, size.y, 32);
-        m_bitmap.SetScaleFactor(scale);
-        upload(wxRect(0, 0, size.x, size.y));
+        const bool   changed =
+            next.width != m_framebuffer.width || next.height != m_framebuffer.height || scale != m_scale;
+        m_framebuffer = next;
+        m_scale       = scale;
 
-        const wxSize logical(wxRound(size.x / scale), wxRound(size.y / scale));
-        if (onModeChange) { onModeChange(logical); }
+        if (changed && m_framebuffer.width > 0 && m_framebuffer.height > 0 && onModeChange) {
+            onModeChange(logicalSize());
+        }
         Refresh(false);
     }
 
@@ -503,39 +552,21 @@ private:
             area    = m_dirty;
             m_dirty = wxRect();
         }
-        upload(area);
-        Refresh(false);
+        area.Intersect(wxRect(0, 0, m_framebuffer.width, m_framebuffer.height));
+        if (!area.IsEmpty()) { RefreshRect(windowRect(area), false); }
     }
 
-    void upload(const wxRect& area)
+    wxRect windowRect(const wxRect& source) const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_bitmap.IsOk() || m_framebuffer.data == nullptr) { return; }
-
-        const wxRect bounds(0, 0, std::min(m_bitmap.GetWidth(), m_framebuffer.width),
-                            std::min(m_bitmap.GetHeight(), m_framebuffer.height));
-        const wxRect clipped = area.Intersect(bounds);
-        if (clipped.IsEmpty()) { return; }
-
-        wxAlphaPixelData pixels(m_bitmap, clipped);
-        if (!pixels) { return; }
-
-        wxAlphaPixelData::Iterator rowStart(pixels);
-        for (int y = 0; y < clipped.height; ++y) {
-            const auto* source =
-                reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(m_framebuffer.data)
-                                                  + static_cast<size_t>(clipped.y + y) * m_framebuffer.stride)
-                + clipped.x;
-            wxAlphaPixelData::Iterator pixel = rowStart;
-            for (int x = 0; x < clipped.width; ++x, ++pixel) {
-                const uint32_t value = source[x];
-                pixel.Red()          = static_cast<uint8_t>(value >> 16);
-                pixel.Green()        = static_cast<uint8_t>(value >> 8);
-                pixel.Blue()         = static_cast<uint8_t>(value);
-                pixel.Alpha()        = 255;
-            }
-            rowStart.OffsetY(pixels, 1);
-        }
+        const Placement place = placement();
+        if (place.ratio <= 0) { return wxRect(); }
+        const double k      = place.ratio / m_scale;
+        const double margin = std::ceil(k) + 1;    // filtering samples neighbouring pixels
+        const int    x0     = static_cast<int>(std::floor(place.x + source.x * k - margin));
+        const int    y0     = static_cast<int>(std::floor(place.y + source.y * k - margin));
+        const int    x1     = static_cast<int>(std::ceil(place.x + source.GetRight() * k + k + margin));
+        const int    y1     = static_cast<int>(std::ceil(place.y + source.GetBottom() * k + k + margin));
+        return wxRect(x0, y0, x1 - x0, y1 - y0);
     }
 
     void applyCursor(const std::shared_ptr<CursorImage>& image)
@@ -566,10 +597,10 @@ private:
 
     bool cursorGeometry(CursorGeometry& out) const
     {
-        if (!m_mouseOn || !m_cursor || !m_cursorBitmap.IsOk() || !m_bitmap.IsOk()) { return false; }
+        if (!m_mouseOn || !m_cursor || !m_cursorBitmap.IsOk()) { return false; }
         const Placement place = placement();
         if (place.ratio <= 0) { return false; }
-        const double k = place.ratio / m_bitmap.GetScaleFactor();
+        const double k = place.ratio / m_scale;
         out            = {place.x + (m_mouseX - m_cursor->hotX) * k, place.y + (m_mouseY - m_cursor->hotY) * k,
                           m_cursor->width * k, m_cursor->height * k};
         return true;
@@ -593,24 +624,34 @@ private:
 
     void onPaint(wxPaintEvent&)
     {
-        wxPaintDC dc(this);
-        dc.SetBackground(*wxBLACK_BRUSH);
-        dc.Clear();
-        if (!m_bitmap.IsOk()) { return; }
-
+        wxPaintDC       dc(this);
         const Placement place = placement();
-        if (place.ratio <= 0) { return; }
-
-        const wxSize                       source = m_bitmap.GetLogicalSize();
-        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
-        if (!gc) {
-            dc.SetUserScale(place.ratio, place.ratio);
-            dc.DrawBitmap(m_bitmap, wxRound(place.x / place.ratio), wxRound(place.y / place.ratio));
+        if (place.ratio <= 0) {
+            dc.SetBackground(*wxBLACK_BRUSH);
+            dc.Clear();
             return;
         }
 
+        const wxSize source = logicalSize();
+        const wxSize client = GetClientSize();
+        const int    left   = static_cast<int>(std::ceil(place.x));
+        const int    top    = static_cast<int>(std::ceil(place.y));
+        const int    right  = static_cast<int>(std::floor(place.x + source.x * place.ratio));
+        const int    bottom = static_cast<int>(std::floor(place.y + source.y * place.ratio));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(*wxBLACK_BRUSH);
+        if (left > 0) { dc.DrawRectangle(0, 0, left, client.y); }
+        if (right < client.x) { dc.DrawRectangle(right, 0, client.x - right, client.y); }
+        if (top > 0) { dc.DrawRectangle(0, 0, client.x, top); }
+        if (bottom < client.y) { dc.DrawRectangle(0, bottom, client.x, client.y - bottom); }
+
+        std::unique_ptr<wxGraphicsContext> gc(framebufferRenderer()->CreateContext(dc));
+        if (!gc) { return; }
+
         gc->SetInterpolationQuality(m_smooth ? wxINTERPOLATION_FAST : wxINTERPOLATION_NONE);
-        gc->DrawBitmap(m_bitmap, place.x, place.y, source.x * place.ratio, source.y * place.ratio);
+        gc->DrawBitmap(wrapFramebuffer(gc->GetRenderer(), m_framebuffer.data, m_framebuffer.width, m_framebuffer.height,
+                                       m_framebuffer.stride),
+                       place.x, place.y, source.x * place.ratio, source.y * place.ratio);
 
         CursorGeometry cursor;
         if (cursorGeometry(cursor)) { gc->DrawBitmap(m_cursorBitmap, cursor.x, cursor.y, cursor.width, cursor.height); }
@@ -775,14 +816,12 @@ private:
 
     void movePointer(const wxPoint& position)
     {
-        if (!m_bitmap.IsOk()) { return; }
-
         const Placement place = placement();
         if (place.ratio <= 0) { return; }
 
-        const wxSize source = m_bitmap.GetLogicalSize();
-        const int    width  = m_bitmap.GetWidth();
-        const int    height = m_bitmap.GetHeight();
+        const wxSize source = logicalSize();
+        const int    width  = m_framebuffer.width;
+        const int    height = m_framebuffer.height;
         const double fx     = (position.x - place.x) / (source.x * place.ratio);
         const double fy     = (position.y - place.y) / (source.y * place.ratio);
         CKIUIPointerEvent(scaleToRange(fx, width), scaleToRange(fy, height), width, height);
@@ -878,12 +917,13 @@ private:
 
     /* Shared with the QEMU thread */
     std::mutex  m_mutex;
-    Framebuffer m_framebuffer;
+    Framebuffer m_pending;
     wxRect      m_dirty;
     bool        m_updateQueued{false};
 
     /* Main thread only */
-    wxBitmap                     m_bitmap;
+    Framebuffer                  m_framebuffer;    // drawn from directly
+    double                       m_scale{1};
     wxBitmap                     m_cursorBitmap;
     std::shared_ptr<CursorImage> m_cursor;
     int                          m_mouseX{0};
