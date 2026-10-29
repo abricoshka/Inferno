@@ -395,6 +395,7 @@ static void apple_sep_aess_handle_cmd(AppleSEPAESSState* s)
     memset(s->out_full, 0, sizeof(s->out_full));
 #endif
 #if 1
+    DPRINTF("AESS: %s: cmd 0x%03x\n", __func__, cmd);
     HEXDUMP("s->in_full", s->in_full, sizeof(s->in_full));
 #endif
 #if 1
@@ -571,6 +572,16 @@ static void apple_sep_aess_handle_cmd(AppleSEPAESSState* s)
         DPRINTF("SEP AESS_BASE: %s: sync/set key command 0x%02x "
                 "cmd 0x%02x\n",
                 __func__, normalized_cmd, cmd);
+    }
+#endif
+#if 1
+    else if (normalized_cmd == 0x13)
+    {
+        // Initialize PKA
+    }
+    else if (normalized_cmd == 0x53)
+    {
+        // also initialize PKA? what is 0x40?
     }
 #endif
 // TODO: other sync commands: 0x205(0x201), 0x204(0x281), 0x245(0x241),

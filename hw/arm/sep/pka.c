@@ -19,6 +19,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/guest-random.h"
 #include "qemu/lockable.h"
 #include "qemu/main-loop.h"
 #include "hw/arm/sep/private.h"
@@ -79,7 +80,15 @@ static void pka_mpz_export_be(uint8_t* out, size_t len, const mpz_t v)
     mpz_export(out + (len - n), NULL, 1, 1, 1, 0, v);
 }
 
-static void pka_fill_attest_output(AppleSEPPKAState* s)
+static void pka_mpz_export_le(uint8_t* out, const mpz_t v)
+{
+    memset(out, 0, 32);
+    mpz_export(out, NULL, -1, 1, 0, 0, v);
+}
+
+static void pka_random(void* ctx, size_t len, uint8_t* dst) { qemu_guest_getrandom_nofail(dst, len); }
+
+static void pka_fill_attest_output(AppleSEPPKAState* s, bool sign)
 {
     const struct ecc_curve* ecc = nettle_get_secp_256r1();
     struct sha256_ctx       sctx;
@@ -89,6 +98,7 @@ static void pka_fill_attest_output(AppleSEPPKAState* s)
     mpz_t                   h, order_m1, d, x, y;
     struct ecc_scalar       priv;
     struct ecc_point        pub;
+    struct dsa_signature    sig;
 
     sha256_init(&sctx);
     sha256_update(&sctx, sizeof(label), (const uint8_t*)label);
@@ -108,13 +118,25 @@ static void pka_fill_attest_output(AppleSEPPKAState* s)
 
     ecc_scalar_init(&priv, ecc);
     ecc_scalar_set(&priv, d);
+
+    if (sign) {
+        for (size_t i = 0; i < sizeof(digest); i++) { digest[i] = s->pka_base_regs[0x9F - i]; }
+        dsa_signature_init(&sig);
+        ecdsa_sign(&priv, NULL, pka_random, sizeof(digest), digest, &sig);
+        pka_mpz_export_le(&s->pka_base_regs[0x100], sig.r);
+        pka_mpz_export_le(&s->pka_base_regs[0x120], sig.s);
+        dsa_signature_clear(&sig);
+        goto out;
+    }
+
     ecc_point_init(&pub, ecc);
     ecc_point_mul_g(&pub, &priv);
     ecc_point_get(&pub, x, y);
 
     pka_mpz_export_be(pubkey, 32, x);
     pka_mpz_export_be(pubkey + 32, 32, y);
-    memcpy(&s->pka_base_regs[0x100], pubkey, sizeof(pubkey));
+    pka_mpz_export_le(&s->pka_base_regs[0x100], y);
+    pka_mpz_export_le(&s->pka_base_regs[0x120], x);
 
     sha256_init(&sctx);
     sha256_update(&sctx, sizeof(pubkey), pubkey);
@@ -124,8 +146,9 @@ static void pka_fill_attest_output(AppleSEPPKAState* s)
     sha256_digest(&sctx, SHA256_DIGEST_SIZE, &s->pka_base_regs[0x180]);
 #endif
 
-    ecc_scalar_clear(&priv);
     ecc_point_clear(&pub);
+out:
+    ecc_scalar_clear(&priv);
     mpz_clears(h, order_m1, d, x, y, NULL);
 
     s->output_ready = true;
@@ -139,10 +162,10 @@ static void pka_handle_cmd(AppleSEPPKAState* s)
 
     // values: 0x4/0x8/0x10/0x20/0x40/0x80/0x100
     if (s->command == 0x80 || s->command == 0x100) {    // MPKA_ECPUB_ATTEST/ECDSA_ATTEST
-        pka_fill_attest_output(s);
+        pka_fill_attest_output(s, s->command == 0x100);
     }
 
-    if (s->command == 0x40 || s->command == 0x80 || s->command == 0x100) {
+    if (s->command == 0x20 || s->command == 0x80 || s->command == 0x100) {
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
         // apple_a7iop_interrupt_status_push(sep->mailbox,
@@ -150,7 +173,8 @@ static void pka_handle_cmd(AppleSEPPKAState* s)
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000C);    // ack third interrupt/0xC
     }
-    if (s->command == 0x04) {
+
+    if (s->command == 0x04 || s->command == 0x40) {
         s->output_ready = true;
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
@@ -209,8 +233,6 @@ static void pka_base_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigne
             goto jump_log;
         case 0x60 ... 0x7C:    // img4out DGST data
             if (!s->img4out_dgst_locked) { memcpy(&s->img4out_dgst[addr & 0x1F], &data, 4); }
-            goto jump_log;
-        case 0x80 ... 0x9C:    // some data
             goto jump_log;
         case 0x800:    // chip revision locked
             s->chip_revision_locked |= (data & 1);

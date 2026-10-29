@@ -45,6 +45,7 @@
 // #define SEP_ENABLE_TRACE_BUFFER
 // can cause conflicts with kernel and userspace, not anymore?
 // #define SEP_ENABLE_OVERWRITE_SHMBUF_OBJECTS
+// SEPOS 27.2 won't allow SEP_DISABLE_ASLR without additional stuff
 // #define SEP_DISABLE_ASLR
 
 #if defined(SEP_ENABLE_TRACE_BUFFER) || defined(SEP_DISABLE_ASLR)

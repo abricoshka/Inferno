@@ -286,6 +286,7 @@ static int aes_ccm_crypt(struct AppleSEPSSCState* ssc_state, uint16_t kbkdf_inde
     }
 #endif
 
+    DPRINTF("%s: encrypt: %d, payload_len, 0x%02x, counter_be: 0x%08x\n", __func__, encrypt, payload_len, counter_be);
     memcpy(auth, prefix, MSG_PREFIX_LENGTH);
     memcpy(&auth[MSG_PREFIX_LENGTH], &counter_be, AES_CCM_COUNTER_LENGTH);
     memcpy(nonce, &ssc_state->kbkdf_keys[kbkdf_index][KBKDF_KEY_SEED_OFFSET], KBKDF_KEY_SEED_LENGTH);
@@ -304,7 +305,6 @@ static int aes_ccm_crypt(struct AppleSEPSSCState* ssc_state, uint16_t kbkdf_inde
         memcpy(&out[AES_CCM_TAG_LENGTH], tmp_out, payload_len);
     }
     else {
-        DPRINTF("counter_be: 0x%08x\n", counter_be);
         // tag[0x10]-data[0x20] => data[0x20]-tag[0x10]
         memcpy(tmp_in, &data[AES_CCM_TAG_LENGTH], payload_len);
         memcpy(&tmp_in[payload_len], data, AES_CCM_TAG_LENGTH);
@@ -460,6 +460,22 @@ static int input_ec_pub(struct ecc_point* ecc_pub, uint8_t* pub_xy)
     mpz_clears(temp1, temp2, NULL);
 
     return ret;
+}
+
+static void apple_sep_ssc_clear_keys(struct AppleSEPSSCState* ssc)
+{
+    const struct ecc_curve* ecc = nettle_get_secp_384r1();
+    clear_ecc_scalar(&ssc->ecc_key_main);
+    ecc_scalar_init(&ssc->ecc_key_main, ecc);
+    for (int i = 0; i < KBKDF_KEY_MAX_SLOTS; i++) {
+        clear_ecc_scalar(&ssc->ecc_keys[i]);
+        ecc_scalar_init(&ssc->ecc_keys[i], ecc);
+    }
+    knuth_lfib_init(&ssc->rctx, 4711);
+    memset(ssc->random_hmac_key, 0, sizeof(ssc->random_hmac_key));
+    memset(ssc->slot_hmac_key, 0, sizeof(ssc->slot_hmac_key));
+    memset(ssc->kbkdf_keys, 0, sizeof(ssc->kbkdf_keys));
+    memset(ssc->kbkdf_counter, 0, sizeof(ssc->kbkdf_counter));
 }
 
 static int generate_kbkdf_keys(struct AppleSEPSSCState* ssc_state, struct ecc_scalar* ecc_key,
@@ -903,6 +919,8 @@ static void answer_cmd_0x7_init0(struct AppleSEPSSCState* ssc_state, uint8_t* re
     struct ecc_point ecc_pub;
     DPRINTF("%s: entered function\n", __func__);
 
+    apple_sep_ssc_clear_keys(ssc_state);
+
     const char* priv_str = "111111111111111111111111111111111111111111111111"
                            "111111111111111111111111111111111111111111111111";
     // no NULL here, this should stay static
@@ -913,8 +931,9 @@ static void answer_cmd_0x7_init0(struct AppleSEPSSCState* ssc_state, uint8_t* re
     }
     do_response_prefix(request, response, SSC_RESPONSE_FLAG_OK);
     uint8_t unknown0[0x06] = {0x12, 0x34, 0x56, 0x78, 0x90, 0xAB};
-    uint8_t cpsn[0x07]     = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xCC};
+    uint8_t cpsn[0x07]     = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xCC}; // aka lcrt?
     uint8_t unknown1[0x07] = {0xCD, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05};
+
     memcpy(ssc_state->cpsn, cpsn, sizeof(ssc_state->cpsn));
     memcpy(&response[MSG_PREFIX_LENGTH], unknown0, sizeof(unknown0));
     memcpy(&response[MSG_PREFIX_LENGTH + sizeof(unknown0)], ssc_state->cpsn, sizeof(ssc_state->cpsn));
@@ -1055,18 +1074,8 @@ static void apple_sep_ssc_reset_enter(Object* obj, ResetType type)
     memset(ssc->req_cmd, 0, sizeof(ssc->req_cmd));
     memset(ssc->resp_cmd, 0, sizeof(ssc->resp_cmd));
 
-    const struct ecc_curve* ecc = nettle_get_secp_384r1();
-    clear_ecc_scalar(&ssc->ecc_key_main);
-    ecc_scalar_init(&ssc->ecc_key_main, ecc);
-    for (int i = 0; i < KBKDF_KEY_MAX_SLOTS; i++) {
-        clear_ecc_scalar(&ssc->ecc_keys[i]);
-        ecc_scalar_init(&ssc->ecc_keys[i], ecc);
-    }
-    knuth_lfib_init(&ssc->rctx, 4711);
-    memset(ssc->random_hmac_key, 0, sizeof(ssc->random_hmac_key));
-    memset(ssc->slot_hmac_key, 0, sizeof(ssc->slot_hmac_key));
-    memset(ssc->kbkdf_keys, 0, sizeof(ssc->kbkdf_keys));
-    memset(ssc->kbkdf_counter, 0, sizeof(ssc->kbkdf_counter));
+    apple_sep_ssc_clear_keys(ssc);
+
     uint8_t cpsn[0x07] = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xFE};
     memcpy(ssc->cpsn, cpsn, sizeof(cpsn));
 }
