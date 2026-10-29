@@ -1630,10 +1630,8 @@ static bool trans_NOP(DisasContext* s, arg_NOP* a) { return true; }
 static bool trans_YIELD(DisasContext* s, arg_YIELD* a)
 {
     /*
-     * When running in MTTCG we don't generate jumps to the yield and
-     * WFE helpers as it won't affect the scheduling of other vCPUs.
-     * If we wanted to more completely model WFE/SEV so we don't busy
-     * spin unnecessarily we would need to do something more involved.
+     * When running in MTTCG we don't generate jumps to the yield
+     * helper as it won't affect the scheduling of other vCPUs.
      */
     if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) { s->base.is_jmp = DISAS_YIELD; }
     return true;
@@ -1647,13 +1645,23 @@ static bool trans_WFI(DisasContext* s, arg_WFI* a)
 
 static bool trans_WFE(DisasContext* s, arg_WFI* a)
 {
-    /*
-     * When running in MTTCG we don't generate jumps to the yield and
-     * WFE helpers as it won't affect the scheduling of other vCPUs.
-     * If we wanted to more completely model WFE/SEV so we don't busy
-     * spin unnecessarily we would need to do something more involved.
-     */
-    if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) { s->base.is_jmp = DISAS_WFE; }
+    if (s->ss_active) { return true; }
+
+    gen_a64_update_pc(s, 4);
+    gen_helper_wfe(tcg_env);
+    s->base.is_jmp = DISAS_EXIT;
+    return true;
+}
+
+static bool trans_SEV(DisasContext* s, arg_SEV* a)
+{
+    gen_helper_sev(tcg_env);
+    return true;
+}
+
+static bool trans_SEVL(DisasContext* s, arg_SEVL* a)
+{
+    tcg_gen_st_i32(tcg_constant_i32(1), tcg_env, offsetof(CPUARMState, event_register));
     return true;
 }
 
@@ -1683,12 +1691,11 @@ static bool trans_WFET(DisasContext* s, arg_WFET* a)
 {
     if (!dc_isar_feature(aa64_wfxt, s)) { return false; }
 
-    /*
-     * We rely here on our WFE implementation being a NOP, so we
-     * don't need to do anything different to handle the WFET timeout
-     * from what trans_WFE does.
-     */
-    if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) { s->base.is_jmp = DISAS_WFE; }
+    if (s->ss_active) { return true; }
+
+    gen_a64_update_pc(s, 4);
+    gen_helper_wfet(tcg_env, cpu_reg(s, a->rd));
+    s->base.is_jmp = DISAS_EXIT;
     return true;
 }
 
@@ -2541,6 +2548,7 @@ static void gen_load_exclusive(DisasContext* s, int rt, int rt2, int rn, int siz
         tcg_gen_mov_i64(cpu_reg(s, rt), cpu_exclusive_val);
     }
     tcg_gen_mov_i64(cpu_exclusive_addr, clean_addr);
+    tcg_gen_st_i32(tcg_constant_i32(memop & (MO_SIZE | MO_BSWAP)), tcg_env, offsetof(CPUARMState, exclusive_memop));
 }
 
 static void gen_store_exclusive(DisasContext* s, int rd, int rt, int rt2, int rn, int size, int is_pair)
@@ -10811,10 +10819,6 @@ static void aarch64_tr_tb_stop(DisasContextBase* dcbase, CPUState* cpu)
             case DISAS_JUMP    : tcg_gen_lookup_and_goto_ptr(); break;
             case DISAS_NORETURN:
             case DISAS_SWI     : break;
-            case DISAS_WFE:
-                gen_a64_update_pc(dc, 4);
-                gen_helper_wfe(tcg_env);
-                break;
             case DISAS_YIELD:
                 gen_a64_update_pc(dc, 4);
                 gen_helper_yield(tcg_env);

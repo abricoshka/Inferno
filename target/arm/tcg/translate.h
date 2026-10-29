@@ -253,10 +253,8 @@ static inline int curr_insn_len(DisasContext* s) { return s->base.pc_next - s->p
  * defer them until after the conditional execution state has been updated.
  * WFI also needs special handling when single-stepping.
  */
-#define DISAS_WFI DISAS_TARGET_2
-#define DISAS_SWI DISAS_TARGET_3
-/* WFE */
-#define DISAS_WFE   DISAS_TARGET_4
+#define DISAS_WFI   DISAS_TARGET_2
+#define DISAS_SWI   DISAS_TARGET_3
 #define DISAS_HVC   DISAS_TARGET_5
 #define DISAS_SMC   DISAS_TARGET_6
 #define DISAS_YIELD DISAS_TARGET_7

@@ -326,6 +326,8 @@ typedef struct CPUTLBCommon
     size_t full_flush_count;
     size_t part_flush_count;
     size_t elide_flush_count;
+    /* ram_addr page kicked on write, or RAM_ADDR_INVALID */
+    uint64_t watch;
 } CPUTLBCommon;
 
 /*

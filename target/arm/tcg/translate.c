@@ -2404,7 +2404,7 @@ static bool trans_WFE(DisasContext* s, arg_WFE* a)
      */
     if (!(tb_cflags(s->base.tb) & CF_PARALLEL)) {
         gen_update_pc(s, curr_insn_len(s));
-        s->base.is_jmp = DISAS_WFE;
+        s->base.is_jmp = DISAS_YIELD;
     }
     return true;
 }
@@ -4781,7 +4781,6 @@ static void arm_tr_tb_stop(DisasContextBase* dcbase, CPUState* cpu)
                  */
                 tcg_gen_exit_tb(NULL, 0);
                 break;
-            case DISAS_WFE  : gen_helper_wfe(tcg_env); break;
             case DISAS_YIELD: gen_helper_yield(tcg_env); break;
             case DISAS_SWI  : gen_exception(EXCP_SWI, syn_aa32_svc(dc->svc_imm, dc->thumb)); break;
             case DISAS_HVC  : gen_exception_el(EXCP_HVC, syn_aa32_hvc(dc->svc_imm), 2); break;

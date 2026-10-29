@@ -33,6 +33,7 @@
 #include "internals.h"
 #include "cpu-features.h"
 #include "exec/target_page.h"
+#include "exec/cputlb.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/boards.h"
@@ -127,10 +128,15 @@ static bool arm_cpu_has_work(CPUState* cs)
 {
     ARMCPU* cpu = container_of(cs, ARMCPU, parent_obj);
 
-    return (cpu->power_state != ARM_POWER_OFF)
-           && cpu_test_interrupt(cs, CPU_INTERRUPT_FIQ | CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI | CPU_INTERRUPT_VINMI
-                                         | CPU_INTERRUPT_VFNMI | CPU_INTERRUPT_VFIQ | CPU_INTERRUPT_VIRQ
-                                         | CPU_INTERRUPT_VSERR | CPU_INTERRUPT_EXITTB | CPU_INTERRUPT_GTIMER);
+    if (cpu->power_state == ARM_POWER_OFF) { return false; }
+
+#ifdef CONFIG_TCG
+    if (qatomic_read(&cpu->env.wfe_waiting)) { return arm_cpu_wfe_wakeup_pending(cs); }
+#endif
+
+    return cpu_test_interrupt(cs, CPU_INTERRUPT_FIQ | CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI | CPU_INTERRUPT_VINMI
+                                      | CPU_INTERRUPT_VFNMI | CPU_INTERRUPT_VFIQ | CPU_INTERRUPT_VIRQ
+                                      | CPU_INTERRUPT_VSERR | CPU_INTERRUPT_EXITTB | CPU_INTERRUPT_GTIMER);
 }
 
 void arm_register_pre_el_change_hook(ARMCPU* cpu, ARMELChangeHookFn* hook, void* opaque)
@@ -445,6 +451,8 @@ bool arm_cpu_exec_halt(CPUState* cs)
         /* We're about to come out of WFI/WFE: disable the WFxT timer */
         ARMCPU* cpu = container_of(cs, ARMCPU, parent_obj);
         if (cpu->wfxt_timer) { timer_del(cpu->wfxt_timer); }
+        qatomic_set(&cpu->env.wfe_waiting, 0);
+        tlb_unwatch_ram_write(cs);
     }
     return leave_halt;
 }
@@ -1324,9 +1332,7 @@ static void arm_cpu_realizefn(DeviceState* dev, Error** errp)
         if (kvm_enabled() && !cpu->kvm_mte) { FIELD_DP64_IDREG(isar, ID_AA64PFR1, MTE, 0); }
     }
 
-    if (tcg_enabled() && cpu_isar_feature(aa64_wfxt, cpu)) {
-        cpu->wfxt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, arm_wfxt_timer_cb, cpu);
-    }
+    if (tcg_enabled()) { cpu->wfxt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, arm_wfxt_timer_cb, cpu); }
 
     if (tcg_enabled()) {
         /*

@@ -705,6 +705,10 @@ typedef struct CPUArchState
      * semantics of these fields are baked into the migration format.
      */
     uint64_t exclusive_high;
+    uint32_t exclusive_memop;
+
+    uint32_t event_register;
+    uint32_t wfe_waiting;
 
     /* iwMMXt coprocessor state.  */
     struct
