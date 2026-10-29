@@ -42,7 +42,10 @@
 #if defined(__WXGTK__)
     #include <cairo.h>
 #elif defined(__WXMSW__)
-    #include <wx/msw/wrapgdip.h>
+    #include <wx/msw/wrapwin.h>
+using std::max;    // the GDI+ headers want these unqualified, wrapwin.h defines NOMINMAX
+using std::min;
+    #include <gdiplus.h>
 #elif defined(__WXOSX__)
     #include <CoreGraphics/CoreGraphics.h>
 #endif

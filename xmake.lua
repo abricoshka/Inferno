@@ -268,6 +268,9 @@ target("system")
 		"curses", "libusb", "usb_redir", "libpmem", "libdaxctl", "seccomp", "lz4", "avahi", "avahi_glib",
 		"jack", "pipewire", "sndio", "pa", "alsa", "libffi", "libyuv", {public = true})
 	add_options("vnc_sasl", "vde", "iconv", "oss", "dsound", "dnsapi")
+	if is_plat("windows", "mingw") and has_config("wxwidgets") then
+		add_syslinks("gdiplus", {public = true})
+	end
 	if has_config("vnc_sasl") then
 		add_defines("STRUCT_IOVEC_DEFINED", {public = true})
 	end
