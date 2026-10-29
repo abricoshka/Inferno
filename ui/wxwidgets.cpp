@@ -37,7 +37,6 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -1524,7 +1523,8 @@ extern "C" int CKIUIRun(void* app)
         loopExited = true;
     }
     loopCondition.notify_all();
-    for (;;) { pause(); }
+    std::unique_lock<std::mutex> lock(loopMutex);
+    for (;;) { loopCondition.wait(lock); }
 }
 
 extern "C" void CKIUIShutdown(void* app)
