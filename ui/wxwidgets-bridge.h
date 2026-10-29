@@ -58,10 +58,9 @@ extern "C"
         CKIUITextKeyPageDown,
         CKIUITextKeyDelete,
         CKIUITextKeyBackspace,
-        CKIUITextKeyCount,
     } CKIUITextKey;
 
-    typedef void (*CKIUIItemCallback)(void* context, int index, const char* label);
+    typedef void (*CKIUIItemCallback)(void* context, const char* label);
 
     /* ---- Implemented by the C++ side (wxwidgets.cpp), called from QEMU ---- */
 
