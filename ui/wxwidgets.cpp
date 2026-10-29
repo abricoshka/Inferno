@@ -243,6 +243,7 @@ namespace
     }
 #endif
 
+#if defined(__WXOSX__)
     wxImage makeSquircleIcon(const wxImage& source)
     {
         const int    side        = 1024;
@@ -309,6 +310,7 @@ namespace
         }
         return out;
     }
+#endif
 
 }    // namespace
 
