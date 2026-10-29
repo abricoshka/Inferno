@@ -6,6 +6,12 @@ set_policy("build.progress_style", "multirow")
 add_rules("inferno.dependir")
 set_allowedmodes("debug", "releasedbg", "release")
 set_defaultmode("releasedbg")
+if is_subhost("msys") and (os.getenv("MSYSTEM") or "MSYS") ~= "MSYS" then
+	set_defaultplat("mingw")
+	if (os.getenv("MINGW_CHOST") or ""):startswith("aarch64") then
+		set_defaultarch("mingw|arm64")
+	end
+end
 add_moduledirs("xmake/modules")
 
 inferno_cpu = ({
