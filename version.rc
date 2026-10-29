@@ -28,3 +28,5 @@ FILESUBTYPE VFT2_UNKNOWN
 }
 
 IDI_ICON1 ICON "inferno.ico"
+
+1 24 "inferno.manifest"
