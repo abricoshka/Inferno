@@ -752,13 +752,17 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
                 ended = true;
                 break;
             }
+
+            uint32_t controlType = TRB_CTRL_TRBCTL(trb.ctrl);
+            DPRINTF("%s: tdaddr 0x%" HWADDR_PRIx " controlType: %d trb.ctrl: 0x%x\n", __func__, tdaddr, controlType,
+                    trb.ctrl);
+
             if (!(trb.ctrl & TRB_CTRL_HWO)) {
                 ended = true;
                 DPRINTF("%s: ended;break: (!(trb.ctrl & TRB_CTRL_HWO))\n", __func__);
                 break;
             }
 
-            uint32_t controlType = TRB_CTRL_TRBCTL(trb.ctrl);
             // everything but reserved and isochronous*
             if (!(controlType == TRBCTL_NORMAL || controlType == TRBCTL_CONTROL_SETUP
                   || controlType == TRBCTL_CONTROL_STATUS2 || controlType == TRBCTL_CONTROL_STATUS3
@@ -769,14 +773,13 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
                 ended = true;
                 break;
             }
-            DPRINTF("%s: tdaddr 0x%" HWADDR_PRIx " controlType: %d trb.ctrl: 0x%x\n", __func__, tdaddr, controlType,
-                    trb.ctrl);
 
             if (controlType == TRBCTL_LINK_TRB) {
                 DWC3BufferDesc* d;
 
                 if (desc->count == 0) {
                     ended = true;
+                    DPRINTF("%s: ended;break: desc-count==0\n", __func__);
                     break;
                 }
 
@@ -799,6 +802,7 @@ static void dwc3_td_fetch(DWC3State* s, DWC3Transfer* xfer, dma_addr_t tdaddr)
                         break;
                     }
                 }
+                DPRINTF("%s: not-ended;break: none\n", __func__);
                 break;
             }
             if (desc->count == capacity) {
