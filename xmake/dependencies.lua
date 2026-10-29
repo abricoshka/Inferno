@@ -169,6 +169,9 @@ package_end()
 
 if has_config("wxwidgets") then
 	add_requires("wxwidgets")
+	if not is_plat("macosx", "windows", "mingw") then
+		add_requires("pkgconfig::cairo", {alias = "cairo"})
+	end
 end
 
 option("coreaudio")
