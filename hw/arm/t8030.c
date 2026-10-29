@@ -1443,8 +1443,8 @@ static uint64_t pmgr_unk_reg_read(void* opaque, hwaddr addr, unsigned size)
     hwaddr                  base = (hwaddr)opaque;
 
 #if 0
-    if ((((base + addr) & 0xfffffffb) != 0x210E20020) &&
-        (((base + addr) & 0xfffffffb) != 0x211E20020)) {
+    if ((((base + addr) & 0xffffffffb) != 0x210E20020) &&
+        (((base + addr) & 0xffffffffb) != 0x211E20020)) {
         qemu_log_mask(LOG_UNIMP,
                       "PMGR reg READ unk @ 0x" HWADDR_FMT_plx
                       " base: 0x" HWADDR_FMT_plx "\n",
