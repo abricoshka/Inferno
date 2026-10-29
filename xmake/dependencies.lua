@@ -97,12 +97,28 @@ package("wxwidgets")
 	on_fetch(function (package)
 		import("core.project.config")
 		import("lib.detect.find_program")
-		local wxconfig = find_program(config.get("wxconfig") or "wx-config")
-		if not wxconfig then
-			return
+		local wxconfig = config.get("wxconfig") or "wx-config"
+		local msys = os.host() == "windows"
+		local function wxconfig_run(args)
+			if msys then
+				return os.iorunv("sh", table.join({"-c", '"$0" "$@"', wxconfig}, args))
+			end
+			return os.iorunv(wxconfig, args)
 		end
-		local cxxflags = try { function () return os.iorunv(wxconfig, {"--cxxflags"}) end }
-		local libs	 = try { function () return os.iorunv(wxconfig, {"--libs", "core", "base"}) end }
+		local function nativepath(path)
+			if msys and path:startswith("/") then
+				return os.iorunv("cygpath", {"-m", path}):trim()
+			end
+			return path
+		end
+		if not msys then
+			wxconfig = find_program(wxconfig)
+			if not wxconfig then
+				return
+			end
+		end
+		local cxxflags = try { function () return wxconfig_run({"--cxxflags"}) end }
+		local libs	 = try { function () return wxconfig_run({"--libs", "core", "base"}) end }
 		if not cxxflags or not libs then
 			return
 		end
@@ -119,7 +135,7 @@ package("wxwidgets")
 
 		for _, flag in ipairs(os.argv(cxxflags:trim())) do
 			if flag:startswith("-I") then
-				table.insert(info.includedirs, flag:sub(3))
+				table.insert(info.includedirs, nativepath(flag:sub(3)))
 			elseif flag:startswith("-D") then
 				table.insert(info.defines, flag:sub(3))
 			elseif not flag:startswith("-std=") then
@@ -135,7 +151,7 @@ package("wxwidgets")
 				table.insert(info.frameworks, args[index + 1])
 				index = index + 1
 			elseif flag:startswith("-L") then
-				table.insert(info.linkdirs, flag:sub(3))
+				table.insert(info.linkdirs, nativepath(flag:sub(3)))
 			elseif flag:startswith("-l") then
 				table.insert(info.links, flag:sub(3))
 			else
