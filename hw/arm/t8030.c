@@ -161,42 +161,52 @@
 #define T8030_MCA_MCLK_CFG_STRIDE   (4)
 #define T8030_MCA_MCLK_CFG_SIZE     (T8030_MCA_MCLK_CFG_CLUSTERS * T8030_MCA_MCLK_CFG_STRIDE)
 
-#define AMCC_BASE                              (0x200000000)
-#define AMCC_PLANE_COUNT                       (4)
-#define AMCC_PLANE_STRIDE                      (0x40000)
-#define AMCC_SIZE                              (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE + 0x80000)
-#define AMCC_PLANE_BLK_MCC_CHANNEL_DEC(_p)     (0x4 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_BLK_MCC_CHANNEL_DEC_STACKED BIT(0)
-#define AMCC_PLANE_BLK_HASH0_LO(_p)            (0x8 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_BLK_HASH0_HI(_p)            (0xC + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_BLK_HASH1_LO(_p)            (0x10 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_BLK_HASH1_HI(_p)            (0x14 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_LOWER_LIMIT(_p)             (0x680 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_UPPER_LIMIT(_p)             (0x684 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_ENABLED(_p)                 (0x688 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_LOCK(_p)                    (0x68C + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_TZ0_BASE(_p)                (0x6A0 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_TZ0_END(_p)                 (0x6A4 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_TZ0_LOCK(_p)                (0x6A8 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH0(_p) (0x1004 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH1(_p) (0x1008 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH2(_p) (0x100C + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_BLK_ADDR_MAP_MODE(_p)   (0x1010 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_BLK_ADDR_CFG(_p)        (0x1014 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_MUI_BLK_NUM_MCU_CHANNEL(_p) (0x1020 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_CACHE_CONTROL(_p)           (0x1C00 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_PLANE_CACHE_STATUS(_p)            (0x1C04 + (_p) * AMCC_PLANE_STRIDE)
-#define AMCC_NON_PLANE                         (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE)
-#define AMCC_BROADCAST                         (0xC)
-#define AMCC_TAG_RAM_BANK_HASH0                (0x80)
-#define AMCC_TAG_RAM_BANK_HASH1                (0x84)
-#define AMCC_ADDR_HASH0_LO                     (0x180)
-#define AMCC_ADDR_HASH0_HI                     (0x184)
-#define AMCC_ADDR_HASH1_LO                     (0x188)
-#define AMCC_ADDR_HASH1_HI                     (0x18C)
-#define AMCC_ADDR_NUM_MCU_CHANNEL              (0x198)
-#define AMCC_RREG32(_machine, _off)            ldl_le_p(&_machine->amcc_reg[_off])
-#define AMCC_WREG32(_machine, _off, _val)      stl_le_p(&_machine->amcc_reg[_off], _val)
+#define AMCC_BASE (0x200000000)
+// 0-based: 4 == non-plane region, 5 == non-plane GFX region
+#define AMCC_PLANE_COUNT                        (4)
+#define AMCC_PLANE_STRIDE                       (0x40000)
+#define AMCC_SIZE                               (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE + 0x80000)
+#define AMCC_PLANE_BLK_MCC_CHANNEL_DEC(_p)      (0x4 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_MCC_CHANNEL_DEC_STACKED  BIT(0)
+#define AMCC_PLANE_BLK_HASH0_LO(_p)             (0x8 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_HASH0_HI(_p)             (0xC + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_HASH1_LO(_p)             (0x10 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_HASH1_HI(_p)             (0x14 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_BLK_NUM_MCU_CHANNEL(_p)      (0x20 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_LOWER_LIMIT(_p)              (0x680 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_UPPER_LIMIT(_p)              (0x684 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_ENABLED(_p)                  (0x688 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_LOCK(_p)                     (0x68C + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_TZ0_BASE(_p)                 (0x6A0 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_TZ0_END(_p)                  (0x6A4 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_TZ0_LOCK(_p)                 (0x6A8 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH0(_p)  (0x1004 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH1(_p)  (0x1008 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_MCS_ADDR_BANK_HASH2(_p)  (0x100C + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_BLK_ADDR_MAP_MODE(_p)    (0x1010 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_BLK_ADDR_CFG(_p)         (0x1014 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_MUI_BLK_NUM_MCU_CHANNEL(_p)  (0x1020 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_CACHE_CONTROL(_p)            (0x1C00 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_PLANE_CACHE_STATUS(_p)             (0x1C04 + (_p) * AMCC_PLANE_STRIDE)
+#define AMCC_NON_PLANE                          (AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE)
+#define AMCC_NON_PLANE_GFX                      ((AMCC_PLANE_COUNT + 1) * AMCC_PLANE_STRIDE)
+#define AMCC_NON_PLANE_BROADCAST                (AMCC_NON_PLANE + 0xC)
+#define AMCC_NON_PLANE_TAG_RAM_BANK_HASH0       (AMCC_NON_PLANE + 0x80)
+#define AMCC_NON_PLANE_TAG_RAM_BANK_HASH1       (AMCC_NON_PLANE + 0x84)
+#define AMCC_NON_PLANE_ADDR_HASH0_LO            (AMCC_NON_PLANE + 0x180)
+#define AMCC_NON_PLANE_ADDR_HASH0_HI            (AMCC_NON_PLANE + 0x184)
+#define AMCC_NON_PLANE_ADDR_HASH1_LO            (AMCC_NON_PLANE + 0x188)
+#define AMCC_NON_PLANE_ADDR_HASH1_HI            (AMCC_NON_PLANE + 0x18C)
+#define AMCC_NON_PLANE_ADDR_NUM_MCU_CHANNEL     (AMCC_NON_PLANE + 0x198)
+#define AMCC_NON_PLANE_GFX_TAG_RAM_BANK_HASH0   (AMCC_NON_PLANE_GFX + 0x80)
+#define AMCC_NON_PLANE_GFX_TAG_RAM_BANK_HASH1   (AMCC_NON_PLANE_GFX + 0x84)
+#define AMCC_NON_PLANE_GFX_ADDR_HASH0_LO        (AMCC_NON_PLANE_GFX + 0x100)
+#define AMCC_NON_PLANE_GFX_ADDR_HASH0_HI        (AMCC_NON_PLANE_GFX + 0x104)
+#define AMCC_NON_PLANE_GFX_ADDR_HASH1_LO        (AMCC_NON_PLANE_GFX + 0x108)
+#define AMCC_NON_PLANE_GFX_ADDR_HASH1_HI        (AMCC_NON_PLANE_GFX + 0x10C)
+#define AMCC_NON_PLANE_GFX_ADDR_NUM_MCU_CHANNEL (AMCC_NON_PLANE_GFX + 0x118)
+#define AMCC_RREG32(_machine, _off)             ldl_le_p(&_machine->amcc_reg[_off])
+#define AMCC_WREG32(_machine, _off, _val)       stl_le_p(&_machine->amcc_reg[_off], _val)
 
 #define FUSE_ENABLED  (0xA55AC33C)
 #define FUSE_DISABLED (0xA050C030)
@@ -885,7 +895,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
         apple_dt_set_prop_u32(node, "cache-status-reg-offset", AMCC_PLANE_CACHE_CONTROL(0));    // ?? Apple Bug?
         apple_dt_set_prop_u32(node, "cache-status-reg-mask", 0x1F);
         apple_dt_set_prop_u32(node, "cache-status-reg-value", 0);
-        apple_dt_set_prop_u32(node, "broadcast-reg-offset", AMCC_NON_PLANE + AMCC_BROADCAST);
+        apple_dt_set_prop_u32(node, "broadcast-reg-offset", AMCC_NON_PLANE_BROADCAST);
         apple_dt_set_prop_u32(node, "broadcast-reg-value", 1);
 
         node = apple_dt_get_node(node, "amcc-ctrr-a");
@@ -1699,7 +1709,7 @@ static void amcc_reg_write(void* opaque, hwaddr addr, uint64_t data, unsigned si
             return;
         }
 
-        if (AMCC_RREG32(t8030, AMCC_NON_PLANE + AMCC_BROADCAST)) {
+        if (AMCC_RREG32(t8030, AMCC_NON_PLANE_BROADCAST)) {
             for (hwaddr i = 0; i < AMCC_PLANE_COUNT; ++i) { amcc_handle_plane_reg_write(t8030, i, plane_off, data); }
             return;
         }
