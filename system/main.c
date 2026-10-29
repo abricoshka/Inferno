@@ -43,6 +43,12 @@ static void* qemu_default_main(void* opaque)
     exit(status);
 }
 
+static void* qemu_main_loop_thread(void* opaque)
+{
+    qemu_set_current_aio_context(qemu_get_aio_context());
+    return qemu_default_main(opaque);
+}
+
 int (*qemu_main)(void) = NULL;
 
 #ifdef CONFIG_DARWIN
@@ -75,7 +81,7 @@ int main(int argc, char** argv)
 
     if (qemu_main) {
         QemuThread main_loop_thread;
-        qemu_thread_create(&main_loop_thread, "qemu_main", qemu_default_main, NULL, QEMU_THREAD_DETACHED);
+        qemu_thread_create(&main_loop_thread, "qemu_main", qemu_main_loop_thread, NULL, QEMU_THREAD_DETACHED);
         return qemu_main();
     }
     else {
