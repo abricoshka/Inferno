@@ -87,7 +87,6 @@ option_end()
 
 option("wxconfig")
 	set_showmenu(true)
-	set_default("wx-config")
 	set_description("Path to the wx-config script")
 option_end()
 
@@ -97,7 +96,11 @@ package("wxwidgets")
 
 	on_fetch(function (package)
 		import("core.project.config")
-		local wxconfig = config.get("wxconfig") or "wx-config"
+		import("lib.detect.find_program")
+		local wxconfig = find_program(config.get("wxconfig") or "wx-config")
+		if not wxconfig then
+			return
+		end
 		local cxxflags = try { function () return os.iorunv(wxconfig, {"--cxxflags"}) end }
 		local libs	 = try { function () return os.iorunv(wxconfig, {"--libs", "core", "base"}) end }
 		if not cxxflags or not libs then
