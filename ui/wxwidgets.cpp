@@ -257,14 +257,13 @@ namespace
 
     void* objcClass(const char* name) { return reinterpret_cast<void*>(objc_getClass(name)); }
 
-    bool setNativeAspectRatio(wxTopLevelWindow* window, const wxSize& aspect)
+    void setNativeAspectRatio(wxTopLevelWindow* window, const wxSize& aspect)
     {
-        if (aspect.x <= 0 || aspect.y <= 0) { return false; }
+        if (aspect.x <= 0 || aspect.y <= 0) { return; }
         void* nsWindow = (void*)window->GetWXWindow();
-        if (nsWindow == nullptr) { return false; }
+        if (nsWindow == nullptr) { return; }
         objcSend<void>(nsWindow, "setContentAspectRatio:",
                        CGSizeMake(static_cast<CGFloat>(aspect.x), static_cast<CGFloat>(aspect.y)));
-        return true;
     }
 
     void setDockIcon(const wxImage& image)
@@ -975,8 +974,6 @@ public:
         };
         canvas->onGrabChange = [this](bool grabbed) { SetTitle(makeTitle(grabbed)); };
 
-        m_snapTimer.SetOwner(this);
-        Bind(wxEVT_TIMER, &CKIUIFrame::onSnap, this);
         Bind(wxEVT_SIZE, &CKIUIFrame::onSize, this);
         Bind(wxEVT_CLOSE_WINDOW, &CKIUIFrame::onClose, this);
         Bind(wxEVT_ACTIVATE, &CKIUIFrame::onActivate, this);
@@ -1291,9 +1288,42 @@ private:
     void applyNativeAspect()
     {
 #if defined(__WXOSX_COCOA__)
-        m_nativeAspect = setNativeAspectRatio(this, m_guestSize);
+        setNativeAspectRatio(this, m_guestSize);
 #endif
     }
+
+#if defined(__WXMSW__)
+    WXLRESULT MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override
+    {
+        if (message != WM_SIZING || !m_zoomToFit || IsFullScreen()) {
+            return wxFrame::MSWWindowProc(message, wParam, lParam);
+        }
+
+        RECT&        rect    = *reinterpret_cast<RECT*>(lParam);
+        const wxSize chrome  = GetSize() - GetClientSize();
+        const wxSize minimum = FromDIP(minimumSize);
+        double       scale   = wParam == WMSZ_TOP || wParam == WMSZ_BOTTOM ?
+                                   static_cast<double>(rect.bottom - rect.top - chrome.y) / m_guestSize.y :
+                                   static_cast<double>(rect.right - rect.left - chrome.x) / m_guestSize.x;
+        scale                = std::max(
+            {scale, static_cast<double>(minimum.x) / m_guestSize.x, static_cast<double>(minimum.y) / m_guestSize.y});
+
+        const wxSize frame(wxRound(m_guestSize.x * scale) + chrome.x, wxRound(m_guestSize.y * scale) + chrome.y);
+        if (wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT || wParam == WMSZ_BOTTOMLEFT) {
+            rect.left = rect.right - frame.x;
+        }
+        else {
+            rect.right = rect.left + frame.x;
+        }
+        if (wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT || wParam == WMSZ_TOPRIGHT) {
+            rect.top = rect.bottom - frame.y;
+        }
+        else {
+            rect.bottom = rect.top + frame.y;
+        }
+        return TRUE;
+    }
+#endif
 
     void resizeToGuest()
     {
@@ -1322,12 +1352,12 @@ private:
     {
         const bool keepSize = m_zoomToFit && GetClientSize() != m_guestSize;
         m_guestSize         = logical;
-        applyNativeAspect();
         if (keepSize) { snapToAspect(); }
         else {
             resizeToGuest();
         }
         applyConstraints();
+        applyNativeAspect();
         scheduleSettle();
     }
 
@@ -1376,35 +1406,10 @@ private:
             }
             return;
         }
-
-        if (m_nativeAspect || !m_zoomToFit || m_guestSize.x <= 0 || m_guestSize.y <= 0) { return; }
-
-        const wxSize client = GetClientSize();
-        const wxSize wanted(client.x, wxRound(static_cast<double>(client.x) * m_guestSize.y / m_guestSize.x));
-        if (std::abs(wanted.y - client.y) <= 1) { return; }
-
-        m_adjusting = true;
-        SetClientSize(wanted);
-        m_adjusting = false;
 #else
         if (IsMaximized()) { return; }
-        if (m_zoomToFit) { m_snapTimer.StartOnce(150); }
-        else if (GetClientSize() != m_guestSize) {
-            scheduleSettle();
-        }
+        if (!m_zoomToFit && GetClientSize() != m_guestSize) { scheduleSettle(); }
 #endif
-    }
-
-    void onSnap(wxTimerEvent&)
-    {
-        if (IsFullScreen() || IsMaximized() || !m_zoomToFit) { return; }
-
-        const wxMouseState mouse = wxGetMouseState();
-        if (mouse.LeftIsDown() || mouse.MiddleIsDown() || mouse.RightIsDown()) {
-            m_snapTimer.StartOnce(150);
-            return;
-        }
-        snapToAspect();
     }
 
     void snapToAspect()
@@ -1497,12 +1502,10 @@ private:
     std::string m_lastClipboard;
     wxSize      m_guestSize{640, 480};
     bool        m_zoomToFit{true};
-    bool        m_nativeAspect{false};
     bool        m_adjusting{false};
     bool        m_uiInfoQueued{false};
     bool        m_zoomFixQueued{false};
     bool        m_settleQueued{false};
-    wxTimer     m_snapTimer;
 
     std::array<int, 5> m_lastUIInfo{};
 };

@@ -264,7 +264,7 @@ target("system")
 	set_kind("object")
 	add_deps("genh", "authz", "blockdev", "chardev", "crypto", "io", "qmp", "qom", "qemuutil")
 	add_defines("CONFIG_SOFTMMU")
-	add_packages("glib", "pixman", "zlib", "png", "vnc_jpeg", "slirp", "wxwidgets", "cairo", "x11",
+	add_packages("glib", "pixman", "zlib", "png", "vnc_jpeg", "slirp", "wxwidgets", "x11",
 		"curses", "libusb", "usb_redir", "libpmem", "libdaxctl", "seccomp", "lz4", "avahi", "avahi_glib",
 		"jack", "pipewire", "sndio", "pa", "alsa", "libffi", "libyuv", {public = true})
 	add_options("vnc_sasl", "vde", "iconv", "oss", "dsound", "dnsapi")

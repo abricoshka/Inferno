@@ -123,6 +123,13 @@ package("wxwidgets")
 			return
 		end
 
+		local toolkit = try { function () return wxconfig_run({"--query-toolkit"}):trim() end }
+		local gtk = ({gtk2 = "gtk+-2.0", gtk3 = "gtk+-3.0"})[toolkit]
+		if gtk then
+			cxxflags = cxxflags .. " " .. os.iorunv("pkg-config", {"--cflags", gtk})
+			libs = libs .. " " .. os.iorunv("pkg-config", {"--libs", gtk})
+		end
+
 		local info = {
 			includedirs = {},
 			defines	 = {},
@@ -169,9 +176,6 @@ package_end()
 
 if has_config("wxwidgets") then
 	add_requires("wxwidgets")
-	if not is_plat("macosx", "windows", "mingw") then
-		add_requires("pkgconfig::cairo", {alias = "cairo"})
-	end
 end
 
 option("coreaudio")
