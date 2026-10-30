@@ -8,5 +8,7 @@ target("qemu-" .. inferno_target)
 	if not has_config("hvf") then
 		add_files("hvf-stub.c")
 	end
-	add_files("whpx-stub.c")
+	if not has_config("whpx") then
+		add_files("whpx-stub.c")
+	end
 target_end()

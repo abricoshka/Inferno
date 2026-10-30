@@ -61,8 +61,12 @@ typedef struct
     bool (*protect)(hwaddr page, uint64_t size, bool writable);
     /// Maps host memory read-only at [ipa, ipa + size) of the guest, executable if `exec`.
     void (*map)(void* host, hwaddr ipa, uint64_t size, bool exec);
-    /// Makes software-step exceptions exit to the host, or restores the accelerator's own setting.
+    /// Makes software-step exceptions exit to the host, or restores the accelerator's own setting; NULL if it can't.
     void (*trap_debug)(CPUState* cs, bool enable);
+    /// Accesses to IMPLEMENTATION DEFINED registers trap to the host, so the patcher leaves those it doesn't need.
+    bool traps_impdef;
+    /// FIQs arrive as IRQs too, which the accelerator tells apart in `APPLE_VIRT_HVC_IRQ_*`.
+    bool gic_interrupts;
 } AppleVirtOps;
 
 /// Called by an accelerator that can run GXF/PAC emulation, whose guest physical address space ends at `ipa_end`.

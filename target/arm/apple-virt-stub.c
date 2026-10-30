@@ -18,6 +18,13 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/arm/apple_virt_hvc.h"
 #include "apple-virt.h"
 
 void apple_virt_manage_cpu(CPUState* cs) { assert_not_reached(); }
+
+bool apple_virt_gic_interrupts(void) { assert_not_reached(); }
+
+bool apple_virt_rewrites_impdef(void) { assert_not_reached(); }
+
+int apple_virt_impdef_vreg(uint32_t sysreg) { assert_not_reached(); }

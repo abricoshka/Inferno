@@ -26,6 +26,7 @@
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
+#include "system/hw_accel.h"
 
 #define NOP        (0xD503201F)
 #define MOV_W0_WZR (0x2A1F03E0)
@@ -920,6 +921,37 @@ static void ck_kp_apfs_data_hash_patch(CKPatcherRange* apfs, CKPatcherRange* cor
     }
 }
 
+static bool ck_kp_wdt_timebase_callback(void* ctx, uint8_t* buffer)
+{
+    uint32_t nsec = ldl_le_p(buffer);
+    uint32_t mul  = ldl_le_p(buffer + 8);
+    uint32_t cmp  = ldl_le_p(buffer + 12);
+
+    if (extract32(mul, 16, 5) != extract32(nsec, 0, 5) || extract32(cmp, 16, 5) != extract32(mul, 0, 5)) {
+        return false;
+    }
+    stl_le_p(buffer + 8, mul | BIT(31));
+    return true;
+}
+
+// `AppleS5L8960XWatchDogTimer::start` checks `clock * numer == denom * NSEC_PER_SEC` with a 32-bit right side, which
+// only fits 24 MHz's `denom`.
+static void ck_kp_wdt_timebase_patch(CKPatcherRange* range)
+{
+    static const uint8_t pattern[] = {
+        0x00, 0x40, 0x99, 0x52,    // mov w?, #0xCA00
+        0x40, 0x73, 0xA7, 0x72,    // movk w?, #0x3B9A, lsl #16
+        0x00, 0x7C, 0x00, 0x1B,    // mul w?, w?, w?
+        0x1F, 0x00, 0x00, 0xEB,    // cmp x?, x?
+    };
+    static const uint8_t mask[] = {
+        0xE0, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0x00, 0xFC, 0xE0, 0xFF, 0x1F, 0xFC, 0xE0, 0xFF,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
+    ck_patcher_find_callback(range, "64-bit watchdog timebase check", pattern, mask, sizeof(pattern), sizeof(uint32_t),
+                             1, ck_kp_wdt_timebase_callback);
+}
+
 void ck_patch_kernel(MachoHeader64* hdr)
 {
     MachoHeader64*             apfs_hdr;
@@ -932,6 +964,7 @@ void ck_patch_kernel(MachoHeader64* hdr)
     g_autofree CKPatcherRange* image4_text    = NULL;
     g_autofree CKPatcherRange* image4_cstring = NULL;
     g_autofree CKPatcherRange* fwupdate_text;
+    g_autofree CKPatcherRange* wdt_text;
     g_autofree CKPatcherRange* kernel_text;
     g_autofree CKPatcherRange* kernel_const;
     g_autofree CKPatcherRange* kernel_ppltext;
@@ -952,6 +985,9 @@ void ck_patch_kernel(MachoHeader64* hdr)
 
     fwupdate_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleFirmwareUpdateKext");
     if (fwupdate_text != NULL) { ck_kp_img4_patches(fwupdate_text); }
+
+    wdt_text = hwaccel_enabled() ? ck_kp_find_image_text(hdr, "com.apple.driver.AppleS5L8960XWatchDogTimer") : NULL;
+    if (wdt_text != NULL) { ck_kp_wdt_timebase_patch(wdt_text); }
 
     image4_hdr = ck_kp_find_image_header(hdr, "com.apple.security.Image4");
     if (image4_hdr != NULL) {
@@ -1150,6 +1186,8 @@ typedef enum
     CK_KP_VIRT_MONITOR = BIT(1),
     // Lower-EL exception entries, exception returns and PAC key/SCTLR accesses, to give each EL Apple's PAC keys.
     CK_KP_VIRT_PAC = BIT(2),
+    // Code of a vCPU GXF/PAC emulation doesn't manage (the SEP's).
+    CK_KP_VIRT_UNMANAGED = BIT(3),
 } CKKPVirtFlags;
 
 // What a register access is rewritten for.
@@ -1166,30 +1204,110 @@ static CKKPVirtFlags ck_kp_virt_vreg_flags(int vreg)
     }
 }
 
-// Makes the lower-EL AArch64 slots of the vector tables in `range`, mapped at `va`, trap before branching to their
-// handlers; returns how many.
-static uint32_t ck_kp_virt_vectors(CKPatcherRange* range, vaddr va)
+// Adjusts the instruction at `off` of a vector slot for moving it one instruction down, unless its PC-relative target
+// is in the slot too; returns false if it can't.
+static bool ck_kp_virt_slot_relocate(uint32_t* insn, uint32_t off)
 {
-    static const int used[]  = {0, 4, 8, 9, 10, 11};
-    uint32_t         entries = 0;
+    uint32_t w = *insn;
+    int      pos, len, scale;
+    int32_t  disp;
 
-    // Vector tables are 2KiB aligned and each AArch64 slot in use is `b <handler>; nop; ...`; the synchronous
-    // exception slots of the current and the lower EL are always in use. XNU's low vectors are `b .` and never taken.
-    for (vaddr off = -va & 0x7FF; off + 0x800 <= range->length; off += 0x800) {
-        bool table = true;
+    if ((w & 0x7C000000) == 0x14000000) {
+        // b, bl
+        pos = 0, len = 26, scale = 4;
+    }
+    else if ((w & 0xFF000010) == 0x54000000 || (w & 0x7E000000) == 0x34000000 || (w & 0x3B000000) == 0x18000000) {
+        // b.cond, cbz/cbnz, ldr (literal)
+        pos = 5, len = 19, scale = 4;
+    }
+    else if ((w & 0x7E000000) == 0x36000000) {
+        // tbz/tbnz
+        pos = 5, len = 14, scale = 4;
+    }
+    else if ((w & 0x9F000000) == 0x10000000) {
+        // adr
+        disp = (sextract32(w, 5, 19) << 2) | extract32(w, 29, 2);
+        if (off + disp < 0x80) { return true; }
+        disp  -= 4;
+        *insn  = deposit32(deposit32(w, 29, 2, disp & 3), 5, 19, disp >> 2);
+        return true;
+    }
+    else {
+        // Not PC-relative, or adrp, whose page doesn't change within a slot.
+        return true;
+    }
 
-        for (int i = 0; i < ARRAY_SIZE(used) && table; i++) {
-            uint32_t insn = ldl_le_p(range->ptr + off + used[i] * 0x80);
+    disp = sextract32(w, pos, len) * scale;
+    if (off + disp < 0x80) { return true; }
+    disp = disp / scale - 1;
+    if (disp < -(1 << (len - 1))) { return false; }
+    *insn = deposit32(w, pos, len, disp);
+    return true;
+}
 
-            table = (insn & 0xFC000000) == 0x14000000 && (insn & 0x3FFFFFF) != 0
-                    && (uint32_t)ldl_le_p(range->ptr + off + used[i] * 0x80 + 4) == NOP;
+// Inserts `insn` at the start of the vector slot at `slot`, moving its code down into the NOP that ends it; returns
+// whether it could.
+static bool ck_kp_virt_slot_insert(uint8_t* slot, uint32_t insn)
+{
+    uint32_t code[32];
+
+    if ((uint32_t)ldl_le_p(slot + 0x7C) != NOP) { return false; }
+    for (int i = 0; i < 31; i++) {
+        code[i + 1] = ldl_le_p(slot + i * 4);
+        if (!ck_kp_virt_slot_relocate(&code[i + 1], i * 4)) { return false; }
+    }
+    code[0] = insn;
+    for (int i = 0; i < 32; i++) { stl_le_p(slot + i * 4, code[i]); }
+    return true;
+}
+
+// Vector tables are 2KiB aligned and each AArch64 slot in use is `b <handler>; nop; ...`, or with `inline_slots` (the
+// SEP's) the handler padded with NOPs; the synchronous exception slots of the current and the lower EL are always in
+// use. XNU's low vectors are `b .` and never taken.
+static bool ck_kp_virt_is_vector_table(const uint8_t* table, bool inline_slots)
+{
+    static const int used[] = {0, 4, 8, 9, 10, 11};
+
+    for (int i = 0; i < ARRAY_SIZE(used); i++) {
+        const uint8_t* slot  = table + used[i] * 0x80;
+        uint32_t       first = ldl_le_p(slot);
+
+        if (inline_slots ?
+                first == 0 || first == NOP || (uint32_t)ldl_le_p(slot + 0x7C) != NOP :
+                (first & 0xFC000000) != 0x14000000 || (first & 0x3FFFFFF) == 0 || (uint32_t)ldl_le_p(slot + 4) != NOP)
+        {
+            return false;
         }
-        if (!table) { continue; }
+    }
+    return true;
+}
+
+// Makes the lower-EL AArch64 slots of the vector tables in `range`, mapped at `va`, trap before branching to their
+// handlers, and the IRQ slots ask the host whether they're for a FIQ; returns how many.
+static uint32_t ck_kp_virt_vectors(CKPatcherRange* range, vaddr va, CKKPVirtFlags flags)
+{
+    uint32_t entries = 0;
+    bool     gic     = apple_virt_gic_interrupts();
+
+    if (!(flags & CK_KP_VIRT_PAC) && !gic) { return 0; }
+
+    for (vaddr off = -va & 0x7FF; off + 0x800 <= range->length; off += 0x800) {
+        if (!ck_kp_virt_is_vector_table(range->ptr + off, flags & CK_KP_VIRT_UNMANAGED)) { continue; }
+
+        // IRQs from the current EL with SP0 and SPx, and from a lower AArch64 EL.
+        for (int slot = 1; gic && slot < 12; slot += 4) {
+            uint8_t* insn = range->ptr + off + slot * 0x80;
+            uint32_t hvc  = CK_KP_HVC(slot == 9 ? APPLE_VIRT_HVC_IRQ_LOWER : APPLE_VIRT_HVC_IRQ_ENTRY);
+
+            // The SEP's image is patched again whenever it's resumed.
+            if ((uint32_t)ldl_le_p(insn) != hvc && ck_kp_virt_slot_insert(insn, hvc)) { ++entries; }
+        }
 
         // The branch moves one instruction down.
-        for (int slot = 8; slot < 12; slot++) {
+        for (int slot = 8; (flags & CK_KP_VIRT_PAC) && slot < 12; slot++) {
             uint8_t* insn = range->ptr + off + slot * 0x80;
 
+            if (gic && slot == 9) { continue; }
             stl_le_p(insn + 4, 0x14000000 | ((ldl_le_p(insn) - 1) & 0x3FFFFFF));
             stl_le_p(insn, CK_KP_HVC(APPLE_VIRT_HVC_LOWER_ENTRY));
             ++entries;
@@ -1200,17 +1318,25 @@ static uint32_t ck_kp_virt_vectors(CKPatcherRange* range, vaddr va)
 
 static void ck_kp_virt_range(CKPatcherRange* range, vaddr va, CKKPVirtFlags flags)
 {
-    uint32_t transitions = 0;
-    uint32_t tlbis       = 0;
-    uint32_t entries     = (flags & CK_KP_VIRT_PAC) ? ck_kp_virt_vectors(range, va) : 0;
-    uint32_t erets       = 0;
-    uint32_t sysregs     = 0;
+    uint32_t transitions    = 0;
+    uint32_t tlbis          = 0;
+    uint32_t entries        = ck_kp_virt_vectors(range, va, flags);
+    uint32_t erets          = 0;
+    uint32_t sysregs        = 0;
+    uint32_t unindexed      = 0;
+    bool     rewrite_impdef = apple_virt_rewrites_impdef();
 
     for (vaddr i = 0; i + sizeof(uint32_t) <= range->length; i += sizeof(uint32_t)) {
         uint8_t* ptr  = range->ptr + i;
         uint32_t insn = ldl_le_p(ptr);
         bool     read = extract32(insn, 21, 1);
         uint32_t rt   = extract32(insn, 0, 5);
+        uint32_t op0  = 2 + extract32(insn, 19, 1);
+        uint32_t op1  = extract32(insn, 16, 3);
+        uint32_t crn  = extract32(insn, 12, 4);
+        uint32_t crm  = extract32(insn, 8, 4);
+        uint32_t op2  = extract32(insn, 5, 3);
+        bool     impdef;
         int      vreg;
 
         // genter #?, gexit
@@ -1238,18 +1364,29 @@ static void ck_kp_virt_range(CKPatcherRange* range, vaddr va, CKKPVirtFlags flag
 
         // msr/mrs (register)
         if ((insn & 0xFFD00000) != 0xD5100000) { continue; }
-        vreg = apple_virt_vreg(2 + extract32(insn, 19, 1), extract32(insn, 16, 3), extract32(insn, 12, 4),
-                               extract32(insn, 8, 4), extract32(insn, 5, 3));
-        if (vreg < 0 || !(flags & ck_kp_virt_vreg_flags(vreg))) { continue; }
+        impdef = rewrite_impdef && op0 == 3 && (crn == 11 || crn == 15);
+        vreg   = (flags & CK_KP_VIRT_UNMANAGED) ? -1 : apple_virt_vreg(op0, op1, crn, crm, op2);
+        if (vreg < 0 && impdef) {
+            vreg = apple_virt_impdef_vreg(APPLE_VIRT_SYSREG(op0, op1, crn, crm, op2));
+            if (vreg < 0) {
+                ++unindexed;
+                continue;
+            }
+        }
+        if (vreg < 0 || !(impdef || (flags & ck_kp_virt_vreg_flags(vreg)))) { continue; }
 
         // `mrs xzr, ?` only serialises.
-        if (read && rt == 31) { stl_le_p(ptr, NOP); }
+        if (read && rt == 31 && vreg < APPLE_VIRT_VREG_MAX) { stl_le_p(ptr, NOP); }
         else {
             stl_le_p(ptr, CK_KP_HVC(APPLE_VIRT_HVC_SYSREG | (vreg << 6) | (read << 5) | rt));
         }
         ++sysregs;
     }
 
+    if (unindexed != 0) {
+        warn_report("`trap to the hypervisor` left %u IMPLEMENTATION DEFINED register accesses in `%s`: out of vregs.",
+                    unindexed, range->name);
+    }
     if (transitions + tlbis + entries + erets + sysregs == 0) { return; }
     info_report("`trap to the hypervisor` rewrote %u GXF transitions, %u TLBIs, %u exception entries, %u erets and %u "
                 "sysregs in `%s`.",
@@ -1275,6 +1412,34 @@ static void ck_kp_virt_patch(MachoHeader64* hdr, CKKPVirtFlags flags)
 }
 
 void ck_patch_virt(MachoHeader64* hdr) { ck_kp_virt_patch(hdr, CK_KP_VIRT_GXF | CK_KP_VIRT_PAC); }
+
+// The `b.ne` to the failure, or the NOP a previous patch of the image left.
+static bool ck_kp_sep_timebase_callback(void* ctx, uint8_t* buffer)
+{
+    uint32_t insn = ldl_le_p(buffer + 16);
+
+    if ((insn & 0xFF00001F) != 0x54000001 && insn != NOP) { return false; }
+    stl_le_p(buffer + 16, NOP);
+    return true;
+}
+
+void ck_patch_sep_timebase(CKPatcherRange* range)
+{
+    static const uint8_t pattern[] = {
+        0x00, 0xE0, 0x3B, 0xD5,    // mrs x?, cntfrq_el0
+        0x00, 0xC0, 0x86, 0x52,    // mov w?, #0x3600
+        0xC0, 0x2D, 0xA0, 0x72,    // movk w?, #0x16E, lsl #16
+        0x1F, 0x00, 0x00, 0x6B,    // cmp w?, w?
+    };
+    static const uint8_t mask[] = {
+        0xE0, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0x1F, 0xFC, 0xE0, 0xFF,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
+    ck_patcher_find_callback(range, "accept any timebase", pattern, mask, sizeof(pattern), sizeof(uint32_t), 1,
+                             ck_kp_sep_timebase_callback);
+}
+
+void ck_patch_virt_unmanaged(CKPatcherRange* range, vaddr va) { ck_kp_virt_range(range, va, CK_KP_VIRT_UNMANAGED); }
 
 void ck_patch_virt_monitor(MachoHeader64* hdr)
 { ck_kp_virt_patch(hdr, CK_KP_VIRT_GXF | CK_KP_VIRT_PAC | CK_KP_VIRT_MONITOR); }

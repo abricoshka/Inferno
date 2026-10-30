@@ -6,7 +6,10 @@ target("qemu-" .. inferno_target)
 	if has_config("hvf") then
 		add_files("hyp_gdbstub.c", "hvf/hvf.c")
 	end
-	if has_config("kvm") or has_config("hvf") then
+	if has_config("whpx") then
+		add_files("whpx/whpx.c")
+	end
+	if has_config("kvm") or has_config("hvf") or has_config("whpx") then
 		add_files("emulate/aarch64.c", "apple-virt.c")
 	end
 	add_files(
@@ -33,7 +36,10 @@ target("system_arm")
 	if not has_config("hvf") then
 		add_files("hvf-stub.c")
 	end
-	if not has_config("kvm") and not has_config("hvf") then
+	if not has_config("whpx") then
+		add_files("whpx-stub.c")
+	end
+	if not has_config("kvm") and not has_config("hvf") and not has_config("whpx") then
 		add_files("apple-virt-stub.c")
 	end
 	if not has_config("tcg") then

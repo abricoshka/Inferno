@@ -41,6 +41,7 @@
 
 #include "emulate/aarch64.h"
 #include "apple-virt.h"
+#include "accel/accel-private.h"
 
 #define MDSCR_EL1_SS_SHIFT  0
 #define MDSCR_EL1_MDE_SHIFT 15
@@ -1596,7 +1597,7 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
 
             AddressSpace* as = cpu_get_address_space(cpu, ARMASIdx_NS);
 
-            if (hvf_map_private_page(as, excp->physical_address, iswrite)) { break; }
+            if (accel_private_map_page(as, excp->physical_address, iswrite)) { break; }
 
             if (cm) {
                 /* We don't cache MMIO regions */
@@ -1885,14 +1886,15 @@ static void hvf_virt_trap_debug(CPUState* cs, bool enable)
 { assert_hvf_ok(hv_vcpu_set_trap_debug_exceptions(cs->accel->fd, enable || cs->accel->guest_debug_enabled)); }
 
 static const AppleVirtOps hvf_apple_virt_ops = {
-    .get_xreg   = hvf_virt_get_xreg,
-    .set_xreg   = hvf_virt_set_xreg,
-    .get_qreg   = hvf_virt_get_qreg,
-    .get_reg    = hvf_virt_get_reg,
-    .set_reg    = hvf_virt_set_reg,
-    .protect    = hvf_virt_protect,
-    .map        = hvf_virt_map,
-    .trap_debug = hvf_virt_trap_debug,
+    .get_xreg     = hvf_virt_get_xreg,
+    .set_xreg     = hvf_virt_set_xreg,
+    .get_qreg     = hvf_virt_get_qreg,
+    .get_reg      = hvf_virt_get_reg,
+    .set_reg      = hvf_virt_set_reg,
+    .protect      = hvf_virt_protect,
+    .map          = hvf_virt_map,
+    .trap_debug   = hvf_virt_trap_debug,
+    .traps_impdef = true,
 };
 
 int hvf_arch_init(void)

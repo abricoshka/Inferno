@@ -80,24 +80,23 @@
 #define USEC_PER_SEC          1000000ull    /* microseconds per second */
 #define NSEC_PER_SEC          1000000000ull /* nanoseconds per second */
 #define NSEC_PER_MSEC         1000000ull    /* nanoseconds per millisecond */
-#define RTCLOCK_SEC_DIVISOR   24000000ull
 
-static void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t* result)
+static void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t freq, uint64_t* result)
 {
     uint64_t t64;
 
-    *result  = (t64 = abstime / RTCLOCK_SEC_DIVISOR) * NSEC_PER_SEC;
-    abstime -= (t64 * RTCLOCK_SEC_DIVISOR);
-    *result += (abstime * NSEC_PER_SEC) / RTCLOCK_SEC_DIVISOR;
+    *result  = (t64 = abstime / freq) * NSEC_PER_SEC;
+    abstime -= (t64 * freq);
+    *result += (abstime * NSEC_PER_SEC) / freq;
 }
 
-static void nanoseconds_to_absolutetime(uint64_t nanosecs, uint64_t* result)
+static void nanoseconds_to_absolutetime(uint64_t nanosecs, uint64_t freq, uint64_t* result)
 {
     uint64_t t64;
 
-    *result   = (t64 = nanosecs / NSEC_PER_SEC) * RTCLOCK_SEC_DIVISOR;
+    *result   = (t64 = nanosecs / NSEC_PER_SEC) * freq;
     nanosecs -= (t64 * NSEC_PER_SEC);
-    *result  += (nanosecs * RTCLOCK_SEC_DIVISOR) / NSEC_PER_SEC;
+    *result  += (nanosecs * freq) / NSEC_PER_SEC;
 }
 
 static QTAILQ_HEAD(, AppleA13Cluster) clusters = QTAILQ_HEAD_INITIALIZER(clusters);
@@ -372,7 +371,7 @@ static uint64_t apple_a13_ipi_read_cr(CPUARMState* env, const ARMCPRegInfo* ri)
 {
     uint64_t abstime = 0;
 
-    nanoseconds_to_absolutetime(ipi_cr, &abstime);
+    nanoseconds_to_absolutetime(ipi_cr, env_archcpu(env)->gt_cntfrq_hz, &abstime);
     return abstime;
 }
 
@@ -382,7 +381,7 @@ static void apple_a13_ipi_write_cr(CPUARMState* env, const ARMCPRegInfo* ri, uin
     uint64_t nanosec = 0;
     uint64_t ct      = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    if (value != 0) { absolutetime_to_nanoseconds(value & 0xFFFF, &nanosec); }
+    if (value != 0) { absolutetime_to_nanoseconds(value & 0xFFFF, env_archcpu(env)->gt_cntfrq_hz, &nanosec); }
 
     if (nanosec == 0) { timer_del(ipicr_timer); }
     else {

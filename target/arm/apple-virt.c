@@ -1208,11 +1208,57 @@ static bool virt_handle_sysreg_fast(CPUState* cs, CPUARMState* env, AppleVirtCPU
     }
 }
 
+// The IMPLEMENTATION DEFINED registers the patcher gave the vregs from APPLE_VIRT_VREG_MAX on. Only ever appended to,
+// so the vregs stay valid in images patched before a reset.
+static struct
+{
+    uint32_t sysregs[APPLE_VIRT_VREG_LIMIT - APPLE_VIRT_VREG_MAX];
+    uint32_t count;
+} impdef;
+
+bool apple_virt_rewrites_impdef(void) { return !virt.ops->traps_impdef; }
+
+bool apple_virt_gic_interrupts(void) { return virt.ops->gic_interrupts; }
+
+int apple_virt_impdef_vreg(uint32_t sysreg)
+{
+    uint32_t i;
+
+    for (i = 0; i < impdef.count; i++) {
+        if (impdef.sysregs[i] == sysreg) { return APPLE_VIRT_VREG_MAX + i; }
+    }
+    if (i == ARRAY_SIZE(impdef.sysregs)) { return -1; }
+    impdef.sysregs[i] = sysreg;
+    qatomic_store_release(&impdef.count, i + 1);
+    return APPLE_VIRT_VREG_MAX + i;
+}
+
+bool apple_virt_hvc_impdef(uint16_t imm, uint32_t* op0, uint32_t* op1, uint32_t* crn, uint32_t* crm, uint32_t* op2)
+{
+    int      vreg = APPLE_VIRT_HVC_VREG(imm);
+    uint32_t sysreg;
+
+    if (!(imm & APPLE_VIRT_HVC_SYSREG) || vreg < APPLE_VIRT_VREG_MAX
+        || vreg - APPLE_VIRT_VREG_MAX >= qatomic_load_acquire(&impdef.count))
+    {
+        return false;
+    }
+    sysreg = impdef.sysregs[vreg - APPLE_VIRT_VREG_MAX];
+    *op0   = extract32(sysreg, 14, 2);
+    *op1   = extract32(sysreg, 11, 3);
+    *crn   = extract32(sysreg, 7, 4);
+    *crm   = extract32(sysreg, 3, 4);
+    *op2   = extract32(sysreg, 0, 3);
+    return true;
+}
+
 bool apple_virt_handle_hvc_fast(CPUState* cs, uint16_t imm)
 {
     CPUARMState*  env = cpu_env(cs);
     AppleVirtCPU* c   = virt_cpu(cs);
 
+    // Only a lower-EL IRQ of a managed vCPU has anything to do.
+    if (imm == APPLE_VIRT_HVC_IRQ_ENTRY || (imm == APPLE_VIRT_HVC_IRQ_LOWER && !c->managed)) { return true; }
     if (!c->managed || cs->vcpu_dirty) { return false; }
 
     if (imm == APPLE_VIRT_HVC_RESUME) {
@@ -1222,6 +1268,10 @@ bool apple_virt_handle_hvc_fast(CPUState* cs, uint16_t imm)
     }
     if (imm == APPLE_VIRT_HVC_LOWER_ENTRY) {
         if (virt_el0_sprr_fast(cs, env, c)) { return true; }
+        pac_load(cs, env, c, 1);
+        return true;
+    }
+    if (imm == APPLE_VIRT_HVC_IRQ_LOWER) {
         pac_load(cs, env, c, 1);
         return true;
     }
@@ -1310,6 +1360,8 @@ bool apple_virt_handle_hvc(CPUState* cs, uint16_t imm)
 
     switch (imm) {
         case APPLE_VIRT_HVC_LOWER_ENTRY:
+        case APPLE_VIRT_HVC_IRQ_ENTRY  :
+        case APPLE_VIRT_HVC_IRQ_LOWER:
             // The keys of the new EL are installed when the state is put.
             return true;
         case APPLE_VIRT_HVC_ERET: {
@@ -1739,6 +1791,10 @@ static GXFFaultResult gxf_write_fault(CPUState* cs, uint64_t va, hwaddr ipa)
     if (c->nr_step_pages == 0 && st.host != NULL && gxf_try_emulate(&st, p)) { return GXF_FAULT_HANDLED; }
     if (st.live) { return GXF_FAULT_NEEDS_SYNC; }
 
+    if (virt.ops->trap_debug == NULL) {
+        error_report("apple-virt: can't step over an unemulated store to a page table at 0x%" PRIx64, env->pc);
+        abort();
+    }
     warn_report_once("apple-virt: stepping over an unemulated store at 0x%" PRIx64, env->pc);
 
     // Let the store through while it is stepped.

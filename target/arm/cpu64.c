@@ -30,6 +30,7 @@
 #include "system/tcg.h"
 #include "kvm_arm.h"
 #include "hvf_arm.h"
+#include "whpx_arm.h"
 #include "qapi/visitor.h"
 #include "hw/qdev-properties.h"
 #include "internals.h"
@@ -653,6 +654,9 @@ static void aarch64_host_initfn(Object* obj)
     ARMCPU* cpu = ARM_CPU(obj);
     hvf_arm_set_cpu_features_from_host(cpu);
     aarch64_add_pauth_properties(obj);
+#elif defined(CONFIG_WHPX)
+    whpx_arm_set_cpu_features_from_host(ARM_CPU(obj));
+    aarch64_add_pauth_properties(obj);
 #else
     assert_not_reached();
 #endif
@@ -688,7 +692,7 @@ static void aarch64_apple_gxf_initfn(Object* obj)
 static const ARMCPUInfo aarch64_cpus[] = {
     {.name = "max", .initfn = aarch64_max_initfn},
     {.name = "apple-gxf", .initfn = aarch64_apple_gxf_initfn},
-#if defined(CONFIG_KVM) || defined(CONFIG_HVF)
+#if defined(CONFIG_KVM) || defined(CONFIG_HVF) || defined(CONFIG_WHPX)
     {.name = "host", .initfn = aarch64_host_initfn},
 #endif
 };

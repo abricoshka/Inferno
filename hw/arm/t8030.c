@@ -1039,8 +1039,9 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
         }
 
         if (t8030->cpus[i]->cpu_id == 0) { apple_dt_set_prop_str(child, "state", "running"); }
-        apple_dt_set_prop_u64(child, "timebase-frequency", 24000000);
-        apple_dt_set_prop_u64(child, "fixed-frequency", 24000000);
+        // The host's under a hardware accelerator; the watchdog's clock (`fixed-frequency`) has to match it.
+        apple_dt_set_prop_u64(child, "timebase-frequency", ARM_CPU(t8030->cpus[i])->gt_cntfrq_hz);
+        apple_dt_set_prop_u64(child, "fixed-frequency", ARM_CPU(t8030->cpus[i])->gt_cntfrq_hz);
         apple_dt_set_prop_u64(child, "peripheral-frequency", 24000000);
         apple_dt_set_prop_u64(child, "memory-frequency", 24000000);
         apple_dt_set_prop_u64(child, "bus-frequency", 24000000);
@@ -1198,6 +1199,7 @@ static void t8030_memory_setup(AppleT8030MachineState* t8030)
 
         seprom_range = ck_patcher_range_from_ptr("seprom", seprom, fsize);
         ck_sep_seprom_patches(seprom_range);
+        if (hwaccel_enabled()) { ck_patch_virt_unmanaged(seprom_range, SEPROM_BASE); }
 
         address_space_rw(&address_space_memory, SEPROM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t*)seprom, fsize, true);
 
@@ -2474,6 +2476,7 @@ static void t8030_init(MachineState* machine)
     sysbus_connect_irq(sbd, 4, t8030_irq(t8030, 0x1A6));
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_WDT));
+    qdev_prop_set_uint64(DEVICE(sbd), "cntfrq", ARM_CPU(t8030->cpus[0])->gt_cntfrq_hz);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, 0x23D2B0000);
     sysbus_mmio_map(sbd, 1, 0x23D2B8020);

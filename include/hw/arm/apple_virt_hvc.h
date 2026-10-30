@@ -20,10 +20,12 @@
 #pragma once
 
 /*
- * Hardware accelerators can't apply SPRR or Apple's PAC keys or trap GXF, so
- * the GXF transitions, GXF/SPRR/MMU/PAC register accesses, ASID invalidations,
- * lower-EL exception entries and exception returns of the monitors and the
- * kernel are rewritten to `hvc` with this immediate (after m1n1):
+ * Hardware accelerators can't apply SPRR or Apple's PAC keys or trap GXF, and
+ * not all of them trap IMPLEMENTATION DEFINED registers to the host, so the GXF
+ * transitions, IMPLEMENTATION DEFINED and MMU/PAC register accesses, ASID
+ * invalidations, lower-EL exception entries and exception returns of the
+ * monitors and the kernel are rewritten to `hvc` with this immediate (after
+ * m1n1):
  *   [15]    0 = control, 1 = system register access
  *   control:
  *     0x1420 | imm5   genter
@@ -32,8 +34,12 @@
  *     0x1320 | Xt     tlbi aside1{,is,os}{,nxs}, Xt
  *     0x1340          exception entry from a lower EL, the vector's first instruction
  *     0x1341          eret
+ *     0x1342          IRQ from the current EL, the vector's first instruction; the host takes the FIQ vector instead
+ *                     if it's for a FIQ
+ *     0x1343          IRQ from a lower EL, like 0x1342
  *   system register:
- *     [14:6]  AppleVirtVReg
+ *     [14:6]  AppleVirtVReg, or above APPLE_VIRT_VREG_MAX one the accelerator
+ *             emulates, from `apple_virt_impdef_vreg`
  *     [5]     1 = mrs, 0 = msr
  *     [4:0]   Xt
  */
@@ -49,6 +55,8 @@
 #define APPLE_VIRT_HVC_TLBI_ASID_MASK 0xFFE0
 #define APPLE_VIRT_HVC_LOWER_ENTRY    0x1340
 #define APPLE_VIRT_HVC_ERET           0x1341
+#define APPLE_VIRT_HVC_IRQ_ENTRY      0x1342
+#define APPLE_VIRT_HVC_IRQ_LOWER      0x1343
 
 typedef enum
 {
@@ -84,12 +92,14 @@ typedef enum
     APPLE_VIRT_VREG_APDBKEYHI_EL1,
     APPLE_VIRT_VREG_APGAKEYLO_EL1,
     APPLE_VIRT_VREG_APGAKEYHI_EL1,
-    // Not rewritten by the patcher, as they trap anyway.
+    // Only rewritten by the patcher if the accelerator doesn't trap them.
     APPLE_VIRT_VREG_APCTL_EL1,
     APPLE_VIRT_VREG_KERNKEYLO_EL1,
     APPLE_VIRT_VREG_KERNKEYHI_EL1,
     APPLE_VIRT_VREG_MAX,
 } AppleVirtVReg;
+
+#define APPLE_VIRT_VREG_LIMIT (APPLE_VIRT_HVC_VREG(~0) + 1)
 
 #define APPLE_VIRT_SYSREG(op0, op1, crn, crm, op2) (((op0) << 14) | ((op1) << 11) | ((crn) << 7) | ((crm) << 3) | (op2))
 
@@ -135,3 +145,14 @@ static inline int apple_virt_vreg(uint32_t op0, uint32_t op1, uint32_t crn, uint
         default                               : return -1;
     }
 }
+
+/// Whether FIQs arrive as IRQs, so the patcher has the IRQ vectors ask the host which they are.
+bool apple_virt_gic_interrupts(void);
+/// Whether the patcher rewrites every access to an IMPLEMENTATION DEFINED register, as the accelerator doesn't trap
+/// them.
+bool apple_virt_rewrites_impdef(void);
+/// The vreg for IMPLEMENTATION DEFINED `sysreg` (an `APPLE_VIRT_SYSREG`) when GXF/PAC emulation doesn't handle it,
+/// whose accesses the accelerator emulates; -1 if there are too many such registers.
+int apple_virt_impdef_vreg(uint32_t sysreg);
+/// The register an `hvc` from `apple_virt_impdef_vreg` accesses; returns false if `imm` isn't one.
+bool apple_virt_hvc_impdef(uint16_t imm, uint32_t* op0, uint32_t* op1, uint32_t* crn, uint32_t* crm, uint32_t* op2);

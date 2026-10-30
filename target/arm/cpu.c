@@ -42,6 +42,7 @@
 #include "system/tcg.h"
 #include "system/hw_accel.h"
 #include "kvm_arm.h"
+#include "whpx_arm.h"
 #include "fpu/softfloat.h"
 #include "cpregs.h"
 #include "target/arm/cpu-qom.h"
@@ -671,6 +672,9 @@ static void arm_cpu_initfn(Object* obj)
          * them to maintain the same interface as non-KVM CPUs.
          */
         qdev_init_gpio_in(DEVICE(cpu), arm_cpu_kvm_set_irq, 6);
+    }
+    else if (whpx_enabled()) {
+        qdev_init_gpio_in(DEVICE(cpu), whpx_arm_set_irq, 6);
     }
     else {
         qdev_init_gpio_in(DEVICE(cpu), arm_cpu_set_irq, 6);

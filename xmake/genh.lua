@@ -115,7 +115,7 @@ target("genh")
 	add_configfiles("../configs/config-target.h.in", {filename = inferno_target .. "-config-target.h"})
 	add_configfiles("../configs/config-devices.h.in", {filename = inferno_target .. "-config-devices.h"})
 
-	add_options("tcg", "tcg_interpreter", "hvf", "kvm", "debug_tcg", "debug_mutex", "debug_graph_lock",
+	add_options("tcg", "tcg_interpreter", "hvf", "kvm", "whpx", "debug_tcg", "debug_mutex", "debug_graph_lock",
 		"debug_stack_usage", "qom_cast_debug", "coroutine_pool", "membarrier",
 		"__io_prep_pwritev2", "__rbd_namespace_exists")
 	add_options(table.unpack(inferno_devices))

@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "hw/watchdog/apple_wdt.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
@@ -239,10 +240,19 @@ static void apple_wdt_init(Object* obj)
     sysbus_init_irq(sbd, &s->irqs[0]);
     sysbus_init_irq(sbd, &s->irqs[1]);
 
-    s->cntfrq_hz     = WDOG_CNTFRQ_HZ;
-    s->cnt_period_ns = wdog_cntfrq_period_ns(s);
-    s->timer         = timer_new_ns(QEMU_CLOCK_VIRTUAL, wdt_update, s);
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, wdt_update, s);
 }
+
+static void apple_wdt_realize(DeviceState* dev, Error** errp)
+{
+    AppleWDTState* s = APPLE_WDT(dev);
+
+    s->cnt_period_ns = wdog_cntfrq_period_ns(s);
+}
+
+static const Property apple_wdt_properties[] = {
+    DEFINE_PROP_UINT64("cntfrq", AppleWDTState, cntfrq_hz, WDOG_CNTFRQ_HZ),
+};
 
 static void apple_wdt_class_init(ObjectClass* klass, const void* data)
 {
@@ -251,8 +261,10 @@ static void apple_wdt_class_init(ObjectClass* klass, const void* data)
 
     rc->phases.enter = apple_wdt_reset_enter;
 
+    dc->realize   = apple_wdt_realize;
     dc->unrealize = apple_wdt_unrealize;
     dc->desc      = "Apple Watch Dog Timer";
+    device_class_set_props(dc, apple_wdt_properties);
     set_bit(DEVICE_CATEGORY_WATCHDOG, dc->categories);
 }
 

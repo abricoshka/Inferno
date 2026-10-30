@@ -2,6 +2,7 @@
 
 ${define CONFIG_HVF}
 ${define CONFIG_KVM}
+${define CONFIG_WHPX}
 #define CONFIG_SOFTMMU 1
 #define CONFIG_SYSTEM_ONLY 1
 ${define CONFIG_TCG}
