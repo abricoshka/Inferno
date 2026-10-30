@@ -38,12 +38,19 @@
 #include "qapi/visitor.h"
 #include "qemu/log.h"
 #include "target/arm/gtimer.h"
+#include "qemu/units.h"
+#include "accel/accel-private.h"
+#include "cpregs.h"
+#include "syndrome.h"
+#include "emulate/aarch64.h"
+#include "apple-virt.h"
 
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {KVM_CAP_INFO(DEVICE_CTRL), KVM_CAP_LAST_INFO};
 
 static bool cap_has_mp_state;
 static bool cap_has_inject_serror_esr;
 static bool cap_has_inject_ext_dabt;
+static bool cap_has_writable_imp_id_regs;
 
 /**
  * ARMHostCPUFeatures: information about the host CPU (identified
@@ -58,6 +65,39 @@ typedef struct ARMHostCPUFeatures
 } ARMHostCPUFeatures;
 
 static ARMHostCPUFeatures arm_host_cpu_features;
+
+#define ARM_CPU_ID_MIDR  3, 0, 0, 0, 0
+#define ARM_CPU_ID_MPIDR 3, 0, 0, 0, 5
+#define ARM_CPU_ID_CLIDR 3, 1, 0, 0, 1
+// Separate L1 caches and a unified L2. sepOS spins on an L1 without a data cache, which is what KVM shows a host that
+// doesn't need data cache cleaning to the PoU (CTR_EL0.IDC).
+#define KVM_CLIDR 0x0A200023ULL
+
+/*
+ * KVM's GIC-less IRQ and FIQ injection doesn't work under every hypervisor (Apple's nested virtualization), so
+ * interrupts go through an in-kernel GICv3 that QEMU configures: each vCPU's IRQ line is a Group 1 SPI and its FIQ
+ * line a Group 0 one, routed to it. Group 0 is signalled as FIQ. The timers bypass the GIC, so they reach the
+ * machine's wiring through `device_irq_level` as without one (KVM_CAP_ARM_TIMER_TO_USER).
+ */
+// The GIC sits at the top of the IPA space, out of the machine's way.
+#define KVM_GIC_SIZE       (16 * MiB)
+#define KVM_GICR_OFFSET    0x100000
+#define KVM_GICD_CTLR      0x0000
+#define KVM_GICD_IGROUPR   0x0080
+#define KVM_GICD_ISENABLER 0x0100
+#define KVM_GICD_ICFGR     0x0C00
+#define KVM_GICD_IROUTER   0x6000
+// A vCPU's IRQ line, and its FIQ line after it.
+#define KVM_INTID_LINES(cs) (32 + 2 * (cs)->cpu_index)
+
+static hwaddr kvm_gic_base;
+static int    kvm_gic_fd;
+
+#define AARCH64_CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
+
+#define AARCH64_SIMD_CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U128 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
+
+#define AARCH64_SIMD_CTRL_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U32 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
 
 /**
  * kvm_arm_vcpu_init:
@@ -467,6 +507,27 @@ int kvm_arch_get_default_type(MachineState* ms)
 int kvm_arch_init(MachineState* ms, KVMState* s)
 {
     int ret = 0;
+
+    if (!kvm_check_extension(s, KVM_CAP_ARM_HVC_TO_USER) || !kvm_check_extension(s, KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER)
+        || !kvm_check_extension(s, KVM_CAP_ARM_FAULT_TO_USER) || !kvm_check_extension(s, KVM_CAP_ARM_TIMER_TO_USER))
+    {
+        error_report("KVM: the host kernel can't take HVCs, IMPLEMENTATION DEFINED register accesses, page table "
+                     "stores and timer outputs to userspace");
+        return -ENOTSUP;
+    }
+    // GXF emulation write-protects 16 KiB guest pages.
+    if (qemu_real_host_page_size() > 16 * KiB) {
+        error_report("KVM: the host's pages are larger than 16 KiB");
+        return -ENOTSUP;
+    }
+    if (kvm_vm_enable_cap(s, KVM_CAP_ARM_HVC_TO_USER, 0) || kvm_vm_enable_cap(s, KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER, 0)
+        || kvm_vm_enable_cap(s, KVM_CAP_ARM_FAULT_TO_USER, 0) || kvm_vm_enable_cap(s, KVM_CAP_ARM_TIMER_TO_USER, 0))
+    {
+        error_report("KVM: can't enable the HVC, IMPLEMENTATION DEFINED register, fault and timer exits");
+        return -EINVAL;
+    }
+    cap_has_writable_imp_id_regs = kvm_check_extension(s, KVM_CAP_ARM_WRITABLE_IMP_ID_REGS)
+                                   && kvm_vm_enable_cap(s, KVM_CAP_ARM_WRITABLE_IMP_ID_REGS, 0) == 0;
     /* For ARM interrupt delivery is always asynchronous. */
     kvm_async_interrupts_allowed = true;
 
@@ -767,6 +828,9 @@ bool write_list_to_kvmstate(ARMCPU* cpu, int level)
     return ok;
 }
 
+// The machine's MPIDR_EL1, which KVM_ARM_VCPU_INIT resets to its own, like CLIDR_EL1.
+static uint64_t kvm_arm_mpidr(ARMCPU* cpu) { return cpu->mp_affinity | (1ULL << 31); }
+
 void kvm_arm_reset_vcpu(ARMCPU* cpu)
 {
     int ret;
@@ -783,6 +847,8 @@ void kvm_arm_reset_vcpu(ARMCPU* cpu)
         fprintf(stderr, "write_kvmstate_to_list failed\n");
         abort();
     }
+    *kvm_arm_get_cpreg_ptr(cpu, ARM64_SYS_REG(ARM_CPU_ID_MPIDR)) = kvm_arm_mpidr(cpu);
+    *kvm_arm_get_cpreg_ptr(cpu, ARM64_SYS_REG(ARM_CPU_ID_CLIDR)) = KVM_CLIDR;
     /*
      * Sync the reset values also into the CPUState. This is necessary
      * because the next thing we do will be a kvm_arch_put_registers()
@@ -1164,16 +1230,185 @@ static bool kvm_arm_handle_debug(ARMCPU* cpu, struct kvm_debug_exit_arch* debug_
     return false;
 }
 
+// Xt of the vCPU, wherever its state is.
+static uint64_t kvm_arm_get_xreg(CPUState* cs, int rt)
+{
+    uint64_t value;
+
+    if (rt == 31) { return 0; }
+    if (cs->vcpu_dirty) { return cpu_env(cs)->xregs[rt]; }
+    if (kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.regs[rt]), &value)) { abort(); }
+    return value;
+}
+
+static void kvm_arm_set_xreg(CPUState* cs, int rt, uint64_t value)
+{
+    if (rt == 31) { return; }
+    if (cs->vcpu_dirty) { cpu_env(cs)->xregs[rt] = value; }
+    else if (kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.regs[rt]), &value)) {
+        abort();
+    }
+}
+
+static int kvm_arm_current_el(CPUState* cs)
+{
+    uint64_t pstate;
+
+    if (cs->vcpu_dirty) { return arm_current_el(cpu_env(cs)); }
+    if (kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.pstate), &pstate)) { abort(); }
+    return extract64(pstate, 2, 2);
+}
+
+static void kvm_arm_advance_pc(CPUState* cs)
+{
+    uint64_t pc;
+
+    if (cs->vcpu_dirty) {
+        cpu_env(cs)->pc += 4;
+        return;
+    }
+    if (kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.pc), &pc)) { abort(); }
+    pc += 4;
+    if (kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.pc), &pc)) { abort(); }
+}
+
+static void kvm_arm_raise_exception(CPUState* cs, uint32_t excp, uint32_t syndrome, uint64_t vaddress)
+{
+    CPUARMState* env = cpu_env(cs);
+
+    kvm_cpu_synchronize_state(cs);
+    cs->exception_index      = excp;
+    env->exception.target_el = 1;
+    env->exception.syndrome  = syndrome;
+    env->exception.vaddress  = vaddress;
+    bql_lock();
+    arm_cpu_do_interrupt(cs);
+    bql_unlock();
+}
+
+// Emulates the load or store at the PC through the vCPU's address space.
+static int kvm_arm_emulate_access(CPUState* cs)
+{
+    if (!arm_aarch64_fallback_emu_single(cs, cs->as, kvm_arm_get_xreg, kvm_arm_set_xreg)) {
+        error_report("KVM: can't decode the access at 0x%" PRIx64, cpu_env(cs)->pc);
+        return -1;
+    }
+    kvm_arm_advance_pc(cs);
+    return 0;
+}
+
+static int kvm_arm_handle_hvc(CPUState* cs, uint16_t imm)
+{
+    if (apple_virt_handle_hvc_fast(cs, imm)) { return 0; }
+    kvm_cpu_synchronize_state(cs);
+    if (apple_virt_handle_hvc(cs, imm)) { return 0; }
+
+    // The guest's own: there's no EL2 for it.
+    cpu_env(cs)->pc -= 4;
+    kvm_arm_raise_exception(cs, EXCP_UDEF, syn_uncategorized(), 0);
+    return 0;
+}
+
+static int kvm_arm_handle_impdef(CPUState* cs, uint64_t iss)
+{
+    ARMCPU*             cpu  = ARM_CPU(cs);
+    CPUARMState*        env  = &cpu->env;
+    bool                read = iss & 1;
+    uint32_t            rt   = extract64(iss, 5, 5);
+    uint32_t            op0  = extract64(iss, 20, 2);
+    uint32_t            op1  = extract64(iss, 14, 3);
+    uint32_t            crn  = extract64(iss, 10, 4);
+    uint32_t            crm  = extract64(iss, 1, 4);
+    uint32_t            op2  = extract64(iss, 17, 3);
+    const ARMCPRegInfo* ri;
+    uint64_t            value;
+
+    if (apple_virt_handle_sysreg_fast(cs, op0, op1, crn, crm, op2, read, rt)) {
+        kvm_arm_advance_pc(cs);
+        return 0;
+    }
+
+    ri = ARMCPRegTable_cget(cpu->cp_regs, ENCODE_AA64_CP_REG(CP_REG_ARM64_SYSREG_CP, crn, crm, op0, op1, op2));
+    // Registers that are plain fields of `env` or backed by a device don't depend on the rest of the vCPU's state.
+    if (ri == NULL || ri->accessfn != NULL || (ri->type & ARM_CP_SPECIAL_MASK)
+        || !(read || ri->writefn == NULL || (ri->type & ARM_CP_IO)))
+    {
+        kvm_cpu_synchronize_state(cs);
+    }
+    if (ri == NULL) {
+        qemu_log_mask(LOG_UNIMP, "KVM: CPU %d at 0x%" PRIx64 ": unknown register S%u_%u_C%u_C%u_%u\n", cs->cpu_index,
+                      env->pc, op0, op1, crn, crm, op2);
+    }
+    if (ri == NULL || !cp_access_ok(kvm_arm_current_el(cs), ri, read)
+        || (ri->accessfn != NULL && ri->accessfn(env, ri, read) != CP_ACCESS_OK))
+    {
+        kvm_arm_raise_exception(cs, EXCP_UDEF, syn_uncategorized(), 0);
+        return 0;
+    }
+
+    BQL_LOCK_GUARD_IF(ri->type & ARM_CP_IO);
+    if (read) {
+        if (ri->type & ARM_CP_CONST) { value = ri->resetvalue; }
+        else if (ri->readfn != NULL) {
+            value = ri->readfn(env, ri);
+        }
+        else {
+            value = raw_read(env, ri);
+        }
+        kvm_arm_set_xreg(cs, rt, value);
+    }
+    else if (!(ri->type & ARM_CP_CONST)) {
+        value = kvm_arm_get_xreg(cs, rt);
+        if (ri->writefn != NULL) { ri->writefn(env, ri, value); }
+        else {
+            raw_write(env, ri, value);
+        }
+        if (apple_virt_sysreg_written(cs, op0, op1, crn, crm, op2)) { return 0; }
+    }
+    kvm_arm_advance_pc(cs);
+    return 0;
+}
+
+static int kvm_arm_handle_fault(CPUState* cs, uint64_t flags, uint64_t esr, uint64_t gva, uint64_t gpa)
+{
+    bool gva_valid = flags & KVM_EXIT_ARM_FAULT_FLAG_GVA_VALID;
+
+    if (syn_get_ec(esr) == EC_INSNABORT) {
+        if (accel_private_map_page(cs->as, gpa, false)) { return 0; }
+        error_report("KVM: CPU %d executed unmapped memory at 0x%" PRIx64 " (0x%" PRIx64 ")", cs->cpu_index, gva, gpa);
+        kvm_cpu_synchronize_state(cs);
+        kvm_arm_raise_exception(cs, EXCP_PREFETCH_ABORT, syn_insn_abort(arm_current_el(cpu_env(cs)) == 1, 1, 0, 0x10),
+                                gva);
+        return 0;
+    }
+
+    // A store to a write-protected guest page table.
+    if (gva_valid && apple_virt_handle_write_fault(cs, gva, gpa)) { return 0; }
+    // Or one by the SEP, which GXF emulation doesn't manage.
+    return kvm_arm_emulate_access(cs);
+}
+
 int kvm_arch_handle_exit(CPUState* cs, struct kvm_run* run)
 {
     ARMCPU* cpu = ARM_CPU(cs);
     int     ret = 0;
 
     switch (run->exit_reason) {
+        case KVM_EXIT_HYPERCALL : ret = kvm_arm_handle_hvc(cs, run->hypercall.nr); break;
+        case KVM_EXIT_ARM_SYSREG: ret = kvm_arm_handle_impdef(cs, run->arm_sysreg.esr_iss); break;
+        case KVM_EXIT_ARM_FAULT:
+            ret = kvm_arm_handle_fault(cs, run->arm_fault.flags, run->arm_fault.esr, run->arm_fault.gva,
+                                       run->arm_fault.gpa);
+            break;
         case KVM_EXIT_DEBUG:
+            if (apple_virt_handle_step(cs)) { break; }
             if (kvm_arm_handle_debug(cpu, &run->debug.arch)) { ret = EXCP_DEBUG; } /* otherwise return to guest */
             break;
         case KVM_EXIT_ARM_NISV:
+            if (accel_private_map_page(cs->as, run->arm_nisv.fault_ipa, extract64(run->arm_nisv.esr_iss, 6, 1))) {
+                break;
+            }
+            if (kvm_arm_emulate_access(cs) == 0) { break; }
             /* External DABT with no valid iss to decode */
             ret = kvm_arm_handle_dabt_nisv(cpu, run->arm_nisv.esr_iss, run->arm_nisv.fault_ipa);
             break;
@@ -1509,14 +1744,12 @@ static int kvm_arm_sve_set_vls(ARMCPU* cpu)
     return kvm_set_one_reg(CPU(cpu), KVM_REG_ARM64_SVE_VLS, &vls[0]);
 }
 
-#define ARM_CPU_ID_MPIDR 3, 0, 0, 0, 5
-
 int kvm_arch_pre_create_vcpu(CPUState* cpu, Error** errp) { return 0; }
 
 int kvm_arch_init_vcpu(CPUState* cs)
 {
     int          ret;
-    uint64_t     mpidr;
+    uint64_t     mpidr, clidr;
     ARMCPU*      cpu = ARM_CPU(cs);
     CPUARMState* env = &cpu->env;
 
@@ -1552,13 +1785,19 @@ int kvm_arch_init_vcpu(CPUState* cs)
         if (ret) { return ret; }
     }
 
-    /*
-     * Currently KVM has its own idea about MPIDR assignment, so we
-     * override our defaults with what we get from KVM.
-     */
-    ret = kvm_get_one_reg(cs, ARM64_SYS_REG(ARM_CPU_ID_MPIDR), &mpidr);
+    // MIDR_EL1 is the VM's, not the vCPU's.
+    if (cap_has_writable_imp_id_regs && cs->cpu_index == 0) {
+        ret = kvm_set_one_reg(cs, ARM64_SYS_REG(ARM_CPU_ID_MIDR), &cpu->midr);
+        if (ret) { return ret; }
+    }
+    mpidr = kvm_arm_mpidr(cpu);
+    ret   = kvm_set_one_reg(cs, ARM64_SYS_REG(ARM_CPU_ID_MPIDR), &mpidr);
     if (ret) { return ret; }
-    cpu->mp_affinity = mpidr & ARM64_AFFINITY_MASK;
+    clidr = KVM_CLIDR;
+    ret   = kvm_set_one_reg(cs, ARM64_SYS_REG(ARM_CPU_ID_CLIDR), &clidr);
+    if (ret) { return ret; }
+
+    __asm__("mrs %0, cntfrq_el0" : "=r"(cpu->gt_cntfrq_hz));
 
     return kvm_arm_init_cpreg_list(cpu);
 }
@@ -1587,12 +1826,6 @@ static void kvm_inject_arm_sea(CPUState* c)
 
     arm_cpu_do_interrupt(c);
 }
-
-#define AARCH64_CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
-
-#define AARCH64_SIMD_CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U128 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
-
-#define AARCH64_SIMD_CTRL_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U32 | KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
 
 static int kvm_arch_put_fpsimd(CPUState* cs)
 {
@@ -1648,7 +1881,7 @@ static int kvm_arch_put_sve(CPUState* cs)
 
 int kvm_arch_put_registers(CPUState* cs, int level, Error** errp)
 {
-    uint64_t     val;
+    uint64_t     val, sp_el1, elr, spsr[KVM_NR_SPSR];
     uint32_t     fpr;
     int          i, ret;
     unsigned int el;
@@ -1671,10 +1904,29 @@ int kvm_arch_put_registers(CPUState* cs, int level, Error** errp)
      */
     aarch64_save_sp(env, 1);
 
+    /* Saved Program State Registers
+     *
+     * Before we restore from the banked_spsr[] array we need to
+     * ensure that any modifications to env->spsr are correctly
+     * reflected in the banks.
+     */
+    el = arm_current_el(env);
+    if (el > 0 && !is_a64(env)) {
+        i                   = bank_number(env->uncached_cpsr & CPSR_M);
+        env->banked_spsr[i] = env->spsr;
+    }
+
+    apple_virt_sync_begin(cs);
+    sp_el1 = env->sp_el[1];
+    elr    = env->elr_el[1];
+    memcpy(spsr, &env->banked_spsr[1], sizeof(spsr));
+    write_cpustate_to_list(cpu, true);
+    apple_virt_sync_end(cs);
+
     ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.sp), &env->sp_el[0]);
     if (ret) { return ret; }
 
-    ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(sp_el1), &env->sp_el[1]);
+    ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(sp_el1), &sp_el1);
     if (ret) { return ret; }
 
     /* Note that KVM thinks pstate is 64 bit but we use a uint32_t */
@@ -1688,24 +1940,12 @@ int kvm_arch_put_registers(CPUState* cs, int level, Error** errp)
     ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.pc), &env->pc);
     if (ret) { return ret; }
 
-    ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(elr_el1), &env->elr_el[1]);
+    ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(elr_el1), &elr);
     if (ret) { return ret; }
-
-    /* Saved Program State Registers
-     *
-     * Before we restore from the banked_spsr[] array we need to
-     * ensure that any modifications to env->spsr are correctly
-     * reflected in the banks.
-     */
-    el = arm_current_el(env);
-    if (el > 0 && !is_a64(env)) {
-        i                   = bank_number(env->uncached_cpsr & CPSR_M);
-        env->banked_spsr[i] = env->spsr;
-    }
 
     /* KVM 0-4 map to QEMU banks 1-5 */
     for (i = 0; i < KVM_NR_SPSR; i++) {
-        ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(spsr[i]), &env->banked_spsr[i + 1]);
+        ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(spsr[i]), &spsr[i]);
         if (ret) { return ret; }
     }
 
@@ -1722,8 +1962,6 @@ int kvm_arch_put_registers(CPUState* cs, int level, Error** errp)
     fpr = vfp_get_fpcr(env);
     ret = kvm_set_one_reg(cs, AARCH64_SIMD_CTRL_REG(fp_regs.fpcr), &fpr);
     if (ret) { return ret; }
-
-    write_cpustate_to_list(cpu, true);
 
     if (!write_list_to_kvmstate(cpu, level)) { return -EINVAL; }
 
@@ -1795,7 +2033,7 @@ static int kvm_arch_get_sve(CPUState* cs)
 
 int kvm_arch_get_registers(CPUState* cs, Error** errp)
 {
-    uint64_t     val;
+    uint64_t     val, sp_el1, elr, spsr[KVM_NR_SPSR];
     unsigned int el;
     uint32_t     fpr;
     int          i, ret;
@@ -1811,7 +2049,7 @@ int kvm_arch_get_registers(CPUState* cs, Error** errp)
     ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.sp), &env->sp_el[0]);
     if (ret) { return ret; }
 
-    ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(sp_el1), &env->sp_el[1]);
+    ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(sp_el1), &sp_el1);
     if (ret) { return ret; }
 
     ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.pstate), &val);
@@ -1823,11 +2061,6 @@ int kvm_arch_get_registers(CPUState* cs, Error** errp)
         cpsr_write(env, val, 0xffffffff, CPSRWriteRaw);
     }
 
-    /* KVM puts SP_EL0 in regs.sp and SP_EL1 in regs.sp_el1. On the
-     * QEMU side we keep the current SP in xregs[31] as well.
-     */
-    aarch64_restore_sp(env, 1);
-
     ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.pc), &env->pc);
     if (ret) { return ret; }
 
@@ -1838,7 +2071,7 @@ int kvm_arch_get_registers(CPUState* cs, Error** errp)
      */
     if (!is_a64(env)) { aarch64_sync_64_to_32(env); }
 
-    ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(elr_el1), &env->elr_el[1]);
+    ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(elr_el1), &elr);
     if (ret) { return ret; }
 
     /* Fetch the SPSR registers
@@ -1846,9 +2079,29 @@ int kvm_arch_get_registers(CPUState* cs, Error** errp)
      * KVM SPSRs 0-4 map to QEMU banks 1-5
      */
     for (i = 0; i < KVM_NR_SPSR; i++) {
-        ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(spsr[i]), &env->banked_spsr[i + 1]);
+        ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(spsr[i]), &spsr[i]);
         if (ret) { return ret; }
     }
+
+    ret = kvm_get_vcpu_events(cpu);
+    if (ret) { return ret; }
+
+    if (!write_kvmstate_to_list(cpu)) { return -EINVAL; }
+
+    apple_virt_sync_begin(cs);
+    env->sp_el[1]  = sp_el1;
+    env->elr_el[1] = elr;
+    memcpy(&env->banked_spsr[1], spsr, sizeof(spsr));
+    /* Note that it's OK to have registers which aren't in CPUState,
+     * so we can ignore a failure return here.
+     */
+    write_list_to_cpustate(cpu);
+    apple_virt_sync_end(cs);
+
+    /* KVM puts SP_EL0 in regs.sp and SP_EL1 in regs.sp_el1. On the
+     * QEMU side we keep the current SP in xregs[31] as well.
+     */
+    aarch64_restore_sp(env, 1);
 
     el = arm_current_el(env);
     if (el > 0 && !is_a64(env)) {
@@ -1869,15 +2122,6 @@ int kvm_arch_get_registers(CPUState* cs, Error** errp)
     ret = kvm_get_one_reg(cs, AARCH64_SIMD_CTRL_REG(fp_regs.fpcr), &fpr);
     if (ret) { return ret; }
     vfp_set_fpcr(env, fpr);
-
-    ret = kvm_get_vcpu_events(cpu);
-    if (ret) { return ret; }
-
-    if (!write_kvmstate_to_list(cpu)) { return -EINVAL; }
-    /* Note that it's OK to have registers which aren't in CPUState,
-     * so we can ignore a failure return here.
-     */
-    write_list_to_cpustate(cpu);
 
     ret = kvm_arm_sync_mpstate_to_qemu(cpu);
 
@@ -1955,18 +2199,11 @@ void arm_cpu_kvm_set_irq(void* arm_cpu, int irq, int level)
     CPUARMState* env = &cpu->env;
     CPUState*    cs  = CPU(cpu);
     uint32_t     linestate_bit;
-    int          irq_id;
 
     switch (irq) {
-        case ARM_CPU_IRQ:
-            irq_id        = KVM_ARM_IRQ_CPU_IRQ;
-            linestate_bit = CPU_INTERRUPT_HARD;
-            break;
-        case ARM_CPU_FIQ:
-            irq_id        = KVM_ARM_IRQ_CPU_FIQ;
-            linestate_bit = CPU_INTERRUPT_FIQ;
-            break;
-        default: assert_not_reached();
+        case ARM_CPU_IRQ: linestate_bit = CPU_INTERRUPT_HARD; break;
+        case ARM_CPU_FIQ: linestate_bit = CPU_INTERRUPT_FIQ; break;
+        default         : assert_not_reached();
     }
 
     if (level) { qatomic_or(&env->irq_line_state, linestate_bit); }
@@ -1974,5 +2211,175 @@ void arm_cpu_kvm_set_irq(void* arm_cpu, int irq, int level)
         qatomic_and(&env->irq_line_state, ~linestate_bit);
     }
 
-    kvm_arm_set_irq(cs->cpu_index, KVM_ARM_IRQ_TYPE_CPU, irq_id, !!level);
+    kvm_arm_set_irq(0, KVM_ARM_IRQ_TYPE_SPI, KVM_INTID_LINES(cs) + (irq == ARM_CPU_FIQ), !!level);
+}
+
+static uint64_t kvm_virt_reg_id(AppleVirtReg reg)
+{
+    switch (reg) {
+        case APPLE_VIRT_REG_PC           : return AARCH64_CORE_REG(regs.pc);
+        case APPLE_VIRT_REG_CPSR         : return AARCH64_CORE_REG(regs.pstate);
+        case APPLE_VIRT_REG_SP_EL0       : return AARCH64_CORE_REG(regs.sp);
+        case APPLE_VIRT_REG_SP_EL1       : return AARCH64_CORE_REG(sp_el1);
+        case APPLE_VIRT_REG_TPIDR_EL1    : return ARM64_SYS_REG(3, 0, 13, 0, 4);
+        case APPLE_VIRT_REG_VBAR_EL1     : return ARM64_SYS_REG(3, 0, 12, 0, 0);
+        case APPLE_VIRT_REG_SPSR_EL1     : return AARCH64_CORE_REG(spsr[KVM_SPSR_EL1]);
+        case APPLE_VIRT_REG_ELR_EL1      : return AARCH64_CORE_REG(elr_el1);
+        case APPLE_VIRT_REG_ESR_EL1      : return ARM64_SYS_REG(3, 0, 5, 2, 0);
+        case APPLE_VIRT_REG_FAR_EL1      : return ARM64_SYS_REG(3, 0, 6, 0, 0);
+        case APPLE_VIRT_REG_SCTLR_EL1    : return ARM64_SYS_REG(3, 0, 1, 0, 0);
+        case APPLE_VIRT_REG_TCR_EL1      : return ARM64_SYS_REG(3, 0, 2, 0, 2);
+        case APPLE_VIRT_REG_TTBR0_EL1    : return ARM64_SYS_REG(3, 0, 2, 0, 0);
+        case APPLE_VIRT_REG_TTBR1_EL1    : return ARM64_SYS_REG(3, 0, 2, 0, 1);
+        case APPLE_VIRT_REG_APIAKEYLO_EL1: return ARM64_SYS_REG(3, 0, 2, 1, 0);
+        case APPLE_VIRT_REG_APIAKEYHI_EL1: return ARM64_SYS_REG(3, 0, 2, 1, 1);
+        case APPLE_VIRT_REG_APIBKEYLO_EL1: return ARM64_SYS_REG(3, 0, 2, 1, 2);
+        case APPLE_VIRT_REG_APIBKEYHI_EL1: return ARM64_SYS_REG(3, 0, 2, 1, 3);
+        case APPLE_VIRT_REG_APDAKEYLO_EL1: return ARM64_SYS_REG(3, 0, 2, 2, 0);
+        case APPLE_VIRT_REG_APDAKEYHI_EL1: return ARM64_SYS_REG(3, 0, 2, 2, 1);
+        case APPLE_VIRT_REG_APDBKEYLO_EL1: return ARM64_SYS_REG(3, 0, 2, 2, 2);
+        case APPLE_VIRT_REG_APDBKEYHI_EL1: return ARM64_SYS_REG(3, 0, 2, 2, 3);
+        case APPLE_VIRT_REG_APGAKEYLO_EL1: return ARM64_SYS_REG(3, 0, 2, 3, 0);
+        case APPLE_VIRT_REG_APGAKEYHI_EL1: return ARM64_SYS_REG(3, 0, 2, 3, 1);
+        default                          : assert_not_reached();
+    }
+}
+
+static uint64_t kvm_virt_get_xreg(CPUState* cs, int n)
+{
+    uint64_t value;
+
+    if (kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.regs[n]), &value)) { abort(); }
+    return value;
+}
+
+static void kvm_virt_set_xreg(CPUState* cs, int n, uint64_t value)
+{
+    if (kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.regs[n]), &value)) { abort(); }
+}
+
+static void kvm_virt_get_qreg(CPUState* cs, int n, uint64_t value[2])
+{
+    if (kvm_get_one_reg(cs, AARCH64_SIMD_CORE_REG(fp_regs.vregs[n]), value)) { abort(); }
+}
+
+static uint64_t kvm_virt_get_reg(CPUState* cs, AppleVirtReg reg)
+{
+    uint64_t value;
+
+    if (kvm_get_one_reg(cs, kvm_virt_reg_id(reg), &value)) { abort(); }
+    return value;
+}
+
+static void kvm_virt_set_reg(CPUState* cs, AppleVirtReg reg, uint64_t value)
+{
+    if (kvm_set_one_reg(cs, kvm_virt_reg_id(reg), &value)) { abort(); }
+}
+
+static bool kvm_virt_protect(hwaddr page, uint64_t size, bool writable)
+{
+    struct kvm_arm_write_protect wp = {
+        .gpa   = page,
+        .size  = size,
+        .flags = writable ? 0 : KVM_ARM_WRITE_PROTECT_ENABLE,
+    };
+
+    return kvm_vm_ioctl(kvm_state, KVM_ARM_SET_WRITE_PROTECT, &wp) == 0;
+}
+
+static void kvm_virt_map(void* host, hwaddr ipa, uint64_t size, bool exec) { kvm_map_ram(host, ipa, size, false); }
+
+static void kvm_virt_trap_debug(CPUState* cs, bool enable)
+{
+    struct kvm_guest_debug dbg = {0};
+
+    if (enable || cs->singlestep_enabled) { dbg.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP; }
+    kvm_arch_update_guest_debug(cs, &dbg);
+    if (kvm_vcpu_ioctl(cs, KVM_SET_GUEST_DEBUG, &dbg)) { abort(); }
+}
+
+static const AppleVirtOps kvm_apple_virt_ops = {
+    .get_xreg     = kvm_virt_get_xreg,
+    .set_xreg     = kvm_virt_set_xreg,
+    .get_qreg     = kvm_virt_get_qreg,
+    .get_reg      = kvm_virt_get_reg,
+    .set_reg      = kvm_virt_set_reg,
+    .protect      = kvm_virt_protect,
+    .map          = kvm_virt_map,
+    .trap_debug   = kvm_virt_trap_debug,
+    .traps_impdef = true,
+};
+
+static void kvm_gic_access(int group, uint64_t attr, void* value)
+{ kvm_device_access(kvm_gic_fd, group, attr, value, true, &error_fatal); }
+
+static uint64_t kvm_gic_mpidr_attr(uint64_t mpidr)
+{ return extract64(mpidr, 32, 8) << 56 | extract64(mpidr, 0, 24) << 32; }
+
+// The GIC's distributor or a redistributor register, or a CPU's ICC_* register; `mpidr` picks the CPU.
+static void kvm_gic_write(int group, uint64_t mpidr, uint64_t reg, uint64_t value)
+{
+    uint64_t attr    = kvm_gic_mpidr_attr(mpidr) | reg;
+    uint32_t value32 = value;
+
+    kvm_gic_access(group, attr, group == KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS ? (void*)&value : (void*)&value32);
+}
+
+// Enables the interrupts that are delivered to the vCPUs, which XNU doesn't do, once they all exist.
+static void kvm_gic_init(Notifier* notifier, void* data)
+{
+    uint32_t  nr_irqs;
+    CPUState* cs;
+
+    kvm_gic_access(KVM_DEV_ARM_VGIC_GRP_CTRL, KVM_DEV_ARM_VGIC_CTRL_INIT, NULL);
+    // ARE, EnableGrp1A, EnableGrp0.
+    kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_CTLR, (1 << 4) | (1 << 1) | (1 << 0));
+    kvm_device_access(kvm_gic_fd, KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0, &nr_irqs, false, &error_fatal);
+    // The IRQ lines, at even INTIDs.
+    for (uint32_t intid = 32; intid < nr_irqs; intid += 32) {
+        kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_IGROUPR + intid / 32 * 4, 0x55555555);
+    }
+    // Level-sensitive: nothing acknowledges them, so they're pending exactly while their line is high.
+    for (uint32_t intid = 32; intid < nr_irqs; intid += 16) {
+        kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_ICFGR + intid / 16 * 4, 0);
+    }
+    CPU_FOREACH (cs) {
+        uint64_t mpidr = ARM_CPU(cs)->mp_affinity;
+
+        for (uint32_t intid = KVM_INTID_LINES(cs); intid < KVM_INTID_LINES(cs) + 2; intid++) {
+            kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_ISENABLER + intid / 32 * 4, BIT(intid % 32));
+            kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_IROUTER + intid * 8, extract64(mpidr, 0, 24));
+            kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_DIST_REGS, 0, KVM_GICD_IROUTER + intid * 8 + 4, extract64(mpidr, 32, 8));
+        }
+        // ICC_PMR_EL1, ICC_IGRPEN0_EL1 and ICC_IGRPEN1_EL1.
+        kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS, mpidr, ARM64_SYS_REG(3, 0, 4, 6, 0) & 0xFFFF, 0xFF);
+        kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS, mpidr, ARM64_SYS_REG(3, 0, 12, 12, 6) & 0xFFFF, 1);
+        kvm_gic_write(KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS, mpidr, ARM64_SYS_REG(3, 0, 12, 12, 7) & 0xFFFF, 1);
+    }
+}
+
+static Notifier kvm_gic_notifier = {.notify = kvm_gic_init};
+
+void kvm_arch_init_memory(MachineState* ms, KVMState* s)
+{
+    bool     fixed_ipa;
+    uint64_t dist, redist;
+    uint32_t nr_irqs;
+
+    kvm_gic_base = (1ULL << kvm_arm_get_max_vm_ipa_size(ms, &fixed_ipa)) - KVM_GIC_SIZE;
+    kvm_gic_fd   = kvm_create_device(s, KVM_DEV_TYPE_ARM_VGIC_V3, false);
+    if (kvm_gic_fd < 0) {
+        error_report("KVM: can't create a GICv3: %s", strerror(-kvm_gic_fd));
+        exit(1);
+    }
+    dist    = kvm_gic_base;
+    redist  = kvm_gic_base + KVM_GICR_OFFSET;
+    nr_irqs = ROUND_UP(32 + 2 * ms->smp.max_cpus, 32);
+    kvm_gic_access(KVM_DEV_ARM_VGIC_GRP_ADDR, KVM_VGIC_V3_ADDR_TYPE_DIST, &dist);
+    kvm_gic_access(KVM_DEV_ARM_VGIC_GRP_ADDR, KVM_VGIC_V3_ADDR_TYPE_REDIST, &redist);
+    kvm_gic_access(KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0, &nr_irqs);
+    qemu_add_machine_init_done_notifier(&kvm_gic_notifier);
+
+    // The GXF shadow pool goes below the GIC.
+    apple_virt_set_ops(&kvm_apple_virt_ops, kvm_gic_base);
 }

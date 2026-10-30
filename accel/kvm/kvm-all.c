@@ -48,6 +48,7 @@
 #include "system/hw_accel.h"
 #include "kvm-cpus.h"
 #include "qemu/range.h"
+#include "accel/accel-private.h"
 
 #include "hw/boards.h"
 #include "system/stats.h"
@@ -1530,6 +1531,45 @@ static int kvm_dirty_ring_init(KVMState* s)
     return 0;
 }
 
+void kvm_map_ram(void* host, hwaddr ipa, uint64_t size, bool writable)
+{
+    KVMMemoryListener* kml = &kvm_state->memory_listener;
+    KVMSlot*           mem;
+
+    kvm_slots_lock();
+    mem              = kvm_alloc_slot(kml);
+    mem->as_id       = kml->as_id;
+    mem->memory_size = size;
+    mem->start_addr  = ipa;
+    mem->ram         = host;
+    mem->flags       = writable ? 0 : KVM_MEM_READONLY;
+    mem->guest_memfd = -1;
+    if (kvm_set_user_memory_region(kml, mem, true)) { abort(); }
+    kml->nr_slots_used++;
+    kvm_slots_unlock();
+}
+
+void kvm_unmap_ram(hwaddr ipa, uint64_t size)
+{
+    KVMMemoryListener* kml = &kvm_state->memory_listener;
+    KVMSlot*           mem;
+
+    kvm_slots_lock();
+    mem = kvm_lookup_matching_slot(kml, ipa, size);
+    if (mem != NULL) {
+        mem->memory_size = 0;
+        mem->flags       = 0;
+        if (kvm_set_user_memory_region(kml, mem, false)) { abort(); }
+        kml->nr_slots_used--;
+    }
+    kvm_slots_unlock();
+}
+
+static const AccelPrivateOps kvm_private_ops = {
+    .map   = kvm_map_ram,
+    .unmap = kvm_unmap_ram,
+};
+
 static void kvm_region_add(MemoryListener* listener, MemoryRegionSection* section)
 {
     KVMMemoryListener* kml = container_of(listener, KVMMemoryListener, listener);
@@ -1559,6 +1599,10 @@ static void kvm_region_commit(MemoryListener* listener)
     bool               need_inhibit = false;
 
     if (QSIMPLEQ_EMPTY(&kml->transaction_add) && QSIMPLEQ_EMPTY(&kml->transaction_del)) { return; }
+
+    if (kml == &kvm_state->memory_listener) {
+        QSIMPLEQ_FOREACH (u1, &kml->transaction_add, next) { accel_private_system_region_add(&u1->section); }
+    }
 
     /*
      * We have to be careful when regions to add overlap with ranges to remove.
@@ -2130,6 +2174,8 @@ static int kvm_init(AccelState* as, MachineState* ms)
 
     kvm_memory_listener_register(s, &s->memory_listener, &address_space_memory, 0, "kvm-memory");
     memory_listener_register(&kvm_io_listener, &address_space_io);
+    accel_private_init(&kvm_private_ops);
+    kvm_arch_init_memory(ms, s);
 
     s->sync_mmu = !!kvm_vm_check_extension(kvm_state, KVM_CAP_SYNC_MMU);
 
@@ -2514,7 +2560,8 @@ int kvm_cpu_exec(CPUState* cpu)
                 break;
             case KVM_EXIT_MMIO:
                 /* Called outside BQL */
-                address_space_rw(&address_space_memory, run->mmio.phys_addr, attrs, run->mmio.data, run->mmio.len,
+                accel_private_map_page(cpu->as, run->mmio.phys_addr, run->mmio.is_write);
+                address_space_rw(cpu->as, run->mmio.phys_addr, attrs, run->mmio.data, run->mmio.len,
                                  run->mmio.is_write);
                 ret = 0;
                 break;

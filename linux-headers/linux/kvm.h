@@ -179,6 +179,8 @@ struct kvm_xen_exit {
 #define KVM_EXIT_LOONGARCH_IOCSR  38
 #define KVM_EXIT_MEMORY_FAULT     39
 #define KVM_EXIT_TDX              40
+#define KVM_EXIT_ARM_SYSREG       44
+#define KVM_EXIT_ARM_FAULT        45
 
 /* For KVM_EXIT_INTERNAL_ERROR */
 /* Emulate instruction failed. */
@@ -465,6 +467,18 @@ struct kvm_run {
 				} setup_event_notify;
 			};
 		} tdx;
+		/* KVM_EXIT_ARM_SYSREG */
+		struct {
+			__u64 esr_iss;
+		} arm_sysreg;
+		/* KVM_EXIT_ARM_FAULT */
+		struct {
+#define KVM_EXIT_ARM_FAULT_FLAG_GVA_VALID	(1ULL << 0)
+			__u64 flags;
+			__u64 esr;
+			__u64 gva;
+			__u64 gpa;
+		} arm_fault;
 		/* Fix the size of the union. */
 		char padding[256];
 	};
@@ -952,6 +966,10 @@ struct kvm_enable_cap {
 #define KVM_CAP_ARM_EL2 240
 #define KVM_CAP_ARM_EL2_E2H0 241
 #define KVM_CAP_RISCV_MP_STATE_RESET 242
+#define KVM_CAP_ARM_HVC_TO_USER 253
+#define KVM_CAP_ARM_IMPDEF_SYSREG_TO_USER 254
+#define KVM_CAP_ARM_FAULT_TO_USER 255
+#define KVM_CAP_ARM_TIMER_TO_USER 256
 
 struct kvm_irq_routing_irqchip {
 	__u32 irqchip;
@@ -1281,6 +1299,8 @@ struct kvm_vfio_spapr_tce {
 /* Available with KVM_CAP_COUNTER_OFFSET */
 #define KVM_ARM_SET_COUNTER_OFFSET _IOW(KVMIO,  0xb5, struct kvm_arm_counter_offset)
 #define KVM_ARM_GET_REG_WRITABLE_MASKS _IOR(KVMIO,  0xb6, struct reg_mask_range)
+/* Available with KVM_CAP_ARM_FAULT_TO_USER */
+#define KVM_ARM_SET_WRITE_PROTECT _IOW(KVMIO,  0xd6, struct kvm_arm_write_protect)
 
 /* ioctl for vm fd */
 #define KVM_CREATE_DEVICE	  _IOWR(KVMIO,  0xe0, struct kvm_create_device)
