@@ -1547,7 +1547,7 @@ static void do_key_event(VncState* vs, int down, int keycode, int sym)
     /* Turn off the lock state sync logic if the client support the led
        state extension.
     */
-    if (down && vs->vd->lock_key_sync && !vnc_has_feature(vs, VNC_FEATURE_LED_STATE)
+    if (down && vs->vd->lock_key_sync && !vnc_has_feature(vs, VNC_FEATURE_LED_STATE) && vs->vd->kbd_layout
         && keycode_is_keypad(vs->vd->kbd_layout, keycode))
     {
         /* If the numlock state needs to change then simulate an additional
@@ -1651,6 +1651,8 @@ static void key_event(VncState* vs, int down, uint32_t sym)
 {
     int keycode;
     int lsym = sym;
+
+    if (!vs->vd->kbd_layout) { return; }
 
     if (lsym >= 'A' && lsym <= 'Z' && qemu_console_is_graphic(vs->vd->dcl.con)) { lsym = lsym - 'A' + 'a'; }
 
@@ -2874,12 +2876,11 @@ void vnc_display_init(const char* id, Error** errp)
     if (keyboard_layout) {
         trace_vnc_key_map_init(keyboard_layout);
         vd->kbd_layout = init_keyboard_layout(name2keysym, keyboard_layout, errp);
+        if (!vd->kbd_layout) { return; }
     }
     else {
-        vd->kbd_layout = init_keyboard_layout(name2keysym, "en-us", errp);
+        vd->kbd_layout = init_keyboard_layout(name2keysym, "en-us", NULL);
     }
-
-    if (!vd->kbd_layout) { return; }
 
     vd->share_policy      = VNC_SHARE_POLICY_ALLOW_EXCLUSIVE;
     vd->connections_limit = 32;
