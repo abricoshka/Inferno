@@ -1583,6 +1583,7 @@ static void t8030_init(MachineState* machine)
     apple_dart_set_other_instance(dart, 1, DART_SMMU, 0x230700000);
     sysbus_connect_irq(SYS_BUS_DEVICE(dart), 0, t8030_irq(t8030, 0x13F));
     t8030->boot_info.disp_dart = dart;
+    t8030->boot_info.disp_sid  = 0;
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_DISPLAY_PIPE_V4));
     object_property_add_child(OBJECT(t8030), "disp0", OBJECT(sbd));

@@ -91,9 +91,11 @@ typedef struct
     /// The AP's CPUs are CPUs 0 to `num_cpus - 1`.
     uint32_t num_cpus;
     /// Rewrite the kernel, SPTM and TXM for CPUs that `apple_virt_manage_cpu` manages.
-    bool                     patch_virt;
-    AppleDFUState*           dfu;
+    bool           patch_virt;
+    AppleDFUState* dfu;
+    /// The display iBoot leaves scanning out the framebuffer, whose DMA goes through `disp_sid` of `disp_dart`.
     AppleDARTState*          disp_dart;
+    uint32_t                 disp_sid;
     AppleDisplayPipeV4State* disp;
     void                     (*update_device_tree)(MachineState* machine, AppleDTNode* root);
     /// Lock the read-only region of the kernel, if `lock_ro`, and the TZ0.

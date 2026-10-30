@@ -1361,10 +1361,23 @@ static void apple_iboot_protect_dart_tables(AppleDTNode* root, const uint64_t (*
  * iBoot does. XNU adopts the tables through `pt-region-N` and `l2-tt-N`
  * instead of clearing the TTBRs, until IOMFB takes over.
  */
+static hwaddr apple_iboot_fb_size(const AppleBootInfo* info)
+{ return ROUND_UP((hwaddr)info->video_args.row_bytes * info->video_args.height, DISPLAY_DART_PAGE_SIZE); }
+
+/* Map the framebuffer and leave the display scanning it out while waiting in DFU Mode. */
+static void apple_iboot_dfu_display(AppleBootInfo* info)
+{
+    hwaddr tables = apple_iboot_carve_out(info, APPLE_CARVEOUT_DISP_DART, 2 * DISPLAY_DART_PAGE_SIZE);
+
+    apple_dart_map_boot_range(info->disp_dart, info->disp_sid, tables, DISPLAY_FB_IOVA, info->video_args.base_addr,
+                              apple_iboot_fb_size(info));
+    adp_v4_set_boot_fb(info->disp, DISPLAY_FB_IOVA);
+}
+
 static void apple_iboot_boot_display(AppleBootInfo* info, AppleIBootOS* os)
 {
     AppleDTNode* node;
-    uint32_t     fb_sid;
+    uint32_t     fb_sid = info->disp_sid;
     uint32_t     sids;
     uint32_t     sid;
     hwaddr       fb_size;
@@ -1375,16 +1388,12 @@ static void apple_iboot_boot_display(AppleBootInfo* info, AppleIBootOS* os)
     uint64_t     l2_tt[2];
     char         name[16];
 
-    node = apple_dt_get_node(os->device_tree, "arm-io/dart-disp0/mapper-disp0");
-    assert_nonnull(node);
-    fb_sid = apple_dt_get_prop_u32(node, "reg", &error_abort);
-
     node = apple_dt_get_node(os->device_tree, "arm-io/dart-disp0");
     assert_nonnull(node);
     // Allow persistent mappings.
     apple_dt_set_prop_u32(node, "dart-options", apple_dt_get_prop_u32(node, "dart-options", &error_abort) | BIT32(6));
 
-    fb_size = ROUND_UP((hwaddr)info->video_args.row_bytes * info->video_args.height, DISPLAY_DART_PAGE_SIZE);
+    fb_size = apple_iboot_fb_size(info);
 
     // XNU requires persistent tables for every translated SID once any SID has them.
     sids = apple_dt_get_prop_u32(node, "sids", &error_abort) & ~apple_dt_get_prop_u32(node, "bypass", &error_abort);
@@ -1977,7 +1986,7 @@ static void apple_iboot_setup(AppleBootInfo* info)
     g_array_set_size(info->regions, info->num_static_regions);
     info->carveout_end = info->static_end;
 
-    // Only a booting kernel gets the display as iBoot leaves it, see `apple_iboot_boot_display`.
+    // Only a booting kernel or DFU Mode gets the display as iBoot leaves it, see `apple_iboot_boot_display`.
     if (info->disp_dart != NULL) {
         apple_dart_clear_boot_ranges(info->disp_dart);
         adp_v4_clear_boot_fb(info->disp);
@@ -2059,6 +2068,7 @@ static void apple_iboot_setup(AppleBootInfo* info)
 
         apple_iboot_compute_ap_nonce(QCRYPTO_HASH_ALGO_SHA384, info->boot_nonce_generator, &nonce, &nonce_len);
         apple_dfu_start(info->dfu, nonce, nonce_len, apple_iboot_sep_nonce, sizeof(apple_iboot_sep_nonce));
+        if (info->disp_dart != NULL) { apple_iboot_dfu_display(info); }
         return;
     }
 
