@@ -934,6 +934,16 @@ static uint32_t hvf_reg2cp_reg(uint32_t reg)
                               (reg >> SYSREG_OP1_SHIFT) & SYSREG_OP1_MASK, (reg >> SYSREG_OP2_SHIFT) & SYSREG_OP2_MASK);
 }
 
+// The EL of the trapped access, wherever the vCPU state is.
+static int hvf_current_el(CPUState* cpu)
+{
+    uint64_t cpsr;
+
+    if (cpu->vcpu_dirty) { return arm_current_el(cpu_env(cpu)); }
+    assert_hvf_ok(hv_vcpu_get_reg(cpu->accel->fd, HV_REG_CPSR, &cpsr));
+    return extract64(cpsr, 2, 2);
+}
+
 static bool hvf_sysreg_read_cp(CPUState* cpu, const char* cpname, uint32_t reg, uint64_t* val)
 {
     ARMCPU*             arm_cpu = ARM_CPU(cpu);
@@ -942,7 +952,7 @@ static bool hvf_sysreg_read_cp(CPUState* cpu, const char* cpname, uint32_t reg, 
 
     ri = ARMCPRegTable_cget(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
     if (ri) {
-        if (!cp_access_ok(1, ri, true)) { return false; }
+        if (!cp_access_ok(hvf_current_el(cpu), ri, true)) { return false; }
         if (ri->accessfn) {
             if (ri->accessfn(env, ri, true) != CP_ACCESS_OK) { return false; }
         }
@@ -970,7 +980,7 @@ static bool hvf_sysreg_write_cp(CPUState* cpu, const char* cpname, uint32_t reg,
     ri = ARMCPRegTable_cget(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
 
     if (ri) {
-        if (!cp_access_ok(1, ri, false)) { return false; }
+        if (!cp_access_ok(hvf_current_el(cpu), ri, false)) { return false; }
         if (ri->accessfn) {
             if (ri->accessfn(env, ri, false) != CP_ACCESS_OK) { return false; }
         }
@@ -1214,7 +1224,9 @@ static bool hvf_sysreg_write_impdef(CPUState* cpu, uint32_t reg, uint64_t val)
 
     if (SYSREG_OP0(reg) != 3 || SYSREG_CRN(reg) != 15) { return false; }
     ri = ARMCPRegTable_cget(arm_cpu->cp_regs, hvf_reg2cp_reg(reg));
-    if (ri == NULL || ri->accessfn != NULL || (ri->type & ARM_CP_SPECIAL_MASK) || !cp_access_ok(1, ri, false)) {
+    if (ri == NULL || ri->accessfn != NULL || (ri->type & ARM_CP_SPECIAL_MASK)
+        || !cp_access_ok(hvf_current_el(cpu), ri, false))
+    {
         return false;
     }
     if (ri->type & ARM_CP_CONST) { return true; }
