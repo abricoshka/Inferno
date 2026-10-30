@@ -19,8 +19,8 @@
 
 #pragma once
 
-#include "hw/arm/boot.h"
-#include "hw/arm/patcher.h"
+#include "hw/arm/iboot/boot.h"
+#include "hw/arm/iboot/patcher.h"
 
 void ck_patch_kernel(MachoHeader64* hdr);
 /// Accept code-signature slot hash mismatches in TXM, so patched pages on SPTM kernels aren't killed.

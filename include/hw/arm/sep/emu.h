@@ -21,7 +21,7 @@
 #pragma once
 
 #include "qemu/osdep.h"
-#include "hw/arm/patcher.h"
+#include "hw/arm/iboot/patcher.h"
 #include "cpu-qom.h"
 #include "qom/object.h"
 

@@ -25,7 +25,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/units.h"
 #include "hw/arm/a13.h"
-#include "hw/arm/kernel_patches.h"
+#include "hw/arm/iboot/kernel_patches.h"
 #include "hw/arm/sep/private.h"
 #include "system/address-spaces.h"
 #include "system/hw_accel.h"

@@ -18,11 +18,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/kernel_patches.h"
+#include "hw/arm/iboot/kernel_patches.h"
 #include "hw/arm/apple_virt_hvc.h"
 #include "fs/apfs.h"
 #include "fs/hfs.h"
-#include "hw/arm/patcher.h"
+#include "hw/arm/iboot/patcher.h"
 #include "qapi/error.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
@@ -36,17 +36,18 @@
 #define RETAB      (0xD65F0FFF)
 #define PACIBSP    (0xD503237F)
 
-static CKPatcherRange* ck_kp_range_from_va(const char* name, vaddr base, vaddr size)
+static CKPatcherRange* ck_kp_range_from_va(MachoHeader64* kc, const char* name, vaddr base, vaddr size)
 {
     CKPatcherRange* range = g_new0(CKPatcherRange, 1);
     range->addr           = base;
     range->length         = size;
-    range->ptr            = apple_boot_va_to_ptr(base);
+    range->ptr            = apple_boot_va_to_ptr(kc, base);
     range->name           = name;
     return range;
 }
 
-static CKPatcherRange* ck_kp_find_section_range(MachoHeader64* hdr, const char* segment, const char* section)
+static CKPatcherRange* ck_kp_find_section_range(MachoHeader64* kc, MachoHeader64* hdr, const char* segment,
+                                                const char* section)
 {
     MachoSection64*        sec;
     MachoSegmentCommand64* seg;
@@ -55,11 +56,11 @@ static CKPatcherRange* ck_kp_find_section_range(MachoHeader64* hdr, const char* 
     if (seg == NULL) { return NULL; }
 
     sec = apple_boot_get_section(seg, section);
-    return sec == NULL ? NULL : ck_kp_range_from_va(segment, sec->addr, sec->size);
+    return sec == NULL ? NULL : ck_kp_range_from_va(kc, segment, sec->addr, sec->size);
 }
 
 // TODO: Fix host endianness BE vs LE troubles in here.
-static MachoHeader64* ck_kp_find_image_header(MachoHeader64* hdr, const char* bundle_id)
+static MachoHeader64* ck_kp_find_image_header(MachoHeader64* kc, const char* bundle_id)
 {
     g_autofree CKPatcherRange* kmod_info_range  = NULL;
     g_autofree CKPatcherRange* kext_info_range  = NULL;
@@ -72,11 +73,11 @@ static MachoHeader64* ck_kp_find_image_header(MachoHeader64* hdr, const char* bu
     const char*                prelinkinfo;
     const char*                last_dict;
 
-    if (hdr->file_type == MH_FILESET) { return apple_boot_get_fileset_header(hdr, bundle_id); }
+    if (kc->file_type == MH_FILESET) { return apple_boot_get_fileset_header(kc, bundle_id); }
 
-    kmod_info_range = ck_kp_find_section_range(hdr, "__PRELINK_INFO", "__kmod_info");
+    kmod_info_range = ck_kp_find_section_range(kc, kc, "__PRELINK_INFO", "__kmod_info");
     if (kmod_info_range == NULL) {
-        kext_info_range = ck_kp_find_section_range(hdr, "__PRELINK_INFO", "__info");
+        kext_info_range = ck_kp_find_section_range(kc, kc, "__PRELINK_INFO", "__info");
         if (kext_info_range == NULL) {
             error_report("Unsupported XNU.");
             return NULL;
@@ -116,7 +117,7 @@ static MachoHeader64* ck_kp_find_image_header(MachoHeader64* hdr, const char* bu
                                 const char* avalue = strstr(addr, "<integer");
                                 if (avalue != NULL) {
                                     avalue = strstr(avalue, ">");
-                                    if (avalue != NULL) { return apple_boot_va_to_ptr(strtoull(++avalue, 0, 0)); }
+                                    if (avalue != NULL) { return apple_boot_va_to_ptr(kc, strtoull(++avalue, 0, 0)); }
                                 }
                             }
                         }
@@ -129,34 +130,34 @@ static MachoHeader64* ck_kp_find_image_header(MachoHeader64* hdr, const char* bu
 
         return NULL;
     }
-    kmod_start_range = ck_kp_find_section_range(hdr, "__PRELINK_INFO", "__kmod_start");
+    kmod_start_range = ck_kp_find_section_range(kc, kc, "__PRELINK_INFO", "__kmod_start");
     if (kmod_start_range != NULL) {
         info  = (uint64_t*)kmod_info_range->ptr;
         start = (uint64_t*)kmod_start_range->ptr;
         count = kmod_info_range->length / 8;
         for (i = 0; i < count; i++) {
-            const char* kext_name = (const char*)apple_boot_va_to_ptr(info[i]) + 0x10;
-            if (strcmp(kext_name, bundle_id) == 0) { return apple_boot_va_to_ptr(start[i]); }
+            const char* kext_name = (const char*)apple_boot_va_to_ptr(kc, info[i]) + 0x10;
+            if (strcmp(kext_name, bundle_id) == 0) { return apple_boot_va_to_ptr(kc, start[i]); }
         }
     }
 
     return NULL;
 }
 
-static CKPatcherRange* ck_kp_find_image_text(MachoHeader64* hdr, const char* bundle_id)
+static CKPatcherRange* ck_kp_find_image_text(MachoHeader64* kc, const char* bundle_id)
 {
-    hdr = ck_kp_find_image_header(hdr, bundle_id);
-    return hdr == NULL ? NULL : ck_kp_find_section_range(hdr, "__TEXT_EXEC", "__text");
+    MachoHeader64* hdr = ck_kp_find_image_header(kc, bundle_id);
+    return hdr == NULL ? NULL : ck_kp_find_section_range(kc, hdr, "__TEXT_EXEC", "__text");
 }
 
-static CKPatcherRange* ck_kp_get_kernel_section(MachoHeader64* hdr, const char* segment, const char* section)
+static CKPatcherRange* ck_kp_get_kernel_section(MachoHeader64* kc, const char* segment, const char* section)
 {
-    if (hdr->file_type == MH_FILESET) {
-        MachoHeader64* kernel = ck_kp_find_image_header(hdr, "com.apple.kernel");
-        return kernel == NULL ? NULL : ck_kp_find_section_range(kernel, segment, section);
+    if (kc->file_type == MH_FILESET) {
+        MachoHeader64* kernel = ck_kp_find_image_header(kc, "com.apple.kernel");
+        return kernel == NULL ? NULL : ck_kp_find_section_range(kc, kernel, segment, section);
     }
 
-    return ck_kp_find_section_range(hdr, segment, section);
+    return ck_kp_find_section_range(kc, kc, segment, section);
 }
 
 static bool ck_kp_root_auth_callback(void* ctx, uint8_t* buffer)
@@ -970,12 +971,12 @@ void ck_patch_kernel(MachoHeader64* hdr)
     g_autofree CKPatcherRange* kernel_ppltext;
 
     apfs_hdr  = ck_kp_find_image_header(hdr, "com.apple.filesystems.apfs");
-    apfs_text = ck_kp_find_section_range(apfs_hdr, "__TEXT_EXEC", "__text");
+    apfs_text = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT_EXEC", "__text");
     ck_kp_apfs_patches(apfs_text);
     corecrypto_text = ck_kp_find_image_text(hdr, "com.apple.kec.corecrypto");
     ck_kp_apfs_data_hash_patch(apfs_text, corecrypto_text);
-    apfs_cstring = ck_kp_find_section_range(apfs_hdr, "__TEXT", "__cstring");
-    if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, "__TEXT", "__cstring"); }
+    apfs_cstring = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT", "__cstring");
+    if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, hdr, "__TEXT", "__cstring"); }
 
     amfi_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleMobileFileIntegrity");
     ck_kp_amfi_patches(amfi_text);
@@ -991,8 +992,8 @@ void ck_patch_kernel(MachoHeader64* hdr)
 
     image4_hdr = ck_kp_find_image_header(hdr, "com.apple.security.Image4");
     if (image4_hdr != NULL) {
-        image4_text    = ck_kp_find_section_range(image4_hdr, "__TEXT_EXEC", "__text");
-        image4_cstring = ck_kp_find_section_range(image4_hdr, "__TEXT", "__cstring");
+        image4_text    = ck_kp_find_section_range(hdr, image4_hdr, "__TEXT_EXEC", "__text");
+        image4_cstring = ck_kp_find_section_range(hdr, image4_hdr, "__TEXT", "__cstring");
         if (image4_text != NULL) { ck_kp_image4_eval_patches(image4_text, image4_cstring); }
     }
 
@@ -1004,7 +1005,7 @@ void ck_patch_kernel(MachoHeader64* hdr)
     kernel_const = ck_kp_get_kernel_section(hdr, "__TEXT", "__const");
     ck_kp_hactivation_patch(kernel_const);
 
-    kernel_ppltext = ck_kp_find_section_range(hdr, "__PPLTEXT", "__text");
+    kernel_ppltext = ck_kp_find_section_range(hdr, hdr, "__PPLTEXT", "__text");
     if (kernel_ppltext != NULL) {
         ck_kp_tc_patch(kernel_ppltext);
         ck_kp_pmap_cs_enforce_patch(kernel_ppltext);

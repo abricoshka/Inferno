@@ -18,7 +18,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/patcher.h"
+#include "hw/arm/iboot/patcher.h"
 #include "hw/display/apple_apt_m3.h"
 #include "qemu/bswap.h"
 #include "qemu/cutils.h"

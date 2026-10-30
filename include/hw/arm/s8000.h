@@ -23,7 +23,7 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "hw/arm/a9.h"
-#include "hw/arm/boot.h"
+#include "hw/arm/iboot/iboot.h"
 #include "hw/boards.h"
 #include "hw/cpu/cluster.h"
 #include "hw/sysbus.h"
@@ -48,24 +48,9 @@ typedef struct
     SysBusDevice*   aic;
     SysBusDevice*   sep;
     MemoryRegion*   sys_mem;
-    MachoHeader64*  kernel;
-    MachoHeader64*  secure_monitor;
-    uint8_t*        trustcache;
-    char*           securerom;
-    gsize           securerom_size;
-    AppleDTNode*    device_tree;
     AppleBootInfo   boot_info;
-    AppleVideoArgs  video_args;
-    char*           trustcache_filename;
-    char*           sep_rom_filename;
-    char*           securerom_filename;
-    uint32_t        build_version;
     uint64_t        ecid;
-    Notifier        init_done_notifier;
-    hwaddr          panic_base;
-    hwaddr          panic_size;
     char            pmgr_reg[0x100000];
-    bool            kaslr_off;
     bool            force_dfu;
     uint32_t        board_id;
     char*           usb_uplink_addr;

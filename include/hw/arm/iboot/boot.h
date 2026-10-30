@@ -19,13 +19,9 @@
 
 #pragma once
 
-// #define ENABLE_BASEBAND
-#define ENABLE_DATA_ENCRYPTION
-
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "exec/vaddr.h"
-#include "crypto/hash.h"
 #include "hw/arm/dt.h"
 
 #define LC_SYMTAB              (0x2)
@@ -333,47 +329,6 @@ typedef struct
 #define XNU_MAX_NVRAM_SIZE (0xFFFF * 0x10)
 #define XNU_BNCH_SIZE      (32)
 
-typedef enum
-{
-    kAppleBootModeAuto = 0,
-    kAppleBootModeEnterRecovery,
-    kAppleBootModeExitRecovery,
-    kAppleBootModeDFU,
-} AppleBootMode;
-
-typedef struct
-{
-    vaddr         kern_entry;
-    hwaddr        kern_text_off;
-    vaddr         tz1_entry;
-    hwaddr        device_tree_addr;
-    uint64_t      device_tree_size;
-    hwaddr        ramdisk_addr;
-    uint64_t      ramdisk_size;
-    hwaddr        trustcache_addr;
-    uint64_t      trustcache_size;
-    hwaddr        sep_fw_addr;
-    uint64_t      sep_fw_size;
-    hwaddr        tz0_addr;
-    uint64_t      tz0_size;
-    hwaddr        kern_boot_args_addr;
-    uint64_t      kern_boot_args_size;
-    hwaddr        top_of_kernel_data_pa;
-    hwaddr        tz1_boot_args_pa;
-    hwaddr        dram_base;
-    uint64_t      dram_size;
-    uint8_t       nvram_data[XNU_MAX_NVRAM_SIZE];
-    uint32_t      nvram_size;
-    gchar*        ticket_data;
-    gsize         ticket_length;
-    uint64_t      boot_nonce_generator;
-    bool          non_cold_boot;
-    bool          had_autoboot;
-    AppleBootMode boot_mode;
-} AppleBootInfo;
-
-MachoHeader64* apple_boot_load_kernel(const char* filename, MachoHeader64** secure_monitor);
-
 /// Consumes `data`.
 MachoHeader64* apple_boot_load_kernel_data(const char* filename, uint8_t* data, gsize len,
                                            MachoHeader64** secure_monitor);
@@ -406,32 +361,10 @@ MachoSegmentCommand64* apple_boot_get_segment(MachoHeader64* header, const char*
 
 MachoSection64* apple_boot_get_section(MachoSegmentCommand64* segment, const char* name);
 
-/// Modify a XNU virtual address to be fixed up and slide-adjusted.
-vaddr apple_boot_fixup_slide_va(vaddr va);
-
-/// Convert a XNU virtual address to a host pointer.
-void* apple_boot_va_to_ptr(vaddr va);
-
-bool apple_boot_contains_boot_arg(const char* boot_args, const char* arg, bool match_prefix);
-
-void apple_boot_setup_monitor_boot_args(AddressSpace* as, hwaddr addr, vaddr virt_base, hwaddr phys_base,
-                                        hwaddr mem_size, hwaddr kern_args, vaddr kern_entry, hwaddr kern_phys_base,
-                                        hwaddr kern_phys_slide, vaddr kern_virt_slide, vaddr kern_text_section_off);
-void apple_boot_setup_bootargs(uint32_t build_version, AddressSpace* as, hwaddr addr, vaddr virt_base, hwaddr phys_base,
-                               hwaddr mem_size, hwaddr kernel_top, vaddr dtb_va, vaddr dtb_size,
-                               AppleVideoArgs* video_args, const char* cmdline, hwaddr mem_size_actual);
-
-void apple_boot_allocate_segment_records(AppleDTNode* memory_map, MachoHeader64* header);
-
-/// The `/chosen/memory-map` regions SPTM boots from.
-void apple_boot_allocate_sptm_records(AppleDTNode* memory_map);
-
-vaddr apple_boot_load_macho(MachoHeader64* header, AddressSpace* as, AppleDTNode* memory_map, hwaddr phys_base,
-                            vaddr virt_slide);
+/// Convert a virtual address in the kernel collection `header` to a host pointer.
+void* apple_boot_va_to_ptr(MachoHeader64* header, vaddr va);
 
 void apple_boot_load_raw_file(const char* filename, AddressSpace* as, hwaddr file_pa, uint64_t* size);
-
-AppleDTNode* apple_boot_load_dt_file(const char* filename);
 
 /// Consumes `data`.
 AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize len);
@@ -439,26 +372,14 @@ AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize 
 /// Consumes `data`.
 void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len);
 
-struct AppleNvram;
-
-void apple_boot_setup_boot_nonce(struct AppleNvram* nvram, AppleBootInfo* info);
-
-void apple_boot_compute_ap_nonce(QCryptoHashAlgo alg, uint64_t generator, uint8_t** nonce, size_t* nonce_len);
-
-void apple_boot_populate_dt(AppleDTNode* root, AppleBootInfo* info, bool auto_boot);
-
-void apple_boot_finalise_dt(AppleDTNode* root, AddressSpace* as, AppleBootInfo* info);
-
-uint8_t* apple_boot_load_trustcache_file(const char* filename, uint64_t* size);
+/// Set the manifest properties of the AP ticket `ticket` as properties of `node`.
+void apple_boot_populate_manifest_props(AppleDTNode* node, const uint8_t* ticket, gsize ticket_len);
 
 /// Consumes `data`.
 uint8_t* apple_boot_load_trustcache_data(const char* filename, uint8_t* data, gsize len, uint64_t* size);
 
-void apple_boot_load_ramdisk(const char* filename, AddressSpace* as, hwaddr pa, uint64_t* size);
-
 /// Consumes `data`.
-void apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len, AddressSpace* as, hwaddr pa,
-                                  uint64_t* size);
+uint8_t* apple_boot_load_ramdisk_data(const char* filename, uint8_t* data, gsize len, uint64_t* size);
 
 /// Read the four-character payload type of an IM4P, or of the IM4P in an IMG4.
 bool apple_boot_get_im4p_type(const uint8_t* data, gsize len, char* type);

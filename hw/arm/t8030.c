@@ -20,11 +20,9 @@
 
 #include "qemu/osdep.h"
 #include "hw/arm/a13.h"
-#include "fs/apfs.h"
-#include "hw/arm/boot.h"
 #include "hw/arm/dart.h"
 #include "hw/arm/dt.h"
-#include "hw/arm/kernel_patches.h"
+#include "hw/arm/iboot/iboot.h"
 #include "hw/arm/lm-backlight.h"
 #include "hw/arm/mem.h"
 #include "hw/input/mt-spi.h"
@@ -60,7 +58,6 @@
 #include "hw/misc/spmi-baseband.h"
 #include "hw/misc/spmi-pmu.h"
 #include "hw/misc/unimp.h"
-#include "hw/nvram/apple_nvram.h"
 #include "hw/pci-host/apcie.h"
 #include "hw/spmi/apple_spmi.h"
 #include "hw/ssi/apple_spi.h"
@@ -71,25 +68,14 @@
 #include "hw/watchdog/apple_wdt.h"
 #include "qapi/visitor.h"
 #include "qemu/cutils.h"
-#include "qemu/error-report.h"
 #include "qemu/guest-random.h"
 #include "qemu/log.h"
 #include "qemu/units.h"
-#include "system/block-backend.h"
 #include "system/hw_accel.h"
 #include "system/reset.h"
 #include "system/runstate.h"
 #include "system/system.h"
-#include "system/tcg.h"
-#include "arm-powerctl.h"
-#include "target/arm/internals.h"
 #include "target/arm/apple-virt.h"
-#include <pixman.h>
-#ifdef CONFIG_PNG
-    #include <png.h>
-#else
-    #error "PNG support is required"
-#endif
 
 #define PROP_VISIT_GETTER_SETTER(_type, _name)                                                           \
     static void t8030_get_##_name(Object* obj, Visitor* v, const char* name, void* opaque, Error** errp) \
@@ -120,6 +106,24 @@
                                                                                                                \
     static _type t8030_get_##_name(Object* obj, Error** errp) { return APPLE_T8030(obj)->_name; }
 
+#define PROP_BOOT_STR_GETTER_SETTER(_name)                                                                            \
+    static char* t8030_get_##_name(Object* obj, Error** errp) { return g_strdup(APPLE_T8030(obj)->boot_info._name); } \
+                                                                                                                      \
+    static void t8030_set_##_name(Object* obj, const char* value, Error** errp)                                       \
+    {                                                                                                                 \
+        AppleBootInfo* info;                                                                                          \
+                                                                                                                      \
+        info = &APPLE_T8030(obj)->boot_info;                                                                          \
+        g_free(info->_name);                                                                                          \
+        info->_name = g_strdup(value);                                                                                \
+    }
+
+#define PROP_BOOT_GETTER_SETTER(_type, _name)                                                               \
+    static void t8030_set_##_name(Object* obj, _type value, Error** errp)                                   \
+    { APPLE_T8030(obj)->boot_info._name = value; }                                                          \
+                                                                                                            \
+    static _type t8030_get_##_name(Object* obj, Error** errp) { return APPLE_T8030(obj)->boot_info._name; }
+
 #define SROM_BASE (0x100000000)
 #define SROM_SIZE (512 * KiB)
 
@@ -131,22 +135,9 @@
 #define SEPROM_BASE (0x240000000)
 #define SEPROM_SIZE (8 * MiB)
 
-#define PREBOOT_APTICKET    "System/Library/Caches/apticket.der"
-#define PREBOOT_KERNELCACHE "System/Library/Caches/com.apple.kernelcaches/kernelcache"
-#define PREBOOT_DEVICETREE  "usr/standalone/firmware/devicetree.img4"
-#define PREBOOT_TRUSTCACHE  "usr/standalone/firmware/FUD/StaticTrustCache.img4"
-#define PREBOOT_ROOT_HASH   "usr/standalone/firmware/root_hash.img4"
-#define PREBOOT_SPTM        "usr/standalone/firmware/FUD/Ap,SecurePageTableMonitor.img4"
-#define PREBOOT_TXM         "usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4"
-
 #define GPIO_FORCE_DFU (161)
 
-#define DISPLAY_SIZE           (68 * MiB)
-#define DISPLAY_DART_PAGE_SIZE (16 * KiB)
-#define DISPLAY_FB_IOVA        (0x10000000)
-
-#define PMAP_IO_RANGE_SIZE         (24)
-#define PMAP_IO_RANGE_CARVEOUT_SIG (0x43415256)    // 'CARV'
+#define DISPLAY_SIZE (68 * MiB)
 
 #define DWC2_IRQ (495)
 
@@ -211,20 +202,10 @@
 #define FUSE_DISABLED (0xA050C030)
 
 static uint32_t t8030_real_cpu_count(AppleT8030MachineState* t8030)
-{ return MACHINE(t8030)->smp.cpus - (t8030->sep_rom_filename != NULL); }
+{ return MACHINE(t8030)->smp.cpus - (t8030->boot_info.seprom_filename != NULL); }
 
 static qemu_irq t8030_irq(AppleT8030MachineState* t8030, uint32_t irq)
 { return qdev_get_gpio_in(DEVICE(t8030->aic), irq); }
-
-// iBoot hands off with FP enabled; SPTM uses NEON before enabling it itself.
-static void t8030_iboot_handoff_state(CPUState* cpu, run_on_cpu_data data)
-{
-    CPUARMState* env = cpu_env(cpu);
-
-    cpu_synchronize_state(cpu);
-    env->cp15.cpacr_el1 = REG_FIELD_DP64(env->cp15.cpacr_el1, CPACR_EL1, FPEN, 3);
-    if (tcg_enabled()) { arm_rebuild_hflags(env); }
-}
 
 static void t8030_start_cpus(AppleT8030MachineState* t8030, uint64_t cpu_mask)
 {
@@ -233,105 +214,9 @@ static void t8030_start_cpus(AppleT8030MachineState* t8030, uint64_t cpu_mask)
     for (i = 0; i < t8030_real_cpu_count(t8030); ++i) {
         if ((cpu_mask & BIT_ULL(i)) != 0) {
             apple_a13_set_on(t8030->cpus[i]);
-            async_run_on_cpu(CPU(t8030->cpus[i]), t8030_iboot_handoff_state, RUN_ON_CPU_NULL);
+            apple_iboot_handoff_cpu(CPU(t8030->cpus[i]));
         }
     }
-}
-
-static void t8030_patch_kernel(MachoHeader64* header, uint32_t build_version)
-{
-    ck_patch_kernel(header);
-
-    if (hwaccel_enabled()) { ck_patch_virt(header); }
-}
-
-static void t8030_set_kernel(AppleT8030MachineState* t8030, MachoHeader64* kernel)
-{
-    vaddr    kc_end;
-    uint32_t build_version = apple_boot_build_version(kernel);
-
-    if (t8030->kernel != NULL) { g_free(apple_boot_get_macho_buffer(t8030->kernel)); }
-    t8030->kernel = kernel;
-
-    info_report("%s %u.%u.%u", apple_boot_platform_string(kernel), BUILD_VERSION_MAJOR(build_version),
-                BUILD_VERSION_MINOR(build_version), BUILD_VERSION_PATCH(build_version));
-    t8030->build_version = build_version;
-
-    switch (BUILD_VERSION_MAJOR(build_version)) {
-        case 13: t8030->sio_protocol = 8; break;
-        case 14:
-        case 15:
-        case 16: t8030->sio_protocol = 9; break;
-        case 17:
-        case 18:
-        case 26:
-        case 27: t8030->sio_protocol = 10; break;
-        default: assert_not_reached();
-    }
-
-    apple_rtkit_max_version = BUILD_VERSION_MAJOR(build_version) <= 13 ? 10 : 12;
-
-    if (t8030->securerom_filename == NULL) {
-        apple_boot_get_kc_bounds(kernel, NULL, &g_virt_base, &kc_end, NULL, NULL);
-        info_report("Kernel virtual low: 0x%016" VADDR_PRIx, g_virt_base);
-        info_report("Kernel virtual high: 0x%016" VADDR_PRIx, kc_end);
-
-        g_phys_base = (hwaddr)apple_boot_get_macho_buffer(kernel);
-
-        t8030_patch_kernel(kernel, build_version);
-    }
-}
-
-static bool t8030_check_panic(AppleT8030MachineState* t8030)
-{
-    AppleEmbeddedPanicHeader* panic_info;
-    bool                      ret;
-
-    if (t8030->panic_size == 0) { return false; }
-
-    panic_info = g_malloc0(t8030->panic_size);
-
-    address_space_rw(&address_space_memory, t8030->panic_base, MEMTXATTRS_UNSPECIFIED, panic_info, t8030->panic_size,
-                     false);
-    address_space_set(&address_space_memory, t8030->panic_base, 0, t8030->panic_size, MEMTXATTRS_UNSPECIFIED);
-
-    ret = panic_info->magic == EMBEDDED_PANIC_MAGIC;
-    g_free(panic_info);
-    return ret;
-}
-
-static uint64_t get_kaslr_random(void)
-{
-    uint64_t value = 0;
-    qemu_guest_getrandom(&value, sizeof(value), NULL);
-    return value;
-}
-
-#define L2_GRANULE      ((0x4000) * (0x4000 / 8))
-#define L2_GRANULE_MASK (L2_GRANULE - 1)
-
-static void get_kaslr_slides(AppleT8030MachineState* t8030, hwaddr* phys_slide_out, vaddr* virt_slide_out)
-{
-    static const size_t slide_granular      = (1 << 21);
-    static const size_t slide_granular_mask = slide_granular - 1;
-    static const size_t slide_virt_max      = 0x100 * (2 * 1024 * 1024);
-
-    hwaddr slide_phys;
-    vaddr  slide_virt;
-    size_t random_value = get_kaslr_random();
-
-    if (t8030->kaslr_off) {
-        *phys_slide_out = 0;
-        *virt_slide_out = 0;
-        return;
-    }
-
-    slide_virt = (random_value & ~slide_granular_mask) % slide_virt_max;
-    if (slide_virt == 0) { slide_virt = slide_virt_max; }
-    slide_phys = slide_virt & L2_GRANULE_MASK;
-
-    *phys_slide_out = slide_phys;
-    *virt_slide_out = slide_virt;
 }
 
 // 256 MiB doesn't seem to work properly with sepos 18.5
@@ -343,17 +228,25 @@ static void get_kaslr_slides(AppleT8030MachineState* t8030, hwaddr* phys_slide_o
 // tz0_addr must be, at least, aligned to 32 MiB
 #define T8030_TZ0_ALIGN (32 * MiB)
 
-// SPTM locks the read-only region itself.
-static void t8030_lock_regions(AppleT8030MachineState* t8030, hwaddr ro_lower, hwaddr ro_upper, bool lock_ro)
+static const AppleCarveout t8030_carveouts[] = {
+    {APPLE_CARVEOUT_IOP_SIO, SIO_SIZE},
+    {APPLE_CARVEOUT_IOP_ANS, ANS_SIZE},
+    {APPLE_CARVEOUT_VRAM, DISPLAY_SIZE},
+    {APPLE_CARVEOUT_PRAM, PANIC_SIZE},
+};
+
+static void t8030_lock_regions(MachineState* machine, hwaddr ro_lower, hwaddr ro_upper, bool lock_ro, hwaddr tz0_base,
+                               hwaddr tz0_size)
 {
-    AppleBootInfo* info = &t8030->boot_info;
+    AppleT8030MachineState* t8030 = APPLE_T8030(machine);
+    AppleBootInfo*          info  = &t8030->boot_info;
 
     for (int i = 0; i < AMCC_PLANE_COUNT; ++i) {
         AMCC_WREG32(t8030, AMCC_PLANE_LOWER_LIMIT(i), (ro_lower - info->dram_base) >> 14);
         AMCC_WREG32(t8030, AMCC_PLANE_UPPER_LIMIT(i), (ro_upper - info->dram_base - 1) >> 14);
         AMCC_WREG32(t8030, AMCC_PLANE_LOCK(i), lock_ro);
-        AMCC_WREG32(t8030, AMCC_PLANE_TZ0_BASE(i), (info->tz0_addr - info->dram_base) >> 12);
-        AMCC_WREG32(t8030, AMCC_PLANE_TZ0_END(i), ((info->tz0_addr + info->tz0_size - 1) - info->dram_base) >> 12);
+        AMCC_WREG32(t8030, AMCC_PLANE_TZ0_BASE(i), (tz0_base - info->dram_base) >> 12);
+        AMCC_WREG32(t8030, AMCC_PLANE_TZ0_END(i), ((tz0_base + tz0_size - 1) - info->dram_base) >> 12);
         AMCC_WREG32(t8030, AMCC_PLANE_TZ0_LOCK(i), 1);
         AMCC_WREG32(t8030, AMCC_PLANE_BLK_MCC_CHANNEL_DEC(i),
                     ((info->dram_size >> 27) - 1) << 1
@@ -389,498 +282,28 @@ static void t8030_lock_regions(AppleT8030MachineState* t8030, hwaddr ro_lower, h
     AMCC_WREG32(t8030, AMCC_NON_PLANE_GFX_ADDR_NUM_MCU_CHANNEL,
                 AMCC_RREG32(t8030, AMCC_NON_PLANE_ADDR_NUM_MCU_CHANNEL));
 
-    if (t8030->sep_rom_filename != NULL) {
-        apple_sep_setup_tz0(APPLE_SEP(object_property_get_link(OBJECT(t8030), "sep", &error_fatal)),
-                            MACHINE(t8030)->ram, info->tz0_addr - info->dram_base, info->tz0_size);
+    if (info->seprom_filename != NULL) {
+        apple_sep_setup_tz0(APPLE_SEP(object_property_get_link(OBJECT(t8030), "sep", &error_fatal)), machine->ram,
+                            tz0_base - info->dram_base, tz0_size);
     }
 }
 
-static void t8030_load_kernelcache(AppleT8030MachineState* t8030, const char* cmdline, CarveoutAllocator* ca)
+static void t8030_update_device_tree(MachineState* machine, AppleDTNode* root)
 {
-    MachineState*  machine = MACHINE(t8030);
-    vaddr          kc_base;
-    vaddr          kc_end;
-    vaddr          ro_lower;
-    vaddr          ro_upper;
-    vaddr          apple_dt_va;
-    hwaddr         mem_size;
-    hwaddr         phys_ptr;
-    AppleBootInfo* info = &t8030->boot_info;
-    uint8_t*       data;
-    gsize          len;
-
-    apple_boot_get_kc_bounds(t8030->kernel, NULL, &kc_base, &kc_end, &ro_lower, &ro_upper);
-
-    get_kaslr_slides(t8030, &g_phys_slide, &g_virt_slide);
-
-    g_phys_base = DRAM_BASE;
-    g_virt_base = kc_base + (g_virt_slide - g_phys_slide);
-
-    info->trustcache_addr = vtop_slid(ro_lower) - info->trustcache_size;
-    info_report("TrustCache Physical Base: 0x" HWADDR_FMT_plx, info->trustcache_addr);
-
-    address_space_rw(&address_space_memory, info->trustcache_addr, MEMTXATTRS_UNSPECIFIED, t8030->trustcache,
-                     info->trustcache_size, true);
-
-    info->kern_entry = apple_boot_load_macho(t8030->kernel, &address_space_memory,
-                                             apple_dt_get_node(t8030->device_tree, "/chosen/memory-map"),
-                                             g_phys_base + g_phys_slide, g_virt_slide);
-
-    info_report("Kernel Virtual Base: 0x%016" VADDR_PRIx, g_virt_base);
-    info_report("Kernel Physical Base: 0x" HWADDR_FMT_plx, g_phys_base);
-    info_report("Kernel Virtual Slide: 0x%016" VADDR_PRIx, g_virt_slide);
-    info_report("Kernel Physical Slide: 0x" HWADDR_FMT_plx, g_phys_slide);
-    info_report("Kernel Entry Point: 0x%016" VADDR_PRIx, info->kern_entry);
-
-    phys_ptr = vtop_static(ROUND_UP_16K(kc_end + g_virt_slide));
-
-    // RAM Disk
-    if (apple_dfu_copy_image(t8030->dfu, "rdsk", &data, &len)) {
-        info->ramdisk_addr = phys_ptr;
-        apple_boot_load_ramdisk_data("DFU ramdisk", data, len, &address_space_memory, info->ramdisk_addr,
-                                     &info->ramdisk_size);
-        info->ramdisk_size  = ROUND_UP_16K(info->ramdisk_size);
-        phys_ptr           += info->ramdisk_size;
-    }
-
-    // TZ0
-    info->tz0_size = T8030_TZ0_SIZE;
-    phys_ptr       = ROUND_UP(phys_ptr, T8030_TZ0_ALIGN);
-
-    info->tz0_addr  = phys_ptr;
-    phys_ptr       += info->tz0_size;
-    info_report("TZ0 Physical Base: 0x" HWADDR_FMT_plx, info->tz0_addr);
-
-    // SEP Firmware
-    info->sep_fw_addr = phys_ptr;
-    // should be equal to make the mapping work
-    info->sep_fw_size = SEPFW_MAPPING_SIZE;
-    info_report("SEPFW Physical Base: 0x" HWADDR_FMT_plx, info->sep_fw_addr);
-    info_report("SEPFW Size: 0x" HWADDR_FMT_plx, info->sep_fw_size);
-    phys_ptr += info->sep_fw_size;
-
-    // Kernel boot args
-    info->kern_boot_args_addr  = phys_ptr;
-    info->kern_boot_args_size  = 0x4000;
-    phys_ptr                  += info->kern_boot_args_size;
-
-    // Device tree
-    info->device_tree_addr  = phys_ptr;
-    apple_dt_va             = ptov_static(info->device_tree_addr);
-    phys_ptr               += info->device_tree_size;
-    info_report("Device Tree Physical Base: 0x" HWADDR_FMT_plx, info->device_tree_addr);
-    info_report("Device Tree Virtual Base: 0x%016" VADDR_PRIx, apple_dt_va);
-    info_report("Device Tree Size: 0x" HWADDR_FMT_plx, info->device_tree_size);
-
-    info->top_of_kernel_data_pa = ROUND_UP_16K(phys_ptr);
-    info_report("Top Of Kernel Data: 0x" HWADDR_FMT_plx, info->top_of_kernel_data_pa);
-
-    apple_boot_finalise_dt(t8030->device_tree, &address_space_memory, info);
-
-    mem_size = carveout_alloc_finalise(ca);
-    info_report("Memory Size: 0x" HWADDR_FMT_plx, mem_size);
-
-    apple_boot_setup_bootargs(t8030->build_version, &address_space_memory, info->kern_boot_args_addr, g_virt_base,
-                              g_phys_base, mem_size, info->top_of_kernel_data_pa, apple_dt_va, info->device_tree_size,
-                              &t8030->video_args, cmdline, machine->ram_size);
-    g_virt_base = kc_base;
-
-    t8030_lock_regions(t8030, info->trustcache_addr, vtop_slid(ro_upper), true);
-}
-
-// The collection's own segments; `apple_boot_get_segment` looks into `com.apple.kernel` instead.
-static MachoSegmentCommand64* t8030_sptm_get_segment(MachoHeader64* header, const char* name)
-{
-    MachoLoadCommand* cmd = (MachoLoadCommand*)(header + 1);
-
-    for (uint32_t i = 0; i < header->n_cmds; i++, cmd = (MachoLoadCommand*)((char*)cmd + cmd->cmd_size)) {
-        MachoSegmentCommand64* seg = (MachoSegmentCommand64*)cmd;
-
-        if (cmd->cmd == LC_SEGMENT_64 && strncmp(seg->segname, name, sizeof(seg->segname)) == 0) { return seg; }
-    }
-
-    return NULL;
-}
-
-static hwaddr t8030_sptm_segment_size(MachoHeader64* header, const char* name)
-{
-    MachoSegmentCommand64* seg = t8030_sptm_get_segment(header, name);
-    return seg == NULL ? 0 : ROUND_UP_16K(seg->vmsize);
-}
-
-static hwaddr t8030_sptm_load_segment(MachoHeader64* header, const char* name, hwaddr pa)
-{
-    MachoSegmentCommand64* seg = t8030_sptm_get_segment(header, name);
-    vaddr                  base;
-
-    if (seg == NULL || seg->vmsize == 0) { return pa; }
-
-    apple_boot_get_kc_bounds(header, NULL, &base, NULL, NULL, NULL);
-    address_space_rw(&address_space_memory, pa, MEMTXATTRS_UNSPECIFIED,
-                     apple_boot_get_macho_buffer(header) + seg->vmaddr - base, seg->vmsize, true);
-    return pa + ROUND_UP_16K(seg->vmsize);
-}
-
-static void t8030_sptm_set_region(AppleDTNode* memory_map, const char* name, uint64_t addr, uint64_t size)
-{
-    AppleDTProp* prop = apple_dt_get_prop(memory_map, name);
-
-    assert_nonnull(prop);
-    stq_le_p(prop->data, addr);
-    stq_le_p(prop->data + sizeof(uint64_t), size);
-}
-
-// iBoot numbers the DARTs SPTM manages.
-static void t8030_sptm_assign_dart_ids(AppleDTNode* root)
-{
-    AppleDTNode* arm_io = apple_dt_get_node(root, "arm-io");
-    uint32_t     id     = 0;
-
-    assert_nonnull(arm_io);
-    for (GList* l = arm_io->children; l != NULL; l = l->next) {
-        AppleDTNode* node   = l->data;
-        AppleDTProp* compat = apple_dt_get_prop(node, "compatible");
-
-        if (compat != NULL && strcmp(compat->data, "dart,t8020") == 0) { apple_dt_set_prop_u32(node, "dart-id", id++); }
-    }
-}
-
-// SPTM checks that the regions from `TXM-ro` to `SPTM-rw` are contiguous and in this order.
-static void t8030_load_sptm(AppleT8030MachineState* t8030, const char* cmdline, CarveoutAllocator* ca)
-{
-    MachineState*  machine    = MACHINE(t8030);
-    AppleBootInfo* info       = &t8030->boot_info;
-    AppleDTNode*   memory_map = apple_dt_get_node(t8030->device_tree, "/chosen/memory-map");
-    MachoHeader64* kc         = t8030->kernel;
-    MachoHeader64* txm        = t8030->txm;
-    MachoHeader64* sptm       = t8030->sptm;
-    vaddr          kc_text;
-    vaddr          txm_text;
-    vaddr          sptm_text;
-    hwaddr         region;
-    hwaddr         phys_ptr;
-    hwaddr         ro_lower;
-    hwaddr         ro_upper;
-    hwaddr         sptm_base;
-    hwaddr         before_sptm;
-    hwaddr         mem_size;
-    vaddr          apple_dt_va;
-    uint8_t*       data;
-    gsize          len;
-
-    apple_boot_get_kc_bounds(kc, &kc_text, NULL, NULL, NULL, NULL);
-    apple_boot_get_kc_bounds(txm, &txm_text, NULL, NULL, NULL, NULL);
-    apple_boot_get_kc_bounds(sptm, &sptm_text, NULL, NULL, NULL, NULL);
-
-    // SPTM maps itself at `virtBase + (SPTM-ro - physBase)`, and TXM and the kernel collection 1 and 2 strides above.
-    // Placing SPTM-ro at the kernel collection's offset in its 64 GiB block keeps that slide page-table aligned.
-    // TXM writes a spare page in the `DeviceTree` region.
-    info->device_tree_size += 16 * KiB;
-
-    before_sptm = t8030_sptm_segment_size(txm, "__TEXT") + t8030_sptm_segment_size(txm, "__DATA_CONST")
-                  + t8030_sptm_segment_size(txm, "__TEXT_EXEC") + t8030_sptm_segment_size(txm, "__TEXT_BOOT_EXEC")
-                  + info->trustcache_size + t8030_sptm_segment_size(kc, "__TEXT_EXEC")
-                  + t8030_sptm_segment_size(kc, "__TEXT_BOOT_EXEC") + t8030_sptm_segment_size(kc, "__TEXT")
-                  + t8030_sptm_segment_size(kc, "__PRELINK_TEXT") + t8030_sptm_segment_size(kc, "__DATA_CONST")
-                  + t8030_sptm_segment_size(kc, "__DATA_SPTM") + info->device_tree_size;
-    assert_cmphex(extract64(kc_text, 0, 36), >, before_sptm);
-
-    g_phys_base = DRAM_BASE;
-    g_virt_base = kc_text & ~MAKE_64BIT_MASK(0, 36);
-    phys_ptr    = g_phys_base + extract64(kc_text, 0, 36) - before_sptm;
-    ro_lower    = phys_ptr;
-
-    // The memory skipped for that is the physical slide, which XNU frees.
-    t8030_sptm_set_region(memory_map, "slide", g_phys_base, phys_ptr - g_phys_base);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(txm, "__TEXT", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(txm, "__DATA_CONST", phys_ptr);
-    t8030_sptm_set_region(memory_map, "TXM-ro", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(txm, "__TEXT_EXEC", phys_ptr);
-    t8030_sptm_set_region(memory_map, "TXM-rx", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(txm, "__TEXT_BOOT_EXEC", phys_ptr);
-    t8030_sptm_set_region(memory_map, "TXM-bx", region, phys_ptr - region);
-
-    info->trustcache_addr = phys_ptr;
-    address_space_rw(&address_space_memory, info->trustcache_addr, MEMTXATTRS_UNSPECIFIED, t8030->trustcache,
-                     info->trustcache_size, true);
-    phys_ptr += info->trustcache_size;
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__TEXT_EXEC", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-rx", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__TEXT_BOOT_EXEC", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-bx", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__TEXT", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(kc, "__PRELINK_TEXT", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(kc, "__DATA_CONST", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-ro", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__DATA_SPTM", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-rs", region, phys_ptr - region);
-
-    info->device_tree_addr  = phys_ptr;
-    phys_ptr               += info->device_tree_size;
-
-    sptm_base = phys_ptr;
-    phys_ptr  = t8030_sptm_load_segment(sptm, "__TEXT", phys_ptr);
-    phys_ptr  = t8030_sptm_load_segment(sptm, "__DATA_CONST", phys_ptr);
-    phys_ptr  = t8030_sptm_load_segment(sptm, "__LATE_CONST", phys_ptr);
-    t8030_sptm_set_region(memory_map, "SPTM-ro", sptm_base, phys_ptr - sptm_base);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(sptm, "__TEXT_EXEC", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(sptm, "__LAST", phys_ptr);
-    t8030_sptm_set_region(memory_map, "SPTM-rx", region, phys_ptr - region);
-    ro_upper = phys_ptr;
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(sptm, "__DATA", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(sptm, "__BOOTDATA", phys_ptr);
-    t8030_sptm_set_region(memory_map, "SPTM-rw", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(sptm, "__LINKEDIT", phys_ptr);
-    t8030_sptm_set_region(memory_map, "SPTM-le", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(txm, "__DATA", phys_ptr);
-    t8030_sptm_set_region(memory_map, "TXM-rw", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(txm, "__LINKEDIT", phys_ptr);
-    t8030_sptm_set_region(memory_map, "TXM-le", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__PRELINK_INFO", phys_ptr);
-    phys_ptr = t8030_sptm_load_segment(kc, "__DATA", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-rw", region, phys_ptr - region);
-
-    region   = phys_ptr;
-    phys_ptr = t8030_sptm_load_segment(kc, "__LINKEDIT", phys_ptr);
-    t8030_sptm_set_region(memory_map, "BootKC-le", region, phys_ptr - region);
-
-    // No exclaves on A13.
-    t8030_sptm_set_region(memory_map, "CL4-rx", -1, 0);
-    t8030_sptm_set_region(memory_map, "CL4-ro", -1, 0);
-    t8030_sptm_set_region(memory_map, "CL4-dummypage", phys_ptr, 16 * KiB);
-    phys_ptr += 16 * KiB;
-
-    t8030_sptm_set_region(memory_map, "TXM-virt", txm_text, 0);
-    t8030_sptm_set_region(memory_map, "TXM-entry", apple_boot_get_entry_point(txm), 0);
-    t8030_sptm_set_region(memory_map, "BootKC-virt", kc_text, 0);
-    t8030_sptm_set_region(memory_map, "BootKC-entry", apple_boot_get_entry_point(kc), 0);
-    t8030_sptm_set_region(memory_map, "SPTM-virt", sptm_text, 0);
-    t8030_sptm_set_region(memory_map, "SPTM-entry", apple_boot_get_entry_point(sptm), 0);
-
-    info->kern_entry = sptm_base + apple_boot_get_entry_point(sptm) - sptm_text;
-    info_report("SPTM Physical Base: 0x" HWADDR_FMT_plx, sptm_base);
-    info_report("SPTM Entry Point: 0x" HWADDR_FMT_plx, info->kern_entry);
-
-    info->kern_boot_args_addr  = phys_ptr;
-    info->kern_boot_args_size  = 0x4000;
-    phys_ptr                  += info->kern_boot_args_size;
-
-    if (apple_dfu_copy_image(t8030->dfu, "rdsk", &data, &len)) {
-        info->ramdisk_addr = phys_ptr;
-        apple_boot_load_ramdisk_data("DFU ramdisk", data, len, &address_space_memory, info->ramdisk_addr,
-                                     &info->ramdisk_size);
-        info->ramdisk_size  = ROUND_UP_16K(info->ramdisk_size);
-        phys_ptr           += info->ramdisk_size;
-    }
-
-    info->sep_fw_addr  = phys_ptr;
-    info->sep_fw_size  = SEPFW_MAPPING_SIZE;
-    phys_ptr          += info->sep_fw_size;
-    info_report("SEPFW Physical Base: 0x" HWADDR_FMT_plx, info->sep_fw_addr);
-
-    info->top_of_kernel_data_pa = ROUND_UP_16K(phys_ptr);
-    info_report("Top Of Kernel Data: 0x" HWADDR_FMT_plx, info->top_of_kernel_data_pa);
-
-    apple_dt_va = ptov_static(info->device_tree_addr);
-    apple_boot_finalise_dt(t8030->device_tree, &address_space_memory, info);
-
-    mem_size = carveout_alloc_finalise(ca);
-    info_report("Memory Size: 0x" HWADDR_FMT_plx, mem_size);
-
-    apple_boot_setup_bootargs(t8030->build_version, &address_space_memory, info->kern_boot_args_addr, g_virt_base,
-                              g_phys_base, mem_size, info->top_of_kernel_data_pa, apple_dt_va, info->device_tree_size,
-                              &t8030->video_args, cmdline, machine->ram_size);
-
-    t8030_lock_regions(t8030, ro_lower, ro_upper, false);
-}
-
-static void t8030_rtkit_seg_prop_setup(AppleDTNode* iop_nub, hwaddr base, uint32_t size)
-{
-    apple_dt_set_prop_u64(iop_nub, "region-base", base);
-    apple_dt_set_prop_u64(iop_nub, "region-size", size);
-}
-
-static void t8030_rtkit_mem_setup(AppleT8030MachineState* t8030, CarveoutAllocator* ca, const char* name,
-                                  const char* nub_name, uint32_t size)
-{
-    AppleDTNode* child;
-    AppleDTNode* iop_nub;
-    hwaddr       base = carveout_alloc_mem(ca, size);
-
-    if (t8030->device_tree == NULL) { return; }
-
-    child = apple_dt_get_node(t8030->device_tree, "arm-io");
-    assert_nonnull(child);
-    child = apple_dt_get_node(child, name);
-    assert_nonnull(child);
-    iop_nub = apple_dt_get_node(child, nub_name);
-    assert_nonnull(iop_nub);
-
-    t8030_rtkit_seg_prop_setup(iop_nub, base, size);
-}
-
-static const uint8_t t8030_sep_nonce[] = {
-    0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED,
-    0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE,
-};
-
-static bool t8030_load_preboot_file(const char* path, uint8_t** data, gsize* len, Error** errp)
-{
-    BlockBackend*       blk       = blk_by_name("root");
-    g_autofree uint8_t* active    = NULL;
-    g_autofree char*    full_path = NULL;
-    gsize               active_len;
-
-    if (blk == NULL) {
-        error_setg(errp, "No `root` drive to read `%s` from", path);
-        return false;
-    }
-
-    if (!apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, "active", &active, &active_len, NULL)) {
-        return apfs_read_file(blk, APFS_VOL_ROLE_SYSTEM, path, data, len, errp);
-    }
-
-    full_path = g_strdup_printf("%s/%s", (char*)active, path);
-    return apfs_read_file(blk, APFS_VOL_ROLE_PREBOOT, full_path, data, len, errp);
-}
-
-/* Mark the DART page table regions as PPL-protected, as `_t8020dart_init` requires. */
-static void t8030_protect_dart_tables(AppleT8030MachineState* t8030, const uint64_t (*regions)[2], uint32_t count)
-{
-    AppleDTNode* defaults;
-    AppleDTProp* prop;
-    uint8_t*     ranges;
-    uint32_t     len;
-    uint32_t     i;
-
-    defaults = apple_dt_get_node(t8030->device_tree, "defaults");
-    assert_nonnull(defaults);
-    prop = apple_dt_get_prop(defaults, "pmap-io-ranges");
-    assert_nonnull(prop);
-
-    ranges = g_malloc(prop->len + count * PMAP_IO_RANGE_SIZE);
-    len    = 0;
-    for (i = 0; i + PMAP_IO_RANGE_SIZE <= prop->len; i += PMAP_IO_RANGE_SIZE) {
-        if (ldl_le_p(prop->data + i + 20) != PMAP_IO_RANGE_CARVEOUT_SIG) {
-            memcpy(ranges + len, prop->data + i, PMAP_IO_RANGE_SIZE);
-            len += PMAP_IO_RANGE_SIZE;
-        }
-    }
-
-    // One range per region, since iOS 15 claims a range for each region and panics if it is already owned.
-    for (i = 0; i < count; i++, len += PMAP_IO_RANGE_SIZE) {
-        stq_le_p(ranges + len, regions[i][0]);
-        stq_le_p(ranges + len + 8, regions[i][1] - regions[i][0]);
-        stl_le_p(ranges + len + 16, 0x4007);    // PPL-protected, like the DART register ranges.
-        stl_le_p(ranges + len + 20, PMAP_IO_RANGE_CARVEOUT_SIG);
-    }
-
-    apple_dt_set_prop(defaults, "pmap-io-ranges", len, ranges);
-    g_free(ranges);
-}
-
-/*
- * Map the framebuffer in dart-disp0 and leave the display scanning it out, as
- * iBoot does. XNU adopts the tables through `pt-region-N` and `l2-tt-N`
- * instead of clearing the TTBRs, until IOMFB takes over.
- */
-static void t8030_boot_display(AppleT8030MachineState* t8030, CarveoutAllocator* ca)
-{
-    AppleDARTState* dart;
-    AppleDTNode*    node;
-    uint32_t        fb_sid;
-    uint32_t        sids;
-    uint32_t        sid;
-    hwaddr          fb_size;
-    hwaddr          size;
-    hwaddr          tables;
-    uint64_t        pt_regions[32][2];
-    uint32_t        count;
-    uint64_t        l2_tt[2];
-    char            name[16];
-
-    dart = APPLE_DART(object_property_get_link(OBJECT(t8030), "dart-disp0", &error_abort));
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/dart-disp0/mapper-disp0");
-    assert_nonnull(node);
-    fb_sid = apple_dt_get_prop_u32(node, "reg", &error_abort);
-
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/dart-disp0");
-    assert_nonnull(node);
-    // Allow persistent mappings.
-    apple_dt_set_prop_u32(node, "dart-options", apple_dt_get_prop_u32(node, "dart-options", &error_abort) | BIT32(6));
-
-    fb_size = ROUND_UP((hwaddr)t8030->video_args.row_bytes * t8030->video_args.height, DISPLAY_DART_PAGE_SIZE);
-
-    // XNU requires persistent tables for every translated SID once any SID has them.
-    sids = apple_dt_get_prop_u32(node, "sids", &error_abort) & ~apple_dt_get_prop_u32(node, "bypass", &error_abort);
-    assert_cmphex(sids & BIT32(fb_sid), !=, 0);
-
-    // An L1 table for each SID, plus the L2 table of the framebuffer's.
-    size   = (ctpop32(sids) + 1) * DISPLAY_DART_PAGE_SIZE;
-    tables = carveout_alloc_mem(ca, size);
-
-    count = 0;
-    for (sid = 0; sid < 32; sid++) {
-        if ((sids & BIT32(sid)) == 0) { continue; }
-
-        size = sid == fb_sid ? 2 * DISPLAY_DART_PAGE_SIZE : DISPLAY_DART_PAGE_SIZE;
-        apple_dart_map_boot_range(dart, sid, tables, DISPLAY_FB_IOVA, t8030->video_args.base_addr,
-                                  sid == fb_sid ? fb_size : 0);
-
-        pt_regions[count][0] = tables;
-        pt_regions[count][1] = tables + size;
-        snprintf(name, sizeof(name), "pt-region-%u", sid);
-        apple_dt_set_prop(node, name, sizeof(pt_regions[count]), pt_regions[count]);
-        count++;
-        l2_tt[0] = tables;
-        // iOS 15 reads the u32 after the address as the table's level, iOS 14 requires it to be 0.
-        l2_tt[1] = BUILD_VERSION_MAJOR(t8030->build_version) >= 15 ? 2 : 0;
-        snprintf(name, sizeof(name), "l2-tt-%u", sid);
-        apple_dt_set_prop(node, name, sizeof(l2_tt), l2_tt);
-
-        tables += size;
-    }
-
-    t8030_protect_dart_tables(t8030, pt_regions, count);
-
-    adp_v4_set_boot_fb(APPLE_DISPLAY_PIPE_V4(object_property_get_link(OBJECT(t8030), "disp0", &error_abort)),
-                       DISPLAY_FB_IOVA);
-}
-
-static void t8030_update_device_tree(AppleT8030MachineState* t8030)
-{
-    AppleDTNode* node;
-    GList*       iter;
-    GList*       next = NULL;
-    uint32_t     i;
-
-    node = apple_dt_get_node(t8030->device_tree, "arm-io");
+    AppleT8030MachineState* t8030 = APPLE_T8030(machine);
+    AppleDTNode*            node;
+    GList*                  iter;
+    GList*                  next = NULL;
+    uint32_t                i;
+
+    // HACK: Use DEV model to restore without FDR errors
+    // NOTE: Previously restored back to AP, however,
+    // iOS 16+ kernel panics because of the AP ticket,
+    // as it names it "n104dev" and then tries to read
+    // "n104ap" after restore.
+    apple_dt_set_prop(root, "compatible", 28, "N104DEV\0iPhone12,1\0AppleARM");
+
+    node = apple_dt_get_node(root, "arm-io");
     assert_nonnull(node);
 
     apple_dt_set_prop_u32(node, "chip-revision", t8030->chip_revision);
@@ -889,15 +312,15 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop(node, "clock-frequencies-nclk", sizeof(t8030_clock_frequencies_nclk),
                       t8030_clock_frequencies_nclk);
 
-    apple_dt_set_prop_strn(t8030->device_tree, "platform-name", 32, "t8030");
-    apple_dt_set_prop_strn(t8030->device_tree, "model-number", 32, t8030->model_number);
-    apple_dt_set_prop_strn(t8030->device_tree, "region-info", 32, t8030->region_info);
-    apple_dt_set_prop_strn(t8030->device_tree, "config-number", 64, t8030->config_number);
-    apple_dt_set_prop_strn(t8030->device_tree, "serial-number", 32, t8030->serial_number);
-    apple_dt_set_prop_strn(t8030->device_tree, "mlb-serial-number", 32, t8030->mlb_serial_number);
-    apple_dt_set_prop_strn(t8030->device_tree, "regulatory-model-number", 32, t8030->regulatory_model);
+    apple_dt_set_prop_strn(root, "platform-name", 32, "t8030");
+    apple_dt_set_prop_strn(root, "model-number", 32, t8030->model_number);
+    apple_dt_set_prop_strn(root, "region-info", 32, t8030->region_info);
+    apple_dt_set_prop_strn(root, "config-number", 64, t8030->config_number);
+    apple_dt_set_prop_strn(root, "serial-number", 32, t8030->serial_number);
+    apple_dt_set_prop_strn(root, "mlb-serial-number", 32, t8030->mlb_serial_number);
+    apple_dt_set_prop_strn(root, "regulatory-model-number", 32, t8030->regulatory_model);
 
-    node = apple_dt_get_node(t8030->device_tree, "chosen");
+    node = apple_dt_get_node(root, "chosen");
     apple_dt_set_prop_u32(node, "chip-id", 0x8030);
     apple_dt_set_prop_u32(node, "board-id", t8030->board_id);
     apple_dt_set_prop_u32(node, "certificate-production-status", 1);
@@ -906,14 +329,14 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop_u64(node, "unique-chip-id", t8030->ecid);
     // Update the display parameters
     apple_dt_set_prop_u32(node, "display-scale", 2);
-    node = apple_dt_get_node(t8030->device_tree, "product");
+    node = apple_dt_get_node(root, "product");
     apple_dt_set_prop_u64(node, "display-corner-radius", 0x100000027);
     apple_dt_set_prop_u32(node, "oled-display", 1);
     apple_dt_set_prop_str(node, "graphics-featureset-class", "GLES2,0");
     apple_dt_set_prop_str(node, "graphics-featureset-fallbacks", "");
     apple_dt_set_prop_str(node, "artwork-display-gamut", "sRGB");
 
-    node = apple_dt_get_node(t8030->device_tree, "chosen/lock-regs/amcc");
+    node = apple_dt_get_node(root, "chosen/lock-regs/amcc");
     if (node != NULL) {
         apple_dt_set_prop_u32(node, "aperture-count", 1);
         apple_dt_set_prop_u32(node, "aperture-size", AMCC_PLANE_COUNT * AMCC_PLANE_STRIDE + 0x4000);
@@ -942,7 +365,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
         apple_dt_set_prop_u32(node, "enable-reg-mask", 1);
     }
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/pmgr");
+    node = apple_dt_get_node(root, "arm-io/pmgr");
     assert_nonnull(node);
     apple_dt_set_prop(node, "voltage-states0", sizeof(t8030_voltage_states0), t8030_voltage_states0);
     apple_dt_set_prop(node, "voltage-states1", sizeof(t8030_voltage_states1), t8030_voltage_states1);
@@ -973,59 +396,63 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     apple_dt_set_prop(node, "bridge-settings-16", sizeof(t8030_bridge_settings16), t8030_bridge_settings16);
     apple_dt_set_prop(node, "bridge-settings-17", sizeof(t8030_bridge_settings17), t8030_bridge_settings17);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/mipi-dsim/lcd");
+    node = apple_dt_get_node(root, "arm-io/mipi-dsim/lcd");
     assert_nonnull(node);
     apple_dt_set_prop_u32(node, "lcd-panel-id", 0xA1C432D1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/bluetooth");
+    node = apple_dt_get_node(root, "arm-io/bluetooth");
     assert_nonnull(node);
     apple_dt_set_prop(node, "local-mac-address", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x42});
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/usb-drd");
+    node = apple_dt_get_node(root, "arm-io/usb-drd");
     assert_nonnull(node);
     apple_dt_set_prop(node, "device-mac-address", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x22});
     apple_dt_set_prop(node, "host-mac-address", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x22, 0x12});
 
-    node = apple_dt_get_node(t8030->device_tree, "chosen");
+    node = apple_dt_get_node(root, "chosen");
     assert_nonnull(node);
     apple_dt_set_prop(node, "mac-address-bluetooth0", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x42});
     apple_dt_set_prop(node, "mac-address-ethernet0", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x22});
     apple_dt_set_prop(node, "mac-address-wifi0", 6, (const uint8_t[]){0xDE, 0xAD, 0xBE, 0xEF, 0x22, 0x12});
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/apcie");
+    node = apple_dt_get_node(root, "arm-io/apcie");
     assert_nonnull(node);
     // TODO: S8000 needs it, and T8030 probably does need it as well.
     apple_dt_set_prop_null(node, "apcie-phy-tunables");
     // do not use no-phy-power-gating for T8030
     //// apple_dt_set_prop_null(node, "no-phy-power-gating");
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/sio/iop-sio-nub");
+    node = apple_dt_get_node(root, "arm-io/sio/iop-sio-nub");
     assert_nonnull(node);
+    apple_dt_set_prop_u64(node, "region-base", apple_iboot_carveout_base(&t8030->boot_info, APPLE_CARVEOUT_IOP_SIO));
+    apple_dt_set_prop_u64(node, "region-size", SIO_SIZE);
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/aop/iop-aop-nub");
+    node = apple_dt_get_node(root, "arm-io/aop/iop-aop-nub");
     assert_nonnull(node);
     apple_dt_del_prop_named(node, "aop-memory-alignment");    // TODO: RTKit FW / Patchbay
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/smc/iop-smc-nub");
+    node = apple_dt_get_node(root, "arm-io/smc/iop-smc-nub");
     assert_nonnull(node);
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/ans/iop-ans-nub");
+    node = apple_dt_get_node(root, "arm-io/ans/iop-ans-nub");
+    assert_nonnull(node);
+    apple_dt_set_prop_u64(node, "region-base", apple_iboot_carveout_base(&t8030->boot_info, APPLE_CARVEOUT_IOP_ANS));
+    apple_dt_set_prop_u64(node, "region-size", ANS_SIZE);
+    apple_dt_set_prop_u32(node, "pre-loaded", 1);
+    apple_dt_set_prop_u32(node, "running", 1);
+
+    node = apple_dt_get_node(root, "arm-io/pmp/iop-pmp-nub");
     assert_nonnull(node);
     apple_dt_set_prop_u32(node, "pre-loaded", 1);
     apple_dt_set_prop_u32(node, "running", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/pmp/iop-pmp-nub");
-    assert_nonnull(node);
-    apple_dt_set_prop_u32(node, "pre-loaded", 1);
-    apple_dt_set_prop_u32(node, "running", 1);
-
-    node = apple_dt_get_node(t8030->device_tree, "cpus");
+    node = apple_dt_get_node(root, "cpus");
     assert_nonnull(node);
 
     for (iter = node->children, i = 0; iter; iter = next, ++i) {
@@ -1051,13 +478,13 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
         apple_dt_del_prop_named(child, "coresight-reg");
     }
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/wdt");
+    node = apple_dt_get_node(root, "arm-io/wdt");
     assert_nonnull(node);
 
     // FIXME: Why??
     apple_dt_set_prop_u32(node, "no-pmu", 1);
 
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/aic");
+    node = apple_dt_get_node(root, "arm-io/aic");
     apple_dt_set_prop_u32(node, "#main-cpus", t8030_real_cpu_count(t8030));
     apple_dt_set_prop_u32(node, "#shared-timestamps", 0);
 
@@ -1065,7 +492,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     // v_front_porch, v_sync_pulse
     // FIXME: Unhardcode.
     static const uint32_t timing_info[] = {828, 144, 1, 1, 1792, 1, 1, 1};
-    node                                = apple_dt_get_node(t8030->device_tree, "arm-io/disp0");
+    node                                = apple_dt_get_node(root, "arm-io/disp0");
     assert_nonnull(node);
     apple_dt_set_prop_str(node, "display-target", "DisplayTarget5");
     apple_dt_set_prop(node, "display-timing-info", sizeof(timing_info), timing_info);
@@ -1076,7 +503,7 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     // FIXME: ???
     static const char* dart_nodes[] = {"dart-aop", "dart-sio"};
     for (i = 0; i < ARRAY_SIZE(dart_nodes); ++i) {
-        node = apple_dt_get_node(t8030->device_tree, "arm-io");
+        node = apple_dt_get_node(root, "arm-io");
         assert_nonnull(node);
         node = apple_dt_get_node(node, dart_nodes[i]);
         assert_nonnull(node);
@@ -1084,334 +511,9 @@ static void t8030_update_device_tree(AppleT8030MachineState* t8030)
     }
 
     // FIXME: ????
-    node = apple_dt_get_node(t8030->device_tree, "arm-io/sep");
+    node = apple_dt_get_node(root, "arm-io/sep");
     assert_nonnull(node);
     apple_dt_set_prop_u32(node, "low-power-enable", 1);
-}
-
-static void t8030_set_sptm(AppleT8030MachineState* t8030, const char* filename, uint8_t* data, gsize len)
-{
-    if (t8030->sptm != NULL) { g_free(apple_boot_get_macho_buffer(t8030->sptm)); }
-    t8030->sptm = apple_boot_load_monitor_data(filename, data, len, "sptm", "rspt");
-    if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->sptm); }
-}
-
-static void t8030_set_txm(AppleT8030MachineState* t8030, const char* filename, uint8_t* data, gsize len)
-{
-    if (t8030->txm != NULL) { g_free(apple_boot_get_macho_buffer(t8030->txm)); }
-    t8030->txm = apple_boot_load_monitor_data(filename, data, len, "trxm", "rtrx");
-    ck_patch_txm(t8030->txm);
-    if (hwaccel_enabled()) { ck_patch_virt_monitor(t8030->txm); }
-}
-
-/* What iBoot reads from Preboot. Images restored through DFU replace these. */
-static void t8030_load_preboot_files(AppleT8030MachineState* t8030)
-{
-    uint8_t* data;
-    gsize    len;
-
-    if (t8030_load_preboot_file(PREBOOT_DEVICETREE, &data, &len, NULL)) {
-        apple_dt_destroy(t8030->device_tree);
-        t8030->device_tree = apple_boot_load_dt_data(PREBOOT_DEVICETREE, data, len);
-    }
-
-    if (t8030_load_preboot_file(PREBOOT_KERNELCACHE, &data, &len, NULL)) {
-        t8030_set_kernel(t8030, apple_boot_load_kernel_data(PREBOOT_KERNELCACHE, data, len, NULL));
-    }
-
-    if (t8030_load_preboot_file(PREBOOT_TRUSTCACHE, &data, &len, NULL)) {
-        g_free(t8030->trustcache);
-        t8030->trustcache =
-            apple_boot_load_trustcache_data(PREBOOT_TRUSTCACHE, data, len, &t8030->boot_info.trustcache_size);
-    }
-
-    if (t8030_load_preboot_file(PREBOOT_SPTM, &data, &len, NULL)) { t8030_set_sptm(t8030, PREBOOT_SPTM, data, len); }
-
-    if (t8030_load_preboot_file(PREBOOT_TXM, &data, &len, NULL)) { t8030_set_txm(t8030, PREBOOT_TXM, data, len); }
-}
-
-static void t8030_memory_setup(AppleT8030MachineState* t8030)
-{
-    AppleDTNode*       carveout_memory_map;
-    MachineState*      machine;
-    MachoHeader64*     hdr;
-    AppleNvram*        nvram;
-    AppleBootInfo*     info;
-    AppleDTNode*       memory_map;
-    bool               have_autoboot;
-    bool               auto_boot;
-    bool               use_sptm;
-    char*              cmdline;
-    char*              seprom;
-    gsize              fsize;
-    uint8_t*           data;
-    gsize              len;
-    CarveoutAllocator* ca;
-    CKPatcherRange*    seprom_range;
-
-    if (t8030->securerom_filename != NULL) {
-        if (t8030->securerom == NULL
-            && !g_file_get_contents(t8030->securerom_filename, &t8030->securerom, &t8030->securerom_size, NULL))
-        {
-            error_setg(&error_fatal, "Failed to load SecureROM from `%s`", t8030->securerom_filename);
-            return;
-        }
-    }
-    else {
-        t8030_load_preboot_files(t8030);
-    }
-
-    if (apple_dfu_copy_image(t8030->dfu, "rdtr", &data, &len)) {
-        apple_dt_destroy(t8030->device_tree);
-        t8030->device_tree = apple_boot_load_dt_data("DFU device tree", data, len);
-    }
-
-    if (t8030->device_tree != NULL) { apple_dt_unfinalise(t8030->device_tree); }
-
-    // Only a booting kernel gets the display as iBoot leaves it, see `t8030_boot_display`.
-    apple_dart_clear_boot_ranges(APPLE_DART(object_property_get_link(OBJECT(t8030), "dart-disp0", &error_abort)));
-    adp_v4_clear_boot_fb(APPLE_DISPLAY_PIPE_V4(object_property_get_link(OBJECT(t8030), "disp0", &error_abort)));
-
-    carveout_memory_map = apple_dt_get_node(t8030->device_tree, "/chosen/carveout-memory-map");
-
-    machine    = MACHINE(t8030);
-    info       = &t8030->boot_info;
-    memory_map = apple_dt_get_node(t8030->device_tree, "/chosen/memory-map");
-
-    if (t8030_check_panic(t8030)) {
-        qemu_system_guest_panicked(NULL);
-        return;
-    }
-
-    info->dram_base = DRAM_BASE;
-    info->dram_size = machine->maxram_size;
-
-    ca = carveout_alloc_new(carveout_memory_map, info->dram_base, info->dram_size, 16 * KiB);
-
-    t8030_rtkit_mem_setup(t8030, ca, "sio", "iop-sio-nub", SIO_SIZE);
-    t8030_rtkit_mem_setup(t8030, ca, "ans", "iop-ans-nub", ANS_SIZE);
-
-    if (t8030->sep_rom_filename) {
-        if (!g_file_get_contents(t8030->sep_rom_filename, &seprom, &fsize, NULL)) {
-            error_setg(&error_fatal, "Could not load data from file '%s'", t8030->sep_rom_filename);
-            return;
-        }
-
-        seprom_range = ck_patcher_range_from_ptr("seprom", seprom, fsize);
-        ck_sep_seprom_patches(seprom_range);
-        if (hwaccel_enabled()) { ck_patch_virt_unmanaged(seprom_range, SEPROM_BASE); }
-
-        address_space_rw(&address_space_memory, SEPROM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t*)seprom, fsize, true);
-
-        g_free(seprom);
-    }
-
-    nvram = APPLE_NVRAM(object_resolve_path_at(OBJECT(t8030), "peripheral/nvram"));
-    if (nvram == NULL) {
-        error_setg(&error_fatal, "Failed to find NVRAM device");
-        return;
-    }
-    apple_nvram_load(nvram);
-
-    info_report("Boot Mode: %u", t8030->boot_info.boot_mode);
-    switch (t8030->boot_info.boot_mode) {
-        case kAppleBootModeDFU:
-            auto_boot = false;
-            env_unset(nvram, "auto-boot");
-            t8030->boot_info.boot_mode = kAppleBootModeAuto;
-            break;
-        case kAppleBootModeExitRecovery:
-            auto_boot = true;
-            env_set_bool(nvram, "auto-boot", true, 0);
-            t8030->boot_info.boot_mode = kAppleBootModeAuto;
-            break;
-        default: break;
-    }
-
-    have_autoboot = env_find(nvram, "auto-boot") != NULL;
-    auto_boot     = env_get_bool(nvram, "auto-boot", false);
-
-    if (t8030->boot_info.non_cold_boot && (!t8030->boot_info.had_autoboot && have_autoboot && auto_boot)) {
-        fprintf(stdout, "\n--------\nPotentially-completed restore process.\nPlease check the restore status, and "
-                        "continue forth with the filesystem patches if success is observed.\n--------\n");
-        exit(0);
-        return;
-    }
-
-    t8030->boot_info.had_autoboot  = have_autoboot;
-    t8030->boot_info.non_cold_boot = true;
-
-    info_report("Auto Boot: %s", auto_boot ? "true" : "false");
-
-    if (auto_boot) { cmdline = g_strdup(machine->kernel_cmdline); }
-    else {
-        cmdline = g_strconcat("-restore rd=md0 nand-enable-reformat=1 ", machine->kernel_cmdline, NULL);
-    }
-
-    // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass the arg under hwaccel.
-    // FIXME: NVMe CoastGuard, see `boot.c`.
-    cmdline = g_strconcat("-vm_compressor_wk_sw nvme-coastguard-disable=1 agm-trusted=1 agm-genuine=1 agm-authentic=1 ",
-                          cmdline, NULL);
-
-    info_report("Boot Args: [%s]", cmdline);
-
-    AppleDTNode* chosen = apple_dt_get_node(t8030->device_tree, "chosen");
-
-    if (env_find(nvram, "security-mode-change-enable") != NULL) {
-        uint32_t val = env_get_uint(nvram, "security-mode-change-enable", 0);
-        env_unset(nvram, "security-mode-change-enable");
-        if (chosen != NULL) { apple_dt_set_prop_u32(chosen, "security-mode-change-enable", val); }
-    }
-
-    apple_boot_setup_boot_nonce(nvram, info);
-
-    apple_nvram_save(nvram);
-
-    info->nvram_size = nvram->len;
-
-    if (info->nvram_size > XNU_MAX_NVRAM_SIZE) { info->nvram_size = XNU_MAX_NVRAM_SIZE; }
-    if (apple_nvram_serialize(nvram, info->nvram_data, sizeof(info->nvram_data)) < 0) {
-        error_report("Failed to read NVRAM");
-    }
-
-    t8030->video_args.base_addr = carveout_alloc_mem(ca, DISPLAY_SIZE);
-
-    if (t8030->securerom_filename != NULL) {
-        address_space_rw(&address_space_memory, SROM_BASE, MEMTXATTRS_UNSPECIFIED, t8030->securerom,
-                         t8030->securerom_size, 1);
-        return;
-    }
-
-    if (!auto_boot && !apple_dfu_booted(t8030->dfu)) {
-        g_autofree uint8_t* nonce     = NULL;
-        size_t              nonce_len = 0;
-
-        apple_boot_compute_ap_nonce(QCRYPTO_HASH_ALGO_SHA384, info->boot_nonce_generator, &nonce, &nonce_len);
-        apple_dfu_start(t8030->dfu, nonce, nonce_len, t8030_sep_nonce, sizeof(t8030_sep_nonce));
-        g_free(cmdline);
-        return;
-    }
-
-    if (t8030->device_tree == NULL) {
-        error_setg(&error_fatal, "No device tree to boot; restore through DFU");
-        return;
-    }
-
-    // HACK: Use DEV model to restore without FDR errors
-    // NOTE: Previously restored back to AP, however,
-    // iOS 16+ kernel panics because of the AP ticket,
-    // as it names it "n104dev" and then tries to read
-    // "n104ap" after restore.
-    apple_dt_set_prop(t8030->device_tree, "compatible", 28, "N104DEV\0iPhone12,1\0AppleARM");
-
-    if (!apple_boot_contains_boot_arg(cmdline, "rd=", true)) {
-        apple_dt_set_prop_strn(chosen, "root-matching", 256,
-                               "<dict><key>IOProviderClass</key><string>IOMedia</"
-                               "string><key>IOPropertyMatch</key><dict><key>Partition "
-                               "ID</key><integer>1</integer></dict></dict>");
-    }
-
-    AppleDTNode* pram = apple_dt_get_node(t8030->device_tree, "pram");
-    if (pram != NULL) {
-        uint64_t panic_reg[2];
-        panic_reg[0] = carveout_alloc_mem(ca, PANIC_SIZE);
-        panic_reg[1] = PANIC_SIZE;
-        apple_dt_set_prop(pram, "reg", sizeof(panic_reg), &panic_reg);
-        apple_dt_set_prop_u64(chosen, "embedded-panic-log-size", panic_reg[1]);
-        t8030->panic_base = panic_reg[0];
-        t8030->panic_size = panic_reg[1];
-    }
-
-    AppleDTNode* vram = apple_dt_get_node(t8030->device_tree, "vram");
-    if (vram != NULL) {
-        uint64_t vram_reg[2];
-        vram_reg[0] = t8030->video_args.base_addr;
-        vram_reg[1] = DISPLAY_SIZE;
-        apple_dt_set_prop(vram, "reg", sizeof(vram_reg), &vram_reg);
-    }
-    // adjust framebuffer for verbose display.
-    t8030->video_args.base_addr +=
-        QEMU_ALIGN_DOWN(DISPLAY_SIZE - ((hwaddr)t8030->disp_height * t8030->disp_width * sizeof(uint32_t)), 16 * KiB);
-    t8030->video_args.row_bytes    = t8030->disp_width * sizeof(uint32_t);
-    t8030->video_args.width        = t8030->disp_width;
-    t8030->video_args.height       = t8030->disp_height;
-    t8030->video_args.depth.depth  = sizeof(uint32_t) * 8;
-    t8030->video_args.depth.rotate = 1;
-
-    t8030->video_args.display = !apple_boot_contains_boot_arg(machine->kernel_cmdline, "-s", false)
-                                && !apple_boot_contains_boot_arg(machine->kernel_cmdline, "-v", false);
-
-    if (t8030->boot_info.ticket_data != NULL) {
-        g_free(t8030->boot_info.ticket_data);
-        t8030->boot_info.ticket_data   = NULL;
-        t8030->boot_info.ticket_length = 0;
-    }
-
-    if (!apple_dfu_copy_ticket(t8030->dfu, &info->ticket_data, &info->ticket_length)) {
-        t8030_load_preboot_file(PREBOOT_APTICKET, (uint8_t**)&info->ticket_data, &info->ticket_length, NULL);
-        if (t8030_load_preboot_file(PREBOOT_ROOT_HASH, &data, &len, NULL)) {
-            apple_boot_load_root_hash_data(chosen, PREBOOT_ROOT_HASH, data, len);
-        }
-    }
-
-    if (apple_dfu_copy_image(t8030->dfu, "rkrn", &data, &len)) {
-        t8030_set_kernel(t8030, apple_boot_load_kernel_data("DFU kernelcache", data, len, NULL));
-    }
-
-    if (apple_dfu_copy_image(t8030->dfu, "rtsc", &data, &len)) {
-        g_free(t8030->trustcache);
-        t8030->trustcache = apple_boot_load_trustcache_data("DFU trust cache", data, len, &info->trustcache_size);
-    }
-
-    if (apple_dfu_copy_image(t8030->dfu, "rspt", &data, &len)) { t8030_set_sptm(t8030, "DFU SPTM", data, len); }
-
-    if (apple_dfu_copy_image(t8030->dfu, "rtrx", &data, &len)) { t8030_set_txm(t8030, "DFU TXM", data, len); }
-
-    hdr = t8030->kernel;
-    if (hdr == NULL) {
-        error_setg(&error_fatal, "No kernel to boot; restore through DFU");
-        return;
-    }
-
-    apple_sio_set_protocol_version(APPLE_SIO(object_resolve_path_component(OBJECT(t8030), "sio")), t8030->sio_protocol);
-
-    t8030_boot_display(t8030, ca);
-
-    if (hwaccel_enabled()) { ck_patch_virt_monitor(hdr); }
-
-    use_sptm = apple_boot_get_segment(hdr, "__DATA_SPTM") != NULL;
-    if (use_sptm) {
-        if (t8030->sptm == NULL || t8030->txm == NULL) {
-            error_setg(&error_fatal, "This kernelcache needs SPTM and TXM");
-            return;
-        }
-        apple_boot_allocate_sptm_records(memory_map);
-        t8030_sptm_assign_dart_ids(t8030->device_tree);
-
-        // SPTM types every frame below the top of kernel data, so TZ0 is carved out like on hardware.
-        info->tz0_size = T8030_TZ0_SIZE;
-        info->tz0_addr = ROUND_UP(carveout_alloc_mem(ca, info->tz0_size + T8030_TZ0_ALIGN), T8030_TZ0_ALIGN);
-        info_report("TZ0 Physical Base: 0x" HWADDR_FMT_plx, info->tz0_addr);
-    }
-    else {
-        apple_boot_allocate_segment_records(memory_map, hdr);
-    }
-
-    t8030_update_device_tree(t8030);
-
-    apple_boot_populate_dt(t8030->device_tree, info, auto_boot);
-
-    switch (hdr->file_type) {
-        case MH_EXECUTE:
-        case MH_FILESET:
-            if (use_sptm) { t8030_load_sptm(t8030, cmdline, ca); }
-            else {
-                t8030_load_kernelcache(t8030, cmdline, ca);
-            }
-            g_free(cmdline);
-            break;
-        default: error_setg(&error_fatal, "Unsupported kernelcache type: 0x%X\n", hdr->file_type); return;
-    }
 }
 
 static uint64_t pmgr_unk_e4800            = 0;
@@ -1835,154 +937,42 @@ static AppleSPMIState* t8030_create_spmi(AppleT8030MachineState* t8030, const ch
     return APPLE_SPMI(sbd);
 }
 
-static void t8030_cpu_reset(AppleT8030MachineState* t8030)
+static void t8030_set_machine_keys(void)
 {
-    CPUState*      cpu;
-    ARMCPU*        arm_cpu;
-    AppleA13State* acpu;
-    uint64_t       m_lo;
-    uint64_t       m_hi;
-
-    if (apple_dfu_waiting(t8030->dfu)) { return; }
+    CPUState* cpu;
+    uint64_t  m_lo;
+    uint64_t  m_hi;
 
     qemu_guest_getrandom(&m_lo, sizeof(m_lo), NULL);
     qemu_guest_getrandom(&m_hi, sizeof(m_hi), NULL);
 
     CPU_FOREACH (cpu) {
-        arm_cpu = container_of(cpu, ARMCPU, parent_obj);
-        acpu    = container_of(arm_cpu, AppleA13State, parent_obj);
+        ARMCPU* arm_cpu = ARM_CPU(cpu);
 
         arm_cpu->m_key_lo = m_lo;
         arm_cpu->m_key_hi = m_hi;
-
-        if (t8030->securerom_filename == NULL) {
-            if (acpu->cpu_id != A13_MAX_CPU) {
-                object_property_set_uint(OBJECT(cpu), "rvbar", t8030->boot_info.kern_entry & ~0xFFFULL, &error_abort);
-                cpu_reset(cpu);
-            }
-            if (acpu->cpu_id == 0) {
-                arm_set_cpu_on(arm_cpu->mp_affinity, t8030->boot_info.kern_entry, t8030->boot_info.kern_boot_args_addr,
-                               1, true);
-            }
-        }
-        else {
-            if (acpu->cpu_id != A13_MAX_CPU) {
-                object_property_set_uint(OBJECT(cpu), "rvbar", SROM_BASE, &error_abort);
-                cpu_reset(cpu);
-            }
-            if (acpu->cpu_id == 0) { arm_set_cpu_on(arm_cpu->mp_affinity, SROM_BASE, 0, 1, true); }
-        }
-        async_run_on_cpu(cpu, t8030_iboot_handoff_state, RUN_ON_CPU_NULL);
     }
 }
 
-typedef struct
+static void t8030_set_os_version(AppleT8030MachineState* t8030, uint32_t build_version)
 {
-    AppleT8030MachineState* t8030;
-    uint32_t                width;
-    uint32_t                height;
-    pixman_transform_t      transform;
-    double                  dest_width;
-    int16_t                 dest_x;
-    int16_t                 dest_y;
-    pixman_image_t*         image;
-    pixman_image_t*         disp_image;
-} T8030DrawBootSplashContext;
+    uint32_t sio_protocol;
 
-static void t8030_draw_boot_splash(void* opaque)
-{
-    T8030DrawBootSplashContext* ctx = opaque;
-
-    pixman_image_composite(PIXMAN_OP_SRC, ctx->image, NULL, ctx->disp_image, 0, 0, 0, 0, ctx->dest_x, ctx->dest_y,
-                           ctx->dest_width, ctx->dest_width);
-}
-
-static void t8030_draw_boot_splash_timer(void* opaque)
-{
-    T8030DrawBootSplashContext* ctx = opaque;
-
-    t8030_draw_boot_splash(ctx);
-
-    pixman_image_unref(ctx->image);
-    pixman_image_unref(ctx->disp_image);
-    timer_free(ctx->t8030->boot_splash_timer);
-    ctx->t8030->boot_splash_timer = NULL;
-    g_free(ctx);
-}
-
-// Please see `ui/icons/CKBrandingNotice.md`
-static void t8030_read_and_draw_boot_splash(AppleT8030MachineState* t8030)
-{
-    char*                       path;
-    FILE*                       fp;
-    uint8_t                     sig[8] = {0};
-    png_structp                 png_ptr;
-    png_infop                   info_ptr;
-    T8030DrawBootSplashContext* ctx;
-    uint32_t*                   data;
-    png_bytep*                  row_ptrs;
-
-    path = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno/bootsplash@2x.png");
-    assert_nonnull(path);
-    fp = fopen(path, "rb");
-    if (fp == NULL) {
-        error_setg(&error_abort, "Missing emulator branding: %s.", path);
-        return;
+    switch (BUILD_VERSION_MAJOR(build_version)) {
+        case 13: sio_protocol = 8; break;
+        case 14:
+        case 15:
+        case 16: sio_protocol = 9; break;
+        case 17:
+        case 18:
+        case 26:
+        case 27: sio_protocol = 10; break;
+        default: assert_not_reached();
     }
-    fread(sig, sizeof(sig), 1, fp);
-    if (png_sig_cmp(sig, 0, sizeof(sig)) != 0) {
-        error_setg(&error_abort, "Invalid emulator branding: %s.", path);
-        return;
-    }
-    g_free(path);
-    png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    assert_nonnull(png_ptr);
-    info_ptr = png_create_info_struct(png_ptr);
-    assert_nonnull(info_ptr);
-    png_init_io(png_ptr, fp);
-    png_set_sig_bytes(png_ptr, sizeof(sig));
 
-    png_read_info(png_ptr, info_ptr);
-    png_set_filler(png_ptr, 0xFF, PNG_FILLER_AFTER);
-    png_read_update_info(png_ptr, info_ptr);
+    apple_sio_set_protocol_version(APPLE_SIO(object_resolve_path_component(OBJECT(t8030), "sio")), sio_protocol);
 
-    ctx         = g_new(T8030DrawBootSplashContext, 1);
-    ctx->width  = png_get_image_width(png_ptr, info_ptr);
-    ctx->height = png_get_image_height(png_ptr, info_ptr);
-    ctx->image =
-        pixman_image_create_bits(PIXMAN_a8b8g8r8, ctx->width, ctx->height, NULL, ctx->width * sizeof(uint32_t));
-    data = pixman_image_get_data(ctx->image);
-
-    row_ptrs = g_new(png_bytep, ctx->height);
-    for (size_t y = 0; y < ctx->height; y++) { row_ptrs[y] = (png_bytep)(data + (y * ctx->width)); }
-
-    png_read_image(png_ptr, row_ptrs);
-
-    g_free(row_ptrs);
-    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
-    fclose(fp);
-
-    ctx->t8030      = t8030;
-    ctx->dest_width = (double)t8030->disp_width / 1.25;
-    ctx->dest_x     = (t8030->disp_width / 2) - (ctx->dest_width / 2);
-    ctx->dest_y     = (t8030->disp_height / 2) - (ctx->dest_width / 2);
-    ctx->disp_image = pixman_image_create_bits(PIXMAN_a8r8g8b8, t8030->disp_width, t8030->disp_height,
-                                               memory_region_get_ram_ptr(MACHINE(t8030)->ram)
-                                                   + (t8030->video_args.base_addr - DRAM_BASE),
-                                               t8030->disp_width * sizeof(uint32_t));
-
-    pixman_image_set_filter(ctx->image, PIXMAN_FILTER_BEST, NULL, 0);
-    pixman_transform_init_identity(&ctx->transform);
-    pixman_transform_scale(&ctx->transform, NULL, pixman_double_to_fixed((double)ctx->width / ctx->dest_width),
-                           pixman_double_to_fixed((double)ctx->height / ctx->dest_width));
-    pixman_image_set_transform(ctx->image, &ctx->transform);
-
-    t8030_draw_boot_splash(ctx);
-
-    t8030->boot_splash_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, t8030_draw_boot_splash_timer, ctx);
-
-    // Workaround for `-v` removing the boot splash.
-    timer_mod(t8030->boot_splash_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (NANOSECONDS_PER_SECOND / 2));
+    apple_rtkit_max_version = BUILD_VERSION_MAJOR(build_version) <= 13 ? 10 : 12;
 }
 
 static void t8030_reset(MachineState* machine, ResetType type)
@@ -1999,11 +989,11 @@ static void t8030_reset(MachineState* machine, ResetType type)
 
     qemu_devices_reset(type);
 
-    t8030_memory_setup(t8030);
+    t8030_set_machine_keys();
 
-    t8030_cpu_reset(t8030);
+    apple_iboot_reset(&t8030->boot_info);
 
-    t8030_read_and_draw_boot_splash(t8030);
+    if (t8030->boot_info.build_version != 0) { t8030_set_os_version(t8030, t8030->boot_info.build_version); }
 }
 
 static void pmp_rtk_boot_done(void* opaque)
@@ -2102,7 +1092,7 @@ static void t8030_init(MachineState* machine)
 
     t8030 = APPLE_T8030(machine);
 
-    if (t8030->sep_rom_filename == NULL) {
+    if (t8030->boot_info.seprom_filename == NULL) {
         if (machine->smp.cpus > A13_MAX_CPU) {
             error_setg(&error_fatal, "Superfluous CPU cores specified for simulated SEP!");
             return;
@@ -2118,7 +1108,7 @@ static void t8030_init(MachineState* machine)
 
     memory_region_add_subregion(get_system_memory(), DRAM_BASE, machine->ram);
 
-    if (t8030->sep_rom_filename != NULL) {
+    if (t8030->boot_info.seprom_filename != NULL) {
         allocate_ram(get_system_memory(), "SEPROM", SEPROM_BASE, SEPROM_SIZE, 0);
         // SEP_UNKN0 is now MISC0
         allocate_ram(get_system_memory(), "SEP_UNKN1", 0x242200000ULL, 0x24000, 0);
@@ -2141,10 +1131,34 @@ static void t8030_init(MachineState* machine)
         // dram_pln0 address 0x200000000 size 0x8000, inside amcc
     }
 
-    if (t8030->securerom_filename != NULL) {
+    if (t8030->boot_info.securerom_filename != NULL) {
         allocate_ram(get_system_memory(), "SROM", SROM_BASE, SROM_SIZE, 0);
         allocate_ram(get_system_memory(), "SRAM", SRAM_BASE, SRAM_SIZE, 0);
     }
+
+    t8030->boot_info.dram_base     = DRAM_BASE;
+    t8030->boot_info.dram_size     = machine->maxram_size;
+    t8030->boot_info.carveouts     = t8030_carveouts;
+    t8030->boot_info.num_carveouts = ARRAY_SIZE(t8030_carveouts);
+    t8030->boot_info.srom_base     = SROM_BASE;
+    t8030->boot_info.seprom_base   = SEPROM_BASE;
+    t8030->boot_info.sepfw_size    = SEPFW_MAPPING_SIZE;
+    t8030->boot_info.tz0_size      = T8030_TZ0_SIZE;
+    t8030->boot_info.tz0_align     = T8030_TZ0_ALIGN;
+    // Adjust the framebuffer for verbose display.
+    t8030->boot_info.fb_offset =
+        QEMU_ALIGN_DOWN(DISPLAY_SIZE - ((hwaddr)t8030->disp_height * t8030->disp_width * sizeof(uint32_t)), 16 * KiB);
+    t8030->boot_info.disp_width  = t8030->disp_width;
+    t8030->boot_info.disp_height = t8030->disp_height;
+    // FIXME: Our current hardware WKDM implementation is broken. When fixed: only pass the arg under hwaccel.
+    // FIXME: NVMe CoastGuard, see `iboot.c`.
+    t8030->boot_info.boot_args =
+        "-vm_compressor_wk_sw nvme-coastguard-disable=1 agm-trusted=1 agm-genuine=1 agm-authentic=1 ";
+    t8030->boot_info.num_cpus           = t8030_real_cpu_count(t8030);
+    t8030->boot_info.patch_virt         = hwaccel_enabled();
+    t8030->boot_info.update_device_tree = t8030_update_device_tree;
+    t8030->boot_info.lock_regions       = t8030_lock_regions;
+    apple_iboot_init(&t8030->boot_info, machine);
 
     for (i = 0; i < A13_MAX_CLUSTER; ++i) {
         snprintf(name, sizeof(name), "cluster%d", i);
@@ -2326,7 +1340,7 @@ static void t8030_init(MachineState* machine)
     qdev_prop_set_uint32(DEVICE(dfu), "bdid", t8030->board_id);
     qdev_prop_set_uint64(DEVICE(dfu), "ecid", t8030->ecid);
     usb_realize_and_unref(dfu, USB_BUS(QLIST_FIRST(&host->child_bus)), &error_fatal);
-    t8030->dfu = APPLE_DFU(dfu);
+    t8030->boot_info.dfu = APPLE_DFU(dfu);
 
     dart = APPLE_DART(qdev_new(TYPE_APPLE_DART));
     object_property_add_child(OBJECT(t8030), "dart-sep", OBJECT(dart));
@@ -2338,7 +1352,7 @@ static void t8030_init(MachineState* machine)
     apple_dart_set_dart_instance(dart, 0, 0x2412C0000);
     sysbus_connect_irq(SYS_BUS_DEVICE(dart), 0, t8030_irq(t8030, 0xBA));
 
-    if (t8030->sep_rom_filename == NULL) {
+    if (t8030->boot_info.seprom_filename == NULL) {
 #ifdef ENABLE_DATA_ENCRYPTION
         error_setg(&error_fatal, "Simulated SEP cannot be used with data "
                                  "encryption at the moment.");
@@ -2568,6 +1582,7 @@ static void t8030_init(MachineState* machine)
     apple_dart_set_dart_instance(dart, 0, 0x230704000);
     apple_dart_set_other_instance(dart, 1, DART_SMMU, 0x230700000);
     sysbus_connect_irq(SYS_BUS_DEVICE(dart), 0, t8030_irq(t8030, 0x13F));
+    t8030->boot_info.disp_dart = dart;
 
     sbd = SYS_BUS_DEVICE(qdev_new(TYPE_APPLE_DISPLAY_PIPE_V4));
     object_property_add_child(OBJECT(t8030), "disp0", OBJECT(sbd));
@@ -2586,6 +1601,7 @@ static void t8030_init(MachineState* machine)
     sysbus_connect_irq(sbd, 6, t8030_irq(t8030, 0x139));
     sysbus_connect_irq(sbd, 7, t8030_irq(t8030, 0x144));
     sysbus_connect_irq(sbd, 8, t8030_irq(t8030, 0x145));
+    t8030->boot_info.disp = APPLE_DISPLAY_PIPE_V4(sbd);
     create_unimplemented_device("disp0-ipawrap", 0x230708000, 0x1000);
 
     dart = apple_dart_create(0x4000, 0x8001, 1, 0x5, t8030_irq(t8030, 0xE0));
@@ -2681,10 +1697,10 @@ static char* t8030_get_boot_mode(Object* obj, Error** errp)
 }
 
 PROP_VISIT_GETTER_SETTER(uint64, ecid);
-PROP_GETTER_SETTER(bool, kaslr_off);
+PROP_BOOT_GETTER_SETTER(bool, kaslr_off);
 PROP_GETTER_SETTER(bool, force_dfu);
-PROP_STR_GETTER_SETTER(sep_rom_filename);
-PROP_STR_GETTER_SETTER(securerom_filename);
+PROP_BOOT_STR_GETTER_SETTER(seprom_filename);
+PROP_BOOT_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
 PROP_GETTER_SETTER(int, usb_uplink_type);
 PROP_VISIT_GETTER_SETTER(uint32, usb_uplink_compression_limit);
@@ -2712,7 +1728,7 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     mc->fixup_ram_size    = t8030_fixup_ram_size;
     mc->default_ram_id    = "t8030.ram";
 
-    object_class_property_add_str(klass, "sep-rom", t8030_get_sep_rom_filename, t8030_set_sep_rom_filename);
+    object_class_property_add_str(klass, "sep-rom", t8030_get_seprom_filename, t8030_set_seprom_filename);
     object_class_property_set_description(klass, "sep-rom", "SEP ROM");
     object_class_property_add_str(klass, "securerom", t8030_get_securerom_filename, t8030_set_securerom_filename);
     object_class_property_set_description(klass, "securerom", "SecureROM");

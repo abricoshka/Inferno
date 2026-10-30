@@ -18,17 +18,17 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/arm/boot.h"
+#include "hw/arm/iboot/boot.h"
+#include "hw/arm/iboot/dfu.h"
 #include "hw/qdev-properties.h"
 #include "hw/usb.h"
-#include "hw/usb/apple_dfu.h"
+#include "hw/usb/desc.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "system/runstate.h"
-#include "desc.h"
 
 #define APPLE_VENDOR_ID           0x05AC
 #define APPLE_DFU_PRODUCT_ID      0x1227

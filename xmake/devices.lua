@@ -1,12 +1,11 @@
 local devices = {
 	{"apple_soc", "Apple SoC machines (T8030, S8000)", default = true, depends = {"tcg"}, selects = {
 		"at24c", "i2c", "pci", "pci_devices", "pci_express", "pcie_port", "exynos4210_uart", "or_irq",
-		"unimp", "apple_ans", "apple_dfu", "apple_nvme_mmu", "apple_i2c", "apple_otg", "apple_typec", "apple_nvram",
+		"unimp", "usb", "apple_ans", "apple_nvme_mmu", "apple_i2c", "apple_otg", "apple_typec", "apple_nvram",
 		"apple_sio", "apple_spmi", "apple_spmi_pmu", "apple_spmi_baseband", "apple_dart", "apple_sart",
 		"apple_spi", "apple_uart", "framebuffer", "cpu_cluster"}},
 	{"apple_ans", "Apple ANS NVMe storage controller", depends = {"apple_soc"}, selects = {"nvme_pci"}},
 	{"apple_dart", "Apple DART IOMMU", depends = {"apple_soc"}},
-	{"apple_dfu", "Apple DFU and Recovery Mode USB device", depends = {"apple_soc"}, selects = {"usb"}},
 	{"apple_i2c", "Apple I2C controller", depends = {"apple_soc"}},
 	{"apple_nvme_mmu", "Apple NVMe MMU", depends = {"apple_soc"}, selects = {"nvme_pci"}},
 	{"apple_nvram", "Apple NVRAM", depends = {"apple_soc"}, selects = {"chrp_nvram"}},

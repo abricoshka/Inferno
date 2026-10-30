@@ -23,10 +23,9 @@
 #include "qemu/osdep.h"
 #include "exec/hwaddr.h"
 #include "hw/arm/a13.h"
-#include "hw/arm/boot.h"
+#include "hw/arm/iboot/iboot.h"
 #include "hw/boards.h"
 #include "hw/sysbus.h"
-#include "hw/usb/apple_dfu.h"
 #include "qapi/qapi-types-usb.h"
 #include "system/kvm.h"
 
@@ -46,29 +45,12 @@ typedef struct
     AppleA13State*  cpus[A13_MAX_CPU];
     AppleA13Cluster clusters[A13_MAX_CLUSTER];
     SysBusDevice*   aic;
-    MachoHeader64*  kernel;
-    MachoHeader64*  sptm;
-    MachoHeader64*  txm;
-    AppleDTNode*    device_tree;
-    uint8_t*        trustcache;
-    char*           securerom;
-    gsize           securerom_size;
     AppleBootInfo   boot_info;
-    AppleVideoArgs  video_args;
-    char*           sep_rom_filename;
-    char*           securerom_filename;
-    uint32_t        sio_protocol;
-    uint32_t        build_version;
     uint64_t        ecid;
-    Notifier        init_done_notifier;
-    hwaddr          panic_base;
-    hwaddr          panic_size;
     uint8_t         pmgr_reg[0x100000];
     MemoryRegion    amcc;
     uint8_t         amcc_reg[0x180000];
-    bool            kaslr_off;
     bool            force_dfu;
-    AppleDFUState*  dfu;
     uint32_t        board_id;
     uint32_t        chip_revision;
     char*           usb_uplink_addr;
@@ -82,5 +64,4 @@ typedef struct
     char*           regulatory_model;
     uint32_t        disp_width;
     uint32_t        disp_height;
-    QEMUTimer*      boot_splash_timer;
 } AppleT8030MachineState;

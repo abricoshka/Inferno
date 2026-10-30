@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "hw/arm/patcher.h"
+#include "hw/arm/iboot/patcher.h"
 #include "qemu/bitops.h"
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
