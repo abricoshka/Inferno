@@ -76,6 +76,11 @@
 #define DISPLAY_DART_PAGE_SIZE (16 * KiB)
 #define DISPLAY_FB_IOVA        (0x10000000)
 
+#define SPLASH_DIR      CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno/"
+#define SPLASH_BOOT     "bootsplash@2x.png"
+#define SPLASH_RECOVERY "bootsplash-recovery@2x.png"
+#define SPLASH_DFU      "bootsplash-dfu@2x.png"
+
 #define PMAP_IO_RANGE_SIZE         (24)
 #define PMAP_IO_RANGE_CARVEOUT_SIG (0x43415256)    // 'CARV'
 
@@ -1248,8 +1253,17 @@ static void apple_iboot_draw_splash_timer(void* opaque)
     apple_iboot_free_splash(splash);
 }
 
+static FILE* apple_iboot_open_splash(const char* name, char** path)
+{
+    g_autofree char* icon = g_strconcat(SPLASH_DIR, name, NULL);
+
+    *path = get_relocated_path(icon);
+    assert_nonnull(*path);
+    return fopen(*path, "rb");
+}
+
 // Please see `ui/icons/CKBrandingNotice.md`
-static void apple_iboot_read_and_draw_splash(AppleBootInfo* info)
+static void apple_iboot_show_splash(AppleBootInfo* info, const char* name)
 {
     g_autofree char*  path = NULL;
     FILE*             fp;
@@ -1262,9 +1276,11 @@ static void apple_iboot_read_and_draw_splash(AppleBootInfo* info)
 
     if (info->splash != NULL) { apple_iboot_free_splash(info->splash); }
 
-    path = get_relocated_path(CONFIG_QEMU_ICONDIR "/hicolor/512x512/apps/inferno/bootsplash@2x.png");
-    assert_nonnull(path);
-    fp = fopen(path, "rb");
+    fp = apple_iboot_open_splash(name, &path);
+    if (fp == NULL && strcmp(name, SPLASH_BOOT) != 0) {
+        g_free(path);
+        fp = apple_iboot_open_splash(SPLASH_BOOT, &path);
+    }
     if (fp == NULL) {
         error_setg(&error_abort, "Missing emulator branding: %s.", path);
         return;
@@ -1373,6 +1389,9 @@ static void apple_iboot_dfu_display(AppleBootInfo* info)
                               apple_iboot_fb_size(info));
     adp_v4_set_boot_fb(info->disp, DISPLAY_FB_IOVA);
 }
+
+static void apple_iboot_dfu_attached(void* opaque, bool recovery)
+{ apple_iboot_show_splash(opaque, recovery ? SPLASH_RECOVERY : SPLASH_DFU); }
 
 static void apple_iboot_boot_display(AppleBootInfo* info, AppleIBootOS* os)
 {
@@ -2067,7 +2086,8 @@ static void apple_iboot_setup(AppleBootInfo* info)
         size_t              nonce_len = 0;
 
         apple_iboot_compute_ap_nonce(QCRYPTO_HASH_ALGO_SHA384, info->boot_nonce_generator, &nonce, &nonce_len);
-        apple_dfu_start(info->dfu, nonce, nonce_len, apple_iboot_sep_nonce, sizeof(apple_iboot_sep_nonce));
+        apple_dfu_start(info->dfu, nonce, nonce_len, apple_iboot_sep_nonce, sizeof(apple_iboot_sep_nonce),
+                        apple_iboot_dfu_attached, info);
         if (info->disp_dart != NULL) { apple_iboot_dfu_display(info); }
         return;
     }
@@ -2139,5 +2159,5 @@ void apple_iboot_reset(AppleBootInfo* info)
 
     apple_iboot_start_cpus(info);
 
-    apple_iboot_read_and_draw_splash(info);
+    apple_iboot_show_splash(info, info->dfu != NULL && apple_dfu_waiting(info->dfu) ? SPLASH_DFU : SPLASH_BOOT);
 }

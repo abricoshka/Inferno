@@ -86,10 +86,12 @@ struct AppleDFUState
     uint32_t ibfl;
     uint64_t ecid;
 
-    AppleDFUStage stage;
-    QEMUBH*       detach_bh;
-    QEMUTimer*    reattach_timer;
-    char*         nonce;
+    AppleDFUStage      stage;
+    QEMUBH*            detach_bh;
+    QEMUTimer*         reattach_timer;
+    char*              nonce;
+    AppleDFUAttachFunc attached;
+    void*              attached_opaque;
 
     uint8_t dfu_state;
 
@@ -222,6 +224,7 @@ static void apple_dfu_attach(AppleDFUState* s)
 {
     apple_dfu_present(s);
     usb_device_attach(USB_DEVICE(s), &error_abort);
+    s->attached(s->attached_opaque, s->stage != APPLE_DFU_STAGE_DFU);
 }
 
 static void apple_dfu_detach(void* opaque)
@@ -380,7 +383,7 @@ static void apple_dfu_handle_data(USBDevice* dev, USBPacket* p)
 static void apple_dfu_handle_attach(USBDevice* dev) { usb_desc_attach(dev); }
 
 void apple_dfu_start(AppleDFUState* s, const uint8_t* ap_nonce, size_t ap_nonce_len, const uint8_t* sep_nonce,
-                     size_t sep_nonce_len)
+                     size_t sep_nonce_len, AppleDFUAttachFunc attached, void* opaque)
 {
     GString* nonce = g_string_new("NONC:");
     size_t   i;
@@ -391,6 +394,9 @@ void apple_dfu_start(AppleDFUState* s, const uint8_t* ap_nonce, size_t ap_nonce_
 
     g_free(s->nonce);
     s->nonce = g_string_free(nonce, false);
+
+    s->attached        = attached;
+    s->attached_opaque = opaque;
 
     g_hash_table_remove_all(s->images);
     apple_dfu_enter(s, APPLE_DFU_STAGE_DFU);

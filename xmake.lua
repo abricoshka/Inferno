@@ -421,8 +421,10 @@ local function emulator(name, gui)
 					filename = "inferno.png"})
 			end
 			add_installfiles("ui/icons/inferno_32x32.bmp", {prefixdir = "share/icons/hicolor/32x32/apps", filename = "inferno.bmp"})
-			add_installfiles("ui/icons/bootsplash_512x512@2x.png", {prefixdir = "share/icons/hicolor/512x512/apps/inferno",
-				filename = "bootsplash@2x.png"})
+			for _, variant in ipairs({"", "-dfu", "-recovery"}) do
+				add_installfiles("ui/icons/bootsplash" .. variant .. "_512x512@2x.png",
+					{prefixdir = "share/icons/hicolor/512x512/apps/inferno", filename = "bootsplash" .. variant .. "@2x.png"})
+			end
 			if not (#inferno_trace_backends == 1 and inferno_trace_backends[1] == "nop") then
 				add_installfiles(path.join(inferno_gendir, "trace-events-all"), {prefixdir = "share/qemu", always_added = true})
 			end

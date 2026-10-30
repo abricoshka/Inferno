@@ -25,9 +25,12 @@
 #define TYPE_APPLE_DFU "apple-dfu"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleDFUState, APPLE_DFU)
 
-/// Attach in DFU Mode, reporting `ap_nonce` and `sep_nonce` to the host.
+typedef void (*AppleDFUAttachFunc)(void* opaque, bool recovery);
+
+/// Attach in DFU Mode, reporting `ap_nonce` and `sep_nonce` to the host. `attached` is called on every attach, in DFU
+/// or Recovery Mode.
 void apple_dfu_start(AppleDFUState* s, const uint8_t* ap_nonce, size_t ap_nonce_len, const uint8_t* sep_nonce,
-                     size_t sep_nonce_len);
+                     size_t sep_nonce_len, AppleDFUAttachFunc attached, void* opaque);
 
 /// Whether the device is started and the host has not sent `bootx` yet.
 bool apple_dfu_waiting(AppleDFUState* s);
