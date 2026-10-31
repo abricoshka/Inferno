@@ -334,6 +334,7 @@ static void t8030_update_device_tree(MachineState* machine, AppleDTNode* root)
     apple_dt_set_prop_u32(node, "oled-display", 1);
     apple_dt_set_prop_str(node, "graphics-featureset-class", "GLES2,0");
     apple_dt_set_prop_str(node, "graphics-featureset-fallbacks", "");
+    apple_dt_set_prop_str(node, "artwork-display-gamut", "sRGB");
 
     node = apple_dt_get_node(root, "chosen/lock-regs/amcc");
     if (node != NULL) {
