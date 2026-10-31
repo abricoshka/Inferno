@@ -27,6 +27,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "qemu/main-loop.h"
 #include "qemu/units.h"
 #include "system/address-spaces.h"
@@ -145,7 +146,7 @@ static int whpx_current_el(CPUState* cpu)
     return extract64(whpx_get_reg(cpu, WHvArm64RegisterPstate), 2, 2);
 }
 
-static void whpx_raise_exception(CPUState* cpu, uint64_t pc, uint32_t excp, uint32_t syndrome)
+static void whpx_raise_exception(CPUState* cpu, uint64_t pc, uint32_t excp, uint32_t syndrome, uint64_t vaddress)
 {
     CPUARMState* env = cpu_env(cpu);
 
@@ -154,6 +155,7 @@ static void whpx_raise_exception(CPUState* cpu, uint64_t pc, uint32_t excp, uint
     cpu->exception_index     = excp;
     env->exception.target_el = 1;
     env->exception.syndrome  = syndrome;
+    env->exception.vaddress  = vaddress;
     arm_cpu_do_interrupt(cpu);
 }
 
@@ -444,7 +446,9 @@ static void whpx_handle_impdef(CPUState* cpu, uint64_t pc, uint32_t op0, uint32_
     uint64_t value;
 
     if (ri == NULL) {
-        whpx_raise_exception(cpu, pc, EXCP_UDEF, syn_uncategorized());
+        qemu_log_mask(LOG_UNIMP, "WHPX: CPU %d at 0x%" PRIx64 ": unknown register S%u_%u_C%u_C%u_%u\n", cpu->cpu_index,
+                      pc, op0, op1, crn, crm, op2);
+        whpx_raise_exception(cpu, pc, EXCP_UDEF, syn_uncategorized(), 0);
         return;
     }
     // Registers that are plain fields of `env` or backed by a device don't depend on the rest of the vCPU's state.
@@ -456,7 +460,7 @@ static void whpx_handle_impdef(CPUState* cpu, uint64_t pc, uint32_t op0, uint32_
     if (!cp_access_ok(whpx_current_el(cpu), ri, read)
         || (ri->accessfn != NULL && ri->accessfn(env, ri, read) != CP_ACCESS_OK))
     {
-        whpx_raise_exception(cpu, pc, EXCP_UDEF, syn_uncategorized());
+        whpx_raise_exception(cpu, pc, EXCP_UDEF, syn_uncategorized(), 0);
         return;
     }
 
@@ -519,8 +523,14 @@ static int whpx_handle_hypercall(CPUState* cpu, WHV_HYPERCALL_CONTEXT* ctx)
     if (apple_virt_handle_hvc(cpu, imm)) { return 0; }
 
     // The guest's own: there's no EL2 for it.
-    whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_UDEF, syn_uncategorized());
+    whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_UDEF, syn_uncategorized(), 0);
     return 0;
+}
+
+static void whpx_raise_external_abort(CPUState* cpu, WHV_MEMORY_ACCESS_CONTEXT* ctx, bool iswrite)
+{
+    whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_DATA_ABORT,
+                         syn_data_abort_no_iss(whpx_current_el(cpu) == 1, 0, 1, 0, 0, iswrite, 0x10), ctx->Gva);
 }
 
 static int whpx_handle_memory_access(CPUState* cpu, WHV_MEMORY_ACCESS_CONTEXT* ctx)
@@ -539,7 +549,8 @@ static int whpx_handle_memory_access(CPUState* cpu, WHV_MEMORY_ACCESS_CONTEXT* c
         if (accel_private_map_page(as, ctx->Gpa, false)) { return 0; }
         error_report("WHPX: CPU %d executed unmapped memory at 0x%" PRIx64 " (0x%" PRIx64 ")", cpu->cpu_index,
                      (uint64_t)ctx->Gva, (uint64_t)ctx->Gpa);
-        whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_PREFETCH_ABORT, syndrome);
+        whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_PREFETCH_ABORT,
+                             syn_insn_abort(whpx_current_el(cpu) == 1, 1, 0, 0x10), ctx->Gva);
         return 0;
     }
 
@@ -555,13 +566,13 @@ static int whpx_handle_memory_access(CPUState* cpu, WHV_MEMORY_ACCESS_CONTEXT* c
         if (iswrite) {
             val = whpx_get_xreg(cpu, srt);
             if (address_space_write(as, ctx->Gpa, MEMTXATTRS_UNSPECIFIED, &val, len) != MEMTX_OK) {
-                whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_DATA_ABORT, syndrome);
+                whpx_raise_external_abort(cpu, ctx, iswrite);
                 return 0;
             }
         }
         else {
             if (address_space_read(as, ctx->Gpa, MEMTXATTRS_UNSPECIFIED, &val, len) != MEMTX_OK) {
-                whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_DATA_ABORT, syndrome);
+                whpx_raise_external_abort(cpu, ctx, iswrite);
                 return 0;
             }
             if (sse) { val = sextract64(val, 0, len * 8); }
@@ -570,7 +581,7 @@ static int whpx_handle_memory_access(CPUState* cpu, WHV_MEMORY_ACCESS_CONTEXT* c
     }
     else if (!arm_aarch64_fallback_emu_single(cpu, as, whpx_get_xreg, whpx_set_xreg)) {
         error_report("WHPX: can't decode the access at 0x%" PRIx64, (uint64_t)ctx->Header.Pc);
-        whpx_raise_exception(cpu, ctx->Header.Pc, EXCP_DATA_ABORT, syndrome);
+        whpx_raise_external_abort(cpu, ctx, iswrite);
         return 0;
     }
 
