@@ -914,11 +914,22 @@ static void hvf_raise_exception(CPUState* cpu, uint32_t excp, uint32_t syndrome,
     ARMCPU*      arm_cpu = ARM_CPU(cpu);
     CPUARMState* env     = &arm_cpu->env;
 
+    cpu_synchronize_state(cpu);
     cpu->exception_index     = excp;
     env->exception.target_el = target_el;
     env->exception.syndrome  = syndrome;
 
     arm_cpu_do_interrupt(cpu);
+}
+
+static void hvf_raise_external_abort(CPUState* cpu, uint64_t va, bool iswrite)
+{
+    CPUARMState* env = cpu_env(cpu);
+
+    cpu_synchronize_state(cpu);
+    env->exception.vaddress = va;
+    hvf_raise_exception(cpu, EXCP_DATA_ABORT,
+                        syn_data_abort_no_iss(arm_current_el(env) == 1, 0, 1, 0, 0, iswrite, 0x10), 1);
 }
 
 static bool is_id_sysreg(uint32_t reg)
@@ -1623,14 +1634,14 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
                     if (address_space_write(as, excp->physical_address, MEMTXATTRS_UNSPECIFIED, &val, len) != MEMTX_OK)
                     {
                         fprintf(stderr, "%s: Failed to write MMIO at 0x%llX\n", __func__, excp->physical_address);
-                        hvf_raise_exception(cpu, EXCP_DATA_ABORT, syndrome, 1);
+                        hvf_raise_external_abort(cpu, excp->virtual_address, iswrite);
                         break;
                     }
                 }
                 else {
                     if (address_space_read(as, excp->physical_address, MEMTXATTRS_UNSPECIFIED, &val, len) != MEMTX_OK) {
                         fprintf(stderr, "%s: Failed to read MMIO at 0x%llX\n", __func__, excp->physical_address);
-                        hvf_raise_exception(cpu, EXCP_DATA_ABORT, syndrome, 1);
+                        hvf_raise_external_abort(cpu, excp->virtual_address, iswrite);
                         break;
                     }
                     if (sse) { val = sextract64(val, 0, len * 8); }
@@ -1638,7 +1649,7 @@ static int hvf_handle_exception(CPUState* cpu, hv_vcpu_exit_exception_t* excp)
                 }
             }
             else if (!arm_aarch64_fallback_emu_single(cpu, as, hvf_get_reg, hvf_set_reg)) {
-                hvf_raise_exception(cpu, EXCP_DATA_ABORT, syndrome, 1);
+                hvf_raise_external_abort(cpu, excp->virtual_address, iswrite);
                 fprintf(stderr, "%s: instruction decoding failed\n", __func__);
                 break;
             }
