@@ -205,6 +205,7 @@ struct AppleDisplayPipeV4State
     ADPV4TSQEntry       tsq[ADP_V4_TSQ_DEPTH];
     uint32_t            tsq_head;
     uint32_t            tsq_count;
+    bool                tsq_used;
 };
 
 // clang-format off
@@ -788,6 +789,9 @@ static bool adp_v4_m3_reg_write(AppleDisplayPipeV4State* adp, hwaddr addr, uint3
             ADP_INFO("apt m3: state <- 0x%X", data);
             adp->m3_state = data;
             if (data == APT_M3_STATE_RUN) { adp_v4_m3_find_layout(adp); }
+            else {
+                qatomic_set(&adp->tsq_used, false);
+            }
             return true;
         }
         case R_APT_M3_INT_ENABLE: {
@@ -862,6 +866,7 @@ static bool adp_v4_m3_reg_write(AppleDisplayPipeV4State* adp, hwaddr addr, uint3
             memcpy(adp->tsq_entry.apiodma_base, adp->apiodma_base, sizeof(adp->apiodma_base));
             adp->tsq[(adp->tsq_head + adp->tsq_count) % ADP_V4_TSQ_DEPTH]  = adp->tsq_entry;
             adp->tsq_count                                                += 1;
+            qatomic_set(&adp->tsq_used, true);
             return true;
         }
         default: {
@@ -1461,6 +1466,7 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
         adp->tsq_entry        = (ADPV4TSQEntry){0};
         adp->tsq_head         = 0;
         adp->tsq_count        = 0;
+        adp->tsq_used         = false;
         adp_v4_m3_update_irq(adp);
     }
     qatomic_set(&adp->commit_pending, 0);
@@ -1684,7 +1690,9 @@ static void adp_v4_vsync_tick(void* opaque)
     uint64_t                 now    = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t                 period = NANOSECONDS_PER_SECOND / ADP_V4_PANEL_HZ;
 
-    if (adp->direct_scanout || qatomic_xchg(&adp->present_pending, 0)) { dpy_gfx_update_full(adp->console); }
+    if ((adp->direct_scanout && !qatomic_read(&adp->tsq_used)) || qatomic_xchg(&adp->present_pending, 0)) {
+        dpy_gfx_update_full(adp->console);
+    }
 
     if (!REG_FIELD_EX32(qatomic_read(&adp->vftg_control), VFTG_CONTROL, ENABLE)) { return; }
 
