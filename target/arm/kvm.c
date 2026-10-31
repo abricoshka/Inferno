@@ -1382,6 +1382,11 @@ static int kvm_arm_handle_fault(CPUState* cs, uint64_t flags, uint64_t esr, uint
         return 0;
     }
 
+    // Cache maintenance has nothing to emulate.
+    if (extract64(esr, 8, 1)) {
+        kvm_arm_advance_pc(cs);
+        return 0;
+    }
     // A store to a write-protected guest page table.
     if (gva_valid && apple_virt_handle_write_fault(cs, gva, gpa)) { return 0; }
     // Or one by the SEP, which GXF emulation doesn't manage.
