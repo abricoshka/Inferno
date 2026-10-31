@@ -1,6 +1,6 @@
 local devices = {
 	{"apple_soc", "Apple SoC machines (T8030, S8000)", default = true, depends = {"tcg"}, selects = {
-		"at24c", "i2c", "pci", "pci_devices", "pci_express", "pcie_port", "exynos4210_uart", "or_irq",
+		"i2c", "pci", "pci_devices", "pci_express", "pcie_port", "exynos4210_uart", "or_irq",
 		"unimp", "usb", "apple_ans", "apple_nvme_mmu", "apple_i2c", "apple_otg", "apple_typec", "apple_nvram",
 		"apple_sio", "apple_spmi", "apple_spmi_pmu", "apple_spmi_baseband", "apple_dart", "apple_sart",
 		"apple_spi", "apple_uart", "framebuffer", "cpu_cluster"}},
@@ -19,7 +19,6 @@ local devices = {
 	{"apple_typec", "Apple USB Type-C", depends = {"apple_soc"}, selects = {"usb_uplink", "usb_dwc3"}},
 	{"apple_uart", "Apple UART"},
 	{"arm_timer", "ARM dual timer", selects = {"ptimer"}},
-	{"at24c", "AT24C EEPROM", depends = {"i2c"}},
 	{"aux", "DisplayPort AUX bus", selects = {"i2c"}},
 	{"chrp_nvram", "CHRP NVRAM partitions"},
 	{"cpu_cluster", "CPU cluster container"},

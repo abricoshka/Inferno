@@ -97,6 +97,12 @@ void                     apple_sep_debug_trace_set_region(AppleSEPDebugTraceStat
 AppleSEPDebugTraceState* apple_sep_debug_trace_create(AppleSEP* sep);
 #endif
 
+/* eeprom.c */
+#define TYPE_APPLE_SEP_EEPROM "apple-sep.eeprom"
+OBJECT_DECLARE_SIMPLE_TYPE(AppleSEPEEPROMState, APPLE_SEP_EEPROM)
+
+AppleSEPEEPROMState* apple_sep_eeprom_create(AppleI2CState* i2c, uint8_t addr, BlockBackend* blk);
+
 /* eisp.c */
 #define TYPE_APPLE_SEP_EISP "apple-sep.eisp"
 OBJECT_DECLARE_SIMPLE_TYPE(AppleSEPEISPState, APPLE_SEP_EISP)
@@ -168,7 +174,7 @@ struct AppleSEP
     MemoryRegion              tz0_win_r3;
     bool                      tz0_wins_inited;
     QEMUTimer*                timer;
-    I2CSlave*                 nvram;
+    AppleSEPEEPROMState*      eeprom;
     uint32_t                  chip_id;
     hwaddr                    shmbuf_base;
     AppleA7IOPMailbox*        mailbox;

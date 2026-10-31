@@ -27,7 +27,6 @@
 #include "hw/arm/a9.h"
 #include "hw/arm/sep/private.h"
 #include "hw/gpio/apple_gpio.h"
-#include "hw/nvram/eeprom_at24c.h"
 #include "system/address-spaces.h"
 #include "system/block-backend-global-state.h"
 #include "system/blockdev.h"
@@ -272,15 +271,12 @@ static void apple_sep_realize(DeviceState* dev, Error** errp)
         sysbus_mmio_map(i2c, 0, 0x20D700000ULL);    // S8000
     }
     sysbus_realize_and_unref(i2c, &error_fatal);
-    uint64_t nvram_size = 64 * KiB;
 
     DriveInfo* dinfo_eeprom = drive_get_by_index(IF_PFLASH, 0);
     assert_nonnull(dinfo_eeprom);
     BlockBackend* blk_eeprom = blk_by_legacy_dinfo(dinfo_eeprom);
     assert_nonnull(blk_eeprom);
-    I2CSlave* nvram = at24c_eeprom_init_rom_blk(APPLE_I2C(i2c)->bus, 0x51, nvram_size, NULL, 0, 2, blk_eeprom);
-    assert_nonnull(nvram);
-    s->nvram = nvram;
+    s->eeprom = apple_sep_eeprom_create(APPLE_I2C(i2c), 0x51, blk_eeprom);
     if (s->chip_id >= 0x8020) {
         DriveInfo* dinfo_ssc = drive_get_by_index(IF_PFLASH, 1);
         assert_nonnull(dinfo_ssc);
