@@ -165,7 +165,7 @@ static void pka_handle_cmd(AppleSEPPKAState* s)
         pka_fill_attest_output(s, s->command == 0x100);
     }
 
-    if (s->command == 0x20 || s->command == 0x80 || s->command == 0x100) {
+    if (s->command == 0x20 || s->command == 0x40 || s->command == 0x80 || s->command == 0x100) {
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
         // apple_a7iop_interrupt_status_push(sep->mailbox,
@@ -174,7 +174,7 @@ static void pka_handle_cmd(AppleSEPPKAState* s)
                                           0x1000C);    // ack third interrupt/0xC
     }
 
-    if (s->command == 0x04 || s->command == 0x40) {
+    if (s->command == 0x04) {
         s->output_ready = true;
         apple_a7iop_interrupt_status_push(sep->mailbox,
                                           0x1000A);    // ack first interrupt/0xA
