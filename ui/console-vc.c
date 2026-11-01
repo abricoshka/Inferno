@@ -98,42 +98,40 @@ struct VCChardev
 };
 typedef struct VCChardev VCChardev;
 
-static const pixman_color_t color_table_rgb[2][8] = {
-    {
-        /* dark */
-        [QEMU_COLOR_BLACK]   = QEMU_PIXMAN_COLOR_BLACK,
-        [QEMU_COLOR_BLUE]    = QEMU_PIXMAN_COLOR(0x00, 0x00, 0xaa), /* blue */
-        [QEMU_COLOR_GREEN]   = QEMU_PIXMAN_COLOR(0x00, 0xaa, 0x00), /* green */
-        [QEMU_COLOR_CYAN]    = QEMU_PIXMAN_COLOR(0x00, 0xaa, 0xaa), /* cyan */
-        [QEMU_COLOR_RED]     = QEMU_PIXMAN_COLOR(0xaa, 0x00, 0x00), /* red */
-        [QEMU_COLOR_MAGENTA] = QEMU_PIXMAN_COLOR(0xaa, 0x00, 0xaa), /* magenta */
-        [QEMU_COLOR_YELLOW]  = QEMU_PIXMAN_COLOR(0xaa, 0xaa, 0x00), /* yellow */
-        [QEMU_COLOR_WHITE]   = QEMU_PIXMAN_COLOR_GRAY,
-    },
-    {
-        /* bright */
-        [QEMU_COLOR_BLACK]   = QEMU_PIXMAN_COLOR_BLACK,
-        [QEMU_COLOR_BLUE]    = QEMU_PIXMAN_COLOR(0x00, 0x00, 0xff), /* blue */
-        [QEMU_COLOR_GREEN]   = QEMU_PIXMAN_COLOR(0x00, 0xff, 0x00), /* green */
-        [QEMU_COLOR_CYAN]    = QEMU_PIXMAN_COLOR(0x00, 0xff, 0xff), /* cyan */
-        [QEMU_COLOR_RED]     = QEMU_PIXMAN_COLOR(0xff, 0x00, 0x00), /* red */
-        [QEMU_COLOR_MAGENTA] = QEMU_PIXMAN_COLOR(0xff, 0x00, 0xff), /* magenta */
-        [QEMU_COLOR_YELLOW]  = QEMU_PIXMAN_COLOR(0xff, 0xff, 0x00), /* yellow */
-        [QEMU_COLOR_WHITE]   = QEMU_PIXMAN_COLOR(0xff, 0xff, 0xff), /* white */
-    }};
+static const uint32_t color_table_rgb[2][8] = {{
+                                                   /* dark */
+                                                   [QEMU_COLOR_BLACK]   = 0xFF000000,
+                                                   [QEMU_COLOR_BLUE]    = 0xFF0000AA, /* blue */
+                                                   [QEMU_COLOR_GREEN]   = 0xFF00AA00, /* green */
+                                                   [QEMU_COLOR_CYAN]    = 0xFF00AAAA, /* cyan */
+                                                   [QEMU_COLOR_RED]     = 0xFFAA0000, /* red */
+                                                   [QEMU_COLOR_MAGENTA] = 0xFFAA00AA, /* magenta */
+                                                   [QEMU_COLOR_YELLOW]  = 0xFFAAAA00, /* yellow */
+                                                   [QEMU_COLOR_WHITE]   = 0xFFAAAAAA,
+                                               },
+                                               {
+                                                   /* bright */
+                                                   [QEMU_COLOR_BLACK]   = 0xFF000000,
+                                                   [QEMU_COLOR_BLUE]    = 0xFF0000FF, /* blue */
+                                                   [QEMU_COLOR_GREEN]   = 0xFF00FF00, /* green */
+                                                   [QEMU_COLOR_CYAN]    = 0xFF00FFFF, /* cyan */
+                                                   [QEMU_COLOR_RED]     = 0xFFFF0000, /* red */
+                                                   [QEMU_COLOR_MAGENTA] = 0xFFFF00FF, /* magenta */
+                                                   [QEMU_COLOR_YELLOW]  = 0xFFFFFF00, /* yellow */
+                                                   [QEMU_COLOR_WHITE]   = 0xFFFFFFFF, /* white */
+                                               }};
 
 static bool       cursor_visible_phase;
 static QEMUTimer* cursor_timer;
 
 const char* qemu_text_console_get_label(QemuTextConsole* c) { return c->chr ? c->chr->label : NULL; }
 
-static void qemu_console_fill_rect(QemuConsole* con, int posx, int posy, int width, int height, pixman_color_t color)
+static void qemu_console_fill_rect(QemuConsole* con, int posx, int posy, int width, int height, uint32_t color)
 {
-    DisplaySurface*      surface = qemu_console_surface(con);
-    pixman_rectangle16_t rect    = {.x = posx, .y = posy, .width = width, .height = height};
+    DisplaySurface* surface = qemu_console_surface(con);
 
     assert(surface);
-    pixman_image_fill_rectangles(PIXMAN_OP_SRC, surface->image, &color, 1, &rect);
+    inferno_pixbuf_fill(&surface->image, posx, posy, width, height, color);
 }
 
 /* copy from (xs, ys) to (xd, yd) a rectangle of size (w, h) */
@@ -142,14 +140,13 @@ static void qemu_console_bitblt(QemuConsole* con, int xs, int ys, int xd, int yd
     DisplaySurface* surface = qemu_console_surface(con);
 
     assert(surface);
-    pixman_image_composite(PIXMAN_OP_SRC, surface->image, NULL, surface->image, xs, ys, 0, 0, xd, yd, w, h);
+    inferno_pixbuf_move(&surface->image, xs, ys, xd, yd, w, h);
 }
 
 static void vga_putcharxy(QemuConsole* s, int x, int y, int ch, TextAttributes* t_attrib)
 {
-    static pixman_image_t* glyphs[256];
-    DisplaySurface*        surface = qemu_console_surface(s);
-    pixman_color_t         fgcol, bgcol;
+    DisplaySurface* surface = qemu_console_surface(s);
+    uint32_t        fgcol, bgcol;
 
     assert(surface);
     if (t_attrib->invers) {
@@ -161,8 +158,8 @@ static void vga_putcharxy(QemuConsole* s, int x, int y, int ch, TextAttributes* 
         bgcol = color_table_rgb[t_attrib->bold][t_attrib->bgcol];
     }
 
-    if (!glyphs[ch]) { glyphs[ch] = qemu_pixman_glyph_from_vgafont(FONT_HEIGHT, vgafont16, ch); }
-    qemu_pixman_glyph_render(glyphs[ch], surface->image, &fgcol, &bgcol, x, y, FONT_WIDTH, FONT_HEIGHT);
+    inferno_pixbuf_draw_glyph(&surface->image, x * FONT_WIDTH, y * FONT_HEIGHT, vgafont16 + ch * FONT_HEIGHT,
+                              FONT_HEIGHT, fgcol, bgcol);
 }
 
 static void invalidate_xy(QemuTextConsole* s, int x, int y)

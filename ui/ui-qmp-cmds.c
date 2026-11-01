@@ -17,6 +17,7 @@
 
 #include "io/channel-file.h"
 #include "monitor/qmp-helpers.h"
+#include "qapi/error.h"
 #include "qapi/qapi-commands-ui.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/coroutine.h"
@@ -135,19 +136,18 @@ void qmp_display_update(DisplayUpdateOptions* arg, Error** errp)
  * Returns true for success or false for error.
  *
  * @fd: File descriptor for PNG file.
- * @image: Image data in pixman format.
+ * @surface: Display surface to save.
  * @errp: Pointer to an error.
  */
-static bool png_save(int fd, pixman_image_t* image, Error** errp)
+static bool png_save(int fd, DisplaySurface* surface, Error** errp)
 {
-    int         width  = pixman_image_get_width(image);
-    int         height = pixman_image_get_height(image);
-    png_struct* png_ptr;
-    png_info*   info_ptr;
-    g_autoptr(pixman_image_t) linebuf = qemu_pixman_linebuf_create(PIXMAN_BE_r8g8b8, width);
-    uint8_t* buf                      = (uint8_t*)pixman_image_get_data(linebuf);
-    FILE*    f                        = fdopen(fd, "wb");
-    int      y;
+    int                 width  = surface_width(surface);
+    int                 height = surface_height(surface);
+    png_struct*         png_ptr;
+    png_info*           info_ptr;
+    g_autofree uint8_t* buf = g_malloc((size_t)width * 3);
+    FILE*               f   = fdopen(fd, "wb");
+    int                 y;
     if (!f) {
         error_setg_errno(errp, errno, "Failed to create file from file descriptor");
         return false;
@@ -177,7 +177,7 @@ static bool png_save(int fd, pixman_image_t* image, Error** errp)
     png_write_info(png_ptr, info_ptr);
 
     for (y = 0; y < height; ++y) {
-        qemu_pixman_linebuf_fill(linebuf, image, width, 0, y);
+        inferno_pixbuf_row_to_rgb(&surface->image, 0, y, width, buf);
         png_write_row(png_ptr, buf);
     }
 
@@ -195,7 +195,7 @@ static bool png_save(int fd, pixman_image_t* image, Error** errp)
 
     #else /* no png support */
 
-static bool png_save(int fd, pixman_image_t* image, Error** errp)
+static bool png_save(int fd, DisplaySurface* surface, Error** errp)
 {
     error_setg(errp, "Enable PNG support with libpng for screendump");
     return false;
@@ -203,29 +203,24 @@ static bool png_save(int fd, pixman_image_t* image, Error** errp)
 
     #endif /* CONFIG_PNG */
 
-static bool ppm_save(int fd, pixman_image_t* image, Error** errp)
+static bool ppm_save(int fd, DisplaySurface* surface, Error** errp)
 {
-    int width                         = pixman_image_get_width(image);
-    int height                        = pixman_image_get_height(image);
-    g_autoptr(Object) ioc             = OBJECT(qio_channel_file_new_fd(fd));
-    g_autofree char* header           = NULL;
-    g_autoptr(pixman_image_t) linebuf = NULL;
-    int y;
+    int width                  = surface_width(surface);
+    int height                 = surface_height(surface);
+    g_autoptr(Object) ioc      = OBJECT(qio_channel_file_new_fd(fd));
+    g_autofree char*    header = NULL;
+    g_autofree uint8_t* buf    = NULL;
+    int                 y;
 
-    trace_ppm_save(fd, image);
+    trace_ppm_save(fd, surface);
 
     header = g_strdup_printf("P6\n%d %d\n%d\n", width, height, 255);
     if (qio_channel_write_all(QIO_CHANNEL(ioc), header, strlen(header), errp) < 0) { return false; }
 
-    linebuf = qemu_pixman_linebuf_create(PIXMAN_BE_r8g8b8, width);
+    buf = g_malloc((size_t)width * 3);
     for (y = 0; y < height; y++) {
-        qemu_pixman_linebuf_fill(linebuf, image, width, 0, y);
-        if (qio_channel_write_all(QIO_CHANNEL(ioc), (char*)pixman_image_get_data(linebuf),
-                                  pixman_image_get_stride(linebuf), errp)
-            < 0)
-        {
-            return false;
-        }
+        inferno_pixbuf_row_to_rgb(&surface->image, 0, y, width, buf);
+        if (qio_channel_write_all(QIO_CHANNEL(ioc), (char*)buf, (size_t)width * 3, errp) < 0) { return false; }
     }
 
     return true;
@@ -235,10 +230,9 @@ static bool ppm_save(int fd, pixman_image_t* image, Error** errp)
 void coroutine_fn qmp_screendump(const char* filename, const char* device, bool has_head, int64_t head, bool has_format,
                                  ImageFormat format, Error** errp)
 {
-    g_autoptr(pixman_image_t) image = NULL;
-    QemuConsole*    con;
-    DisplaySurface* surface;
-    int             fd;
+    g_autoptr(DisplaySurface) surface = NULL;
+    QemuConsole* con;
+    int          fd;
 
     if (device) {
         con = qemu_console_lookup_by_device_name(device, has_head ? head : 0, errp);
@@ -261,14 +255,14 @@ void coroutine_fn qmp_screendump(const char* filename, const char* device, bool 
     /*
      * All pending coroutines are woken up, while the BQL is held.  No
      * further graphic update are possible until it is released.  Take
-     * an image ref before that.
+     * a surface ref before that.
      */
     surface = qemu_console_surface(con);
     if (!surface) {
         error_setg(errp, "no surface");
         return;
     }
-    image = pixman_image_ref(surface->image);
+    qemu_displaysurface_ref(surface);
 
     fd = qemu_open_old(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0666);
     if (fd == -1) {
@@ -277,16 +271,16 @@ void coroutine_fn qmp_screendump(const char* filename, const char* device, bool 
     }
 
     /*
-     * The image content could potentially be updated as the coroutine
+     * The surface content could potentially be updated as the coroutine
      * yields and releases the BQL. It could produce corrupted dump, but
      * it should be otherwise safe.
      */
     if (has_format && format == IMAGE_FORMAT_PNG) {
         /* PNG format specified for screendump */
-        if (!png_save(fd, image, errp)) { qemu_unlink(filename); }
+        if (!png_save(fd, surface, errp)) { qemu_unlink(filename); }
     }
     else {
         /* PPM format specified/default for screendump */
-        if (!ppm_save(fd, image, errp)) { qemu_unlink(filename); }
+        if (!ppm_save(fd, surface, errp)) { qemu_unlink(filename); }
     }
 }

@@ -39,8 +39,8 @@ inferno_linux_arch = ({
 inferno_target = "aarch64-softmmu"
 inferno_gendir = "$(builddir)/.gens/inferno"
 inferno_subdirs = {"accel", "audio", "authz", "backends", "block", "chardev", "crypto", "fpu", "fs", "fspatcher",
-	"gdbstub", "hw", "io", "monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target", "tcg", "trace",
-	"ui", "util"}
+	"gdbstub", "graphics", "hw", "io", "monitor", "net", "qapi", "qobject", "qom", "stats", "stubs", "system", "target",
+	"tcg", "trace", "ui", "util"}
 
 includes("@builtin/check")
 includes("xmake/packages.lua")
@@ -264,7 +264,7 @@ target("system")
 	set_kind("object")
 	add_deps("genh", "authz", "blockdev", "chardev", "crypto", "io", "qmp", "qom", "qemuutil")
 	add_defines("CONFIG_SOFTMMU")
-	add_packages("glib", "pixman", "zlib", "png", "vnc_jpeg", "slirp", "wxwidgets", "x11",
+	add_packages("glib", "zlib", "png", "vnc_jpeg", "slirp", "wxwidgets", "x11",
 		"curses", "libusb", "usb_redir", "libpmem", "libdaxctl", "seccomp", "lz4", "avahi", "avahi_glib",
 		"jack", "pipewire", "sndio", "pa", "alsa", "libffi", "libyuv", {public = true})
 	add_options("vnc_sasl", "vde", "iconv", "oss", "dsound", "dnsapi")

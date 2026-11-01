@@ -119,13 +119,23 @@ struct VncRectStat
 
 typedef struct VncRectStat VncRectStat;
 
+typedef struct PixelFormat
+{
+    uint8_t  bits_per_pixel;
+    uint8_t  bytes_per_pixel;
+    uint8_t  depth; /* color depth in bits */
+    uint32_t rmask, gmask, bmask, amask;
+    uint8_t  rshift, gshift, bshift, ashift;
+    uint8_t  rmax, gmax, bmax, amax;
+    uint8_t  rbits, gbits, bbits, abits;
+} PixelFormat;
+
 struct VncSurface
 {
     struct timeval last_freq_check;
     DECLARE_BITMAP(dirty[VNC_MAX_HEIGHT], VNC_MAX_WIDTH / VNC_DIRTY_PIXELS_PER_BIT);
-    VncRectStat          stats[VNC_STAT_ROWS][VNC_STAT_COLS];
-    pixman_image_t*      fb;
-    pixman_format_code_t format;
+    VncRectStat     stats[VNC_STAT_ROWS][VNC_STAT_COLS];
+    DisplaySurface* fb;
 };
 
 typedef enum VncShareMode
@@ -166,7 +176,7 @@ struct VncDisplay
     uint8_t* cursor_mask;
 
     struct VncSurface guest;      /* guest visible surface (aka ds->surface) */
-    pixman_image_t*   server;     /* vnc server surface */
+    InfernoPixbuf     server;     /* vnc server surface */
     int               true_width; /* server surface width before rounding up */
 
     const char* id;
@@ -329,10 +339,9 @@ struct VncState
     Buffer output;
     Buffer input;
     /* current output mode information */
-    VncWritePixels*      write_pixels;
-    PixelFormat          client_pf;
-    pixman_format_code_t client_format;
-    int                  client_endian; /* G_LITTLE_ENDIAN or G_BIG_ENDIAN */
+    VncWritePixels* write_pixels;
+    PixelFormat     client_pf;
+    int             client_endian; /* G_LITTLE_ENDIAN or G_BIG_ENDIAN */
 
     CaptureVoiceOut*   audio_cap;
     struct audsettings as;
@@ -597,10 +606,9 @@ static inline void vnc_set_feature(VncState* vs, enum VncFeatures feature) { vs-
 /* Framebuffer */
 void vnc_framebuffer_update(VncState* vs, int x, int y, int w, int h, int32_t encoding);
 
-/* server fb is in PIXMAN_x8r8g8b8 */
-#define VNC_SERVER_FB_FORMAT PIXMAN_FORMAT(32, PIXMAN_TYPE_ARGB, 0, 8, 8, 8)
-#define VNC_SERVER_FB_BITS   (PIXMAN_FORMAT_BPP(VNC_SERVER_FB_FORMAT))
-#define VNC_SERVER_FB_BYTES  ((VNC_SERVER_FB_BITS + 7) / 8)
+/* server fb is 32-bit xRGB, like DisplaySurface */
+#define VNC_SERVER_FB_BITS  32
+#define VNC_SERVER_FB_BYTES 4
 
 void* vnc_server_fb_ptr(VncDisplay* vd, int x, int y);
 int   vnc_server_fb_stride(VncDisplay* vd);

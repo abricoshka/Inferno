@@ -100,7 +100,7 @@ static bool tight_can_send_png_rect(VncState* vs, VncTight* tight, int w, int h)
 {
     if (tight->type != VNC_ENCODING_TIGHT_PNG) { return false; }
 
-    if (surface_bytes_per_pixel(vs->vd->ds) == 1 || vs->client_pf.bytes_per_pixel == 1) { return false; }
+    if (vs->client_pf.bytes_per_pixel == 1) { return false; }
 
     return true;
 }
@@ -248,9 +248,7 @@ static int tight_detect_smooth_image(VncState* vs, VncTight* tight, int w, int h
 
     if (!vs->vd->lossy) { return 0; }
 
-    if (surface_bytes_per_pixel(vs->vd->ds) == 1 || vs->client_pf.bytes_per_pixel == 1 || w < VNC_TIGHT_DETECT_MIN_WIDTH
-        || h < VNC_TIGHT_DETECT_MIN_HEIGHT)
-    {
+    if (vs->client_pf.bytes_per_pixel == 1 || w < VNC_TIGHT_DETECT_MIN_WIDTH || h < VNC_TIGHT_DETECT_MIN_HEIGHT) {
         return 0;
     }
 
@@ -1039,12 +1037,9 @@ static int send_jpeg_rect(VncState* vs, VncWorker* worker, int x, int y, int w, 
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr       jerr;
     struct jpeg_destination_mgr manager;
-    pixman_image_t*             linebuf;
     JSAMPROW                    row[1];
     uint8_t*                    buf;
     int                         dy;
-
-    if (surface_bytes_per_pixel(vs->vd->ds) == 1) { return send_full_color_rect(vs, worker, x, y, w, h); }
 
     qemu_buffer_reserve(&worker->tight.jpeg, 2048);
 
@@ -1067,14 +1062,13 @@ static int send_jpeg_rect(VncState* vs, VncWorker* worker, int x, int y, int w, 
 
     jpeg_start_compress(&cinfo, true);
 
-    linebuf = qemu_pixman_linebuf_create(PIXMAN_BE_r8g8b8, w);
-    buf     = (uint8_t*)pixman_image_get_data(linebuf);
-    row[0]  = buf;
+    buf    = g_malloc((size_t)w * 3);
+    row[0] = buf;
     for (dy = 0; dy < h; dy++) {
-        qemu_pixman_linebuf_fill(linebuf, vs->vd->server, w, x, y + dy);
+        inferno_pixbuf_row_to_rgb(&vs->vd->server, x, y + dy, w, buf);
         jpeg_write_scanlines(&cinfo, row, 1);
     }
-    qemu_pixman_image_unref(linebuf);
+    g_free(buf);
 
     jpeg_finish_compress(&cinfo);
     jpeg_destroy_compress(&cinfo);
@@ -1134,15 +1128,14 @@ static void vnc_png_free(png_structp png_ptr, png_voidp ptr) { g_free(ptr); }
 
 static int send_png_rect(VncState* vs, VncWorker* worker, int x, int y, int w, int h, VncPalette* palette)
 {
-    png_byte        color_type;
-    png_structp     png_ptr;
-    png_infop       info_ptr;
-    png_colorp      png_palette = NULL;
-    pixman_image_t* linebuf;
-    int             level   = tight_png_conf[worker->tight.compression].png_zlib_level;
-    int             filters = tight_png_conf[worker->tight.compression].png_filters;
-    uint8_t*        buf;
-    int             dy;
+    png_byte    color_type;
+    png_structp png_ptr;
+    png_infop   info_ptr;
+    png_colorp  png_palette = NULL;
+    int         level       = tight_png_conf[worker->tight.compression].png_zlib_level;
+    int         filters     = tight_png_conf[worker->tight.compression].png_filters;
+    uint8_t*    buf;
+    int         dy;
 
     png_ptr = png_create_write_struct_2(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL, NULL, vnc_png_malloc, vnc_png_free);
 
@@ -1190,16 +1183,15 @@ static int send_png_rect(VncState* vs, VncWorker* worker, int x, int y, int w, i
     png_write_info(png_ptr, info_ptr);
 
     qemu_buffer_reserve(&worker->tight.png, 2048);
-    linebuf = qemu_pixman_linebuf_create(PIXMAN_BE_r8g8b8, w);
-    buf     = (uint8_t*)pixman_image_get_data(linebuf);
+    buf = g_malloc((size_t)w * 3);
     for (dy = 0; dy < h; dy++) {
         if (color_type == PNG_COLOR_TYPE_PALETTE) { memcpy(buf, worker->tight.tight.buffer + (dy * w), w); }
         else {
-            qemu_pixman_linebuf_fill(linebuf, vs->vd->server, w, x, y + dy);
+            inferno_pixbuf_row_to_rgb(&vs->vd->server, x, y + dy, w, buf);
         }
         png_write_row(png_ptr, buf);
     }
-    qemu_pixman_image_unref(linebuf);
+    g_free(buf);
 
     png_write_end(png_ptr, NULL);
 

@@ -550,14 +550,12 @@ static void vnc_desktop_resize(VncState* vs)
     if (vs->ioc == NULL || (!vnc_has_feature(vs, VNC_FEATURE_RESIZE) && !vnc_has_feature(vs, VNC_FEATURE_RESIZE_EXT))) {
         return;
     }
-    if (vs->client_width == vs->vd->true_width && vs->client_height == pixman_image_get_height(vs->vd->server)) {
-        return;
-    }
+    if (vs->client_width == vs->vd->true_width && vs->client_height == (int)vs->vd->server.height) { return; }
 
     assert(vs->vd->true_width < 65536 && vs->vd->true_width >= 0);
-    assert(pixman_image_get_height(vs->vd->server) < 65536 && pixman_image_get_height(vs->vd->server) >= 0);
+    assert(vs->vd->server.height < 65536);
     vs->client_width  = vs->vd->true_width;
-    vs->client_height = pixman_image_get_height(vs->vd->server);
+    vs->client_height = vs->vd->server.height;
 
     if (vnc_has_feature(vs, VNC_FEATURE_RESIZE_EXT)) {
         vnc_desktop_resize_ext(vs, 0);
@@ -597,13 +595,13 @@ static void vnc_abort_display_jobs(VncDisplay* vd)
     }
 }
 
-int vnc_server_fb_stride(VncDisplay* vd) { return pixman_image_get_stride(vd->server); }
+int vnc_server_fb_stride(VncDisplay* vd) { return vd->server.stride[0]; }
 
 void* vnc_server_fb_ptr(VncDisplay* vd, int x, int y)
 {
     uint8_t* ptr;
 
-    ptr  = (uint8_t*)pixman_image_get_data(vd->server);
+    ptr  = vd->server.plane[0];
     ptr += y * vnc_server_fb_stride(vd);
     ptr += x * VNC_SERVER_FB_BYTES;
     return ptr;
@@ -613,15 +611,16 @@ static void vnc_update_server_surface(VncDisplay* vd)
 {
     int width, height;
 
-    qemu_pixman_image_unref(vd->server);
-    vd->server = NULL;
+    inferno_pixbuf_destroy(&vd->server);
+    vd->server = (InfernoPixbuf){0};
 
     if (QTAILQ_EMPTY(&vd->clients)) { return; }
 
     width          = vnc_width(vd);
     height         = vnc_height(vd);
     vd->true_width = vnc_true_width(vd);
-    vd->server     = pixman_image_create_bits(VNC_SERVER_FB_FORMAT, width, height, NULL, 0);
+    inferno_pixbuf_init(&vd->server, INFERNO_PIXBUF_ARGB, width, height);
+    memset(vd->server.plane[0], 0, (size_t)vd->server.stride[0] * height);
 
     memset(vd->guest.dirty, 0x00, sizeof(vd->guest.dirty));
     vnc_set_area_dirty(vd->guest.dirty, vd, 0, 0, width, height);
@@ -630,7 +629,7 @@ static void vnc_update_server_surface(VncDisplay* vd)
 static bool vnc_check_pageflip(DisplaySurface* s1, DisplaySurface* s2)
 {
     return (s1 != NULL && s2 != NULL && surface_width(s1) == surface_width(s2)
-            && surface_height(s1) == surface_height(s2) && surface_format(s1) == surface_format(s2));
+            && surface_height(s1) == surface_height(s2));
 }
 
 static void vnc_dpy_switch(DisplayChangeListener* dcl, DisplaySurface* surface)
@@ -643,17 +642,16 @@ static void vnc_dpy_switch(DisplayChangeListener* dcl, DisplaySurface* surface)
     vd->ds = surface;
 
     /* guest surface */
-    qemu_pixman_image_unref(vd->guest.fb);
-    vd->guest.fb     = pixman_image_ref(surface->image);
-    vd->guest.format = surface_format(surface);
+    qemu_displaysurface_unref(vd->guest.fb);
+    vd->guest.fb = qemu_displaysurface_ref(surface);
 
     if (pageflip) {
-        trace_vnc_server_dpy_pageflip(vd, surface_width(surface), surface_height(surface), surface_format(surface));
+        trace_vnc_server_dpy_pageflip(vd, surface_width(surface), surface_height(surface));
         vnc_set_area_dirty(vd->guest.dirty, vd, 0, 0, surface_width(surface), surface_height(surface));
         return;
     }
 
-    trace_vnc_server_dpy_recreate(vd, surface_width(surface), surface_height(surface), surface_format(surface));
+    trace_vnc_server_dpy_recreate(vd, surface_width(surface), surface_height(surface));
     /* server surface */
     vnc_update_server_surface(vd);
 
@@ -675,13 +673,9 @@ void vnc_convert_pixel(VncState* vs, uint8_t* buf, uint32_t v)
 {
     uint8_t r, g, b;
 
-#if VNC_SERVER_FB_FORMAT == PIXMAN_FORMAT(32, PIXMAN_TYPE_ARGB, 0, 8, 8, 8)
     r = (((v & 0x00ff0000) >> 16) << vs->client_pf.rbits) >> 8;
     g = (((v & 0x0000ff00) >> 8) << vs->client_pf.gbits) >> 8;
     b = (((v & 0x000000ff) >> 0) << vs->client_pf.bbits) >> 8;
-#else
-    #error need some bits here if you change VNC_SERVER_FB_FORMAT
-#endif
     v = (r << vs->client_pf.rshift) | (g << vs->client_pf.gshift) | (b << vs->client_pf.bshift);
     switch (vs->client_pf.bytes_per_pixel) {
         case 1: buf[0] = v; break;
@@ -923,8 +917,8 @@ static int vnc_update_client(VncState* vs, int has_dirty)
      */
     job = vnc_job_new(vs);
 
-    height = pixman_image_get_height(vd->server);
-    width  = pixman_image_get_width(vd->server);
+    height = vd->server.height;
+    width  = vd->server.width;
 
     y = 0;
     for (;;) {
@@ -1445,8 +1439,8 @@ static void check_pointer_type_change(Notifier* notifier, void* data)
         vnc_write_u8(vs, VNC_MSG_SERVER_FRAMEBUFFER_UPDATE);
         vnc_write_u8(vs, 0);
         vnc_write_u16(vs, 1);
-        vnc_framebuffer_update(vs, absolute, 0, pixman_image_get_width(vs->vd->server),
-                               pixman_image_get_height(vs->vd->server), VNC_ENCODING_POINTER_TYPE_CHANGE);
+        vnc_framebuffer_update(vs, absolute, 0, vs->vd->server.width, vs->vd->server.height,
+                               VNC_ENCODING_POINTER_TYPE_CHANGE);
         vnc_unlock_output(vs);
         vnc_flush(vs);
     }
@@ -1460,8 +1454,8 @@ static void pointer_event(VncState* vs, int button_mask, int x, int y)
         [INPUT_BUTTON_WHEEL_UP] = 0x08, [INPUT_BUTTON_WHEEL_DOWN] = 0x10,
     };
     QemuConsole* con    = vs->vd->dcl.con;
-    int          width  = pixman_image_get_width(vs->vd->server);
-    int          height = pixman_image_get_height(vs->vd->server);
+    int          width  = vs->vd->server.width;
+    int          height = vs->vd->server.height;
 
     if (vs->last_bmask != button_mask) {
         qemu_input_update_buttons(con, bmap, vs->last_bmask, button_mask);
@@ -1689,8 +1683,7 @@ static void send_ext_key_event_ack(VncState* vs)
     vnc_write_u8(vs, VNC_MSG_SERVER_FRAMEBUFFER_UPDATE);
     vnc_write_u8(vs, 0);
     vnc_write_u16(vs, 1);
-    vnc_framebuffer_update(vs, 0, 0, pixman_image_get_width(vs->vd->server), pixman_image_get_height(vs->vd->server),
-                           VNC_ENCODING_EXT_KEY_EVENT);
+    vnc_framebuffer_update(vs, 0, 0, vs->vd->server.width, vs->vd->server.height, VNC_ENCODING_EXT_KEY_EVENT);
     vnc_unlock_output(vs);
     vnc_flush(vs);
 }
@@ -1701,8 +1694,7 @@ static void send_ext_audio_ack(VncState* vs)
     vnc_write_u8(vs, VNC_MSG_SERVER_FRAMEBUFFER_UPDATE);
     vnc_write_u8(vs, 0);
     vnc_write_u16(vs, 1);
-    vnc_framebuffer_update(vs, 0, 0, pixman_image_get_width(vs->vd->server), pixman_image_get_height(vs->vd->server),
-                           VNC_ENCODING_AUDIO);
+    vnc_framebuffer_update(vs, 0, 0, vs->vd->server.width, vs->vd->server.height, VNC_ENCODING_AUDIO);
     vnc_unlock_output(vs);
     vnc_flush(vs);
 }
@@ -1813,9 +1805,11 @@ static void set_encodings(VncState* vs, int32_t* encodings, size_t n_encodings)
 
 static void set_pixel_conversion(VncState* vs)
 {
-    pixman_format_code_t fmt = qemu_pixman_get_format(&vs->client_pf, vs->client_endian);
+    const PixelFormat* pf = &vs->client_pf;
 
-    if (fmt == VNC_SERVER_FB_FORMAT) {
+    if (pf->bits_per_pixel == VNC_SERVER_FB_BITS && vs->client_endian == G_BYTE_ORDER && pf->rshift == 16
+        && pf->gshift == 8 && pf->bshift == 0 && pf->rmax == 0xFF && pf->gmax == 0xFF && pf->bmax == 0xFF)
+    {
         vs->write_pixels = vnc_write_pixels_copy;
         vnc_hextile_set_pixel_conversion(vs, 0);
     }
@@ -1898,11 +1892,30 @@ static void set_pixel_format(VncState* vs, int bits_per_pixel, int big_endian_fl
     graphic_hw_update(vs->vd->dcl.con);
 }
 
+static const PixelFormat vnc_server_pixel_format = {
+    .bits_per_pixel  = VNC_SERVER_FB_BITS,
+    .bytes_per_pixel = VNC_SERVER_FB_BYTES,
+    .depth           = 24,
+    .rmask           = 0x00FF0000,
+    .gmask           = 0x0000FF00,
+    .bmask           = 0x000000FF,
+    .rshift          = 16,
+    .gshift          = 8,
+    .bshift          = 0,
+    .ashift          = 24,
+    .rmax            = 0xFF,
+    .gmax            = 0xFF,
+    .bmax            = 0xFF,
+    .rbits           = 8,
+    .gbits           = 8,
+    .bbits           = 8,
+};
+
 static void pixel_format_message(VncState* vs)
 {
     char pad[3] = {0, 0, 0};
 
-    vs->client_pf     = qemu_default_pixelformat(32);
+    vs->client_pf     = vnc_server_pixel_format;
     vs->client_endian = G_BYTE_ORDER;
 
     vnc_write_u8(vs, vs->client_pf.bits_per_pixel); /* bits-per-pixel */
@@ -2243,10 +2256,10 @@ static int protocol_client_init(VncState* vs, uint8_t* data, size_t len)
         return 0;
     }
 
-    assert(pixman_image_get_width(vs->vd->server) < 65536 && pixman_image_get_width(vs->vd->server) >= 0);
-    assert(pixman_image_get_height(vs->vd->server) < 65536 && pixman_image_get_height(vs->vd->server) >= 0);
-    vs->client_width  = pixman_image_get_width(vs->vd->server);
-    vs->client_height = pixman_image_get_height(vs->vd->server);
+    assert(vs->vd->server.width < 65536);
+    assert(vs->vd->server.height < 65536);
+    vs->client_width  = vs->vd->server.width;
+    vs->client_height = vs->vd->server.height;
     vnc_write_u16(vs, vs->client_width);
     vnc_write_u16(vs, vs->client_height);
 
@@ -2519,8 +2532,8 @@ static int vnc_refresh_lossy_rect(VncDisplay* vd, int x, int y)
 
 static int vnc_update_stats(VncDisplay* vd, struct timeval* tv)
 {
-    int            width  = MIN(pixman_image_get_width(vd->guest.fb), pixman_image_get_width(vd->server));
-    int            height = MIN(pixman_image_get_height(vd->guest.fb), pixman_image_get_height(vd->server));
+    int            width  = MIN(surface_width(vd->guest.fb), (int)vd->server.width);
+    int            height = MIN(surface_height(vd->guest.fb), (int)vd->server.height);
     int            x, y;
     struct timeval res;
     int            has_dirty = 0;
@@ -2603,16 +2616,15 @@ static void vnc_rect_updated(VncDisplay* vd, int x, int y, struct timeval* tv)
 
 static int vnc_refresh_server_surface(VncDisplay* vd)
 {
-    int             width  = MIN(pixman_image_get_width(vd->guest.fb), pixman_image_get_width(vd->server));
-    int             height = MIN(pixman_image_get_height(vd->guest.fb), pixman_image_get_height(vd->server));
-    int             cmp_bytes, server_stride, line_bytes, guest_ll, guest_stride, y = 0;
-    uint8_t *       guest_row0 = NULL, *server_row0;
-    VncState*       vs;
-    int             has_dirty = 0;
-    pixman_image_t* tmpbuf    = NULL;
-    unsigned long   offset;
-    int             x;
-    uint8_t *       guest_ptr, *server_ptr;
+    int           width  = MIN(surface_width(vd->guest.fb), (int)vd->server.width);
+    int           height = MIN(surface_height(vd->guest.fb), (int)vd->server.height);
+    int           cmp_bytes, server_stride, line_bytes, guest_ll, guest_stride, y = 0;
+    uint8_t *     guest_row0, *server_row0;
+    VncState*     vs;
+    int           has_dirty = 0;
+    unsigned long offset;
+    int           x;
+    uint8_t *     guest_ptr, *server_ptr;
 
     struct timeval tv = {0, 0};
 
@@ -2632,20 +2644,13 @@ static int vnc_refresh_server_surface(VncDisplay* vd)
      * Check and copy modified bits from guest to server surface.
      * Update server dirty map.
      */
-    server_row0   = (uint8_t*)pixman_image_get_data(vd->server);
-    server_stride = guest_stride = guest_ll = pixman_image_get_stride(vd->server);
-    cmp_bytes                               = MIN(VNC_DIRTY_PIXELS_PER_BIT * VNC_SERVER_FB_BYTES, server_stride);
-    if (vd->guest.format != VNC_SERVER_FB_FORMAT) {
-        int w  = pixman_image_get_width(vd->server);
-        tmpbuf = qemu_pixman_linebuf_create(VNC_SERVER_FB_FORMAT, w);
-    }
-    else {
-        int guest_bpp = PIXMAN_FORMAT_BPP(pixman_image_get_format(vd->guest.fb));
-        guest_row0    = (uint8_t*)pixman_image_get_data(vd->guest.fb);
-        guest_stride  = pixman_image_get_stride(vd->guest.fb);
-        guest_ll      = pixman_image_get_width(vd->guest.fb) * DIV_ROUND_UP(guest_bpp, 8);
-    }
-    line_bytes = MIN(server_stride, guest_ll);
+    server_row0   = vd->server.plane[0];
+    server_stride = vd->server.stride[0];
+    cmp_bytes     = MIN(VNC_DIRTY_PIXELS_PER_BIT * VNC_SERVER_FB_BYTES, server_stride);
+    guest_row0    = surface_data(vd->guest.fb);
+    guest_stride  = surface_stride(vd->guest.fb);
+    guest_ll      = surface_width(vd->guest.fb) * VNC_SERVER_FB_BYTES;
+    line_bytes    = MIN(server_stride, guest_ll);
 
     for (;;) {
         y = offset / VNC_DIRTY_BPL(&vd->guest);
@@ -2653,13 +2658,7 @@ static int vnc_refresh_server_surface(VncDisplay* vd)
 
         server_ptr = server_row0 + y * server_stride + x * cmp_bytes;
 
-        if (vd->guest.format != VNC_SERVER_FB_FORMAT) {
-            qemu_pixman_linebuf_fill(tmpbuf, vd->guest.fb, width, 0, y);
-            guest_ptr = (uint8_t*)pixman_image_get_data(tmpbuf);
-        }
-        else {
-            guest_ptr = guest_row0 + y * guest_stride;
-        }
+        guest_ptr  = guest_row0 + y * guest_stride;
         guest_ptr += x * cmp_bytes;
 
         for (; x < DIV_ROUND_UP(width, VNC_DIRTY_PIXELS_PER_BIT); x++, guest_ptr += cmp_bytes, server_ptr += cmp_bytes)
@@ -2683,7 +2682,6 @@ static int vnc_refresh_server_surface(VncDisplay* vd)
             break;
         }
     }
-    qemu_pixman_image_unref(tmpbuf);
     return has_dirty;
 }
 

@@ -21,9 +21,9 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "block/aio.h"
+#include "graphics/inferno_pixbuf.h"
 #include "hw/display/apple_apt_m3.h"
 #include "hw/display/apple_displaypipe_v4.h"
-#include "hw/display/apple_surface.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/registerfields.h"
@@ -31,7 +31,6 @@
 #include "qemu/log.h"
 #include "system/dma.h"
 #include "ui/console.h"
-#include "pixman.h"
 
 #if 0
     #define ADP_INFO(fmt, ...) fprintf(stderr, fmt "\n", ##__VA_ARGS__)
@@ -494,7 +493,7 @@ REG32(BLEND_PIXCAP_CONFIG, 0x303C)
 static void adp_v4_update_irqs(AppleDisplayPipeV4State* genpipe)
 { qemu_set_irq(genpipe->irqs[0], (qatomic_read(&genpipe->int_enable) & qatomic_read(&genpipe->int_status)) != 0); }
 
-static AppleSurfaceFormat adp_v4_gp_surface_format(uint32_t pixel_format)
+static InfernoDMASurfaceFormat adp_v4_gp_surface_format(uint32_t pixel_format)
 {
     uint32_t size   = REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, SIZE);
     uint32_t format = REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, FORMAT);
@@ -503,40 +502,40 @@ static AppleSurfaceFormat adp_v4_gp_surface_format(uint32_t pixel_format)
         || REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, ADDRESS_FORMAT) != 0
         || REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, PACKED))
     {
-        return APPLE_SURFACE_FORMAT_NONE;
+        return INFERNO_DMA_SURFACE_FORMAT_NONE;
     }
 
     if (REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, RGB) != 0) {
         switch (size << 2 | format) {
-            case 0x2: return APPLE_SURFACE_FORMAT_RGB565;
-            case 0x4: return APPLE_SURFACE_FORMAT_AR30;         // 2101010
-            case 0x5: return APPLE_SURFACE_FORMAT_ARGB;         // 8888
-            case 0x8: return APPLE_SURFACE_FORMAT_AR64;         // 10101010
-            case 0xA: return APPLE_SURFACE_FORMAT_AR64_HALF;    // FP16
-            case 0xC: return APPLE_SURFACE_FORMAT_AR30;         // 8101010, alpha plane unused
-            default : return APPLE_SURFACE_FORMAT_NONE;
+            case 0x2: return INFERNO_DMA_SURFACE_FORMAT_RGB565;
+            case 0x4: return INFERNO_DMA_SURFACE_FORMAT_AR30;         // 2101010
+            case 0x5: return INFERNO_DMA_SURFACE_FORMAT_ARGB;         // 8888
+            case 0x8: return INFERNO_DMA_SURFACE_FORMAT_AR64;         // 10101010
+            case 0xA: return INFERNO_DMA_SURFACE_FORMAT_AR64_HALF;    // FP16
+            case 0xC: return INFERNO_DMA_SURFACE_FORMAT_AR30;         // 8101010, alpha plane unused
+            default : return INFERNO_DMA_SURFACE_FORMAT_NONE;
         }
     }
 
     if (!REG_FIELD_EX32(pixel_format, GP_PIXEL_FORMAT, TWO_PLANES)) {
-        return size == 0 && format == 1 ? APPLE_SURFACE_FORMAT_YUY2 : APPLE_SURFACE_FORMAT_NONE;
+        return size == 0 && format == 1 ? INFERNO_DMA_SURFACE_FORMAT_YUY2 : INFERNO_DMA_SURFACE_FORMAT_NONE;
     }
 
     switch (size << 2 | format) {
-        case 0x0: return APPLE_SURFACE_FORMAT_NV24;
-        case 0x1: return APPLE_SURFACE_FORMAT_NV16;
-        case 0x2: return APPLE_SURFACE_FORMAT_NV12;
+        case 0x0: return INFERNO_DMA_SURFACE_FORMAT_NV24;
+        case 0x1: return INFERNO_DMA_SURFACE_FORMAT_NV16;
+        case 0x2: return INFERNO_DMA_SURFACE_FORMAT_NV12;
         case 0x4:
-        case 0xC: return APPLE_SURFACE_FORMAT_P410;
+        case 0xC: return INFERNO_DMA_SURFACE_FORMAT_P410;
         case 0x5:
-        case 0xD: return APPLE_SURFACE_FORMAT_P210;
+        case 0xD: return INFERNO_DMA_SURFACE_FORMAT_P210;
         case 0x6:
-        case 0xE: return APPLE_SURFACE_FORMAT_P010;
-        default : return APPLE_SURFACE_FORMAT_NONE;
+        case 0xE: return INFERNO_DMA_SURFACE_FORMAT_P010;
+        default : return INFERNO_DMA_SURFACE_FORMAT_NONE;
     }
 }
 
-static bool adp_v4_gp_surface(const ADPV4GenPipeState* state, AppleSurface* surface)
+static bool adp_v4_gp_surface(const ADPV4GenPipeState* state, InfernoDMASurface* surface)
 {
     unsigned plane;
 
@@ -545,15 +544,15 @@ static bool adp_v4_gp_surface(const ADPV4GenPipeState* state, AppleSurface* surf
     surface->width  = REG_FIELD_EX32(state->dimensions[0], GP_DIMENSIONS, WIDTH);
     surface->height = REG_FIELD_EX32(state->dimensions[0], GP_DIMENSIONS, HEIGHT);
 
-    if (surface->format == APPLE_SURFACE_FORMAT_NONE) { return false; }
+    if (surface->format == INFERNO_DMA_SURFACE_FORMAT_NONE) { return false; }
 
-    for (plane = 0; plane < (apple_surface_is_biplanar(surface->format) ? 2 : 1); plane++) {
+    for (plane = 0; plane < (inferno_dma_surface_is_biplanar(surface->format) ? 2 : 1); plane++) {
         surface->stride[plane] = state->stride[plane];
         surface->base[plane] =
             state->data_start[plane]
             + (dma_addr_t)REG_FIELD_EX32(state->position[plane], GP_POSITION, Y) * state->stride[plane]
             + REG_FIELD_EX32(state->position[plane], GP_POSITION, X)
-                  * apple_surface_bytes_per_pixel(surface->format, surface->depth, plane);
+                  * inferno_dma_surface_bytes_per_pixel(surface->format, surface->depth, plane);
     }
 
     return true;
@@ -1352,8 +1351,7 @@ static bool adp_v4_gp_scanout(AppleDisplayPipeV4State* adp, ADPV4GenPipe* genpip
 {
     const ADPV4GenPipeState* state = &genpipe->state;
     DisplaySurface*          surface;
-    pixman_image_t*          image;
-    AppleSurface             src;
+    InfernoDMASurface        src;
     uint8_t                  order[4];
     hwaddr                   len;
     void*                    ptr;
@@ -1365,7 +1363,7 @@ static bool adp_v4_gp_scanout(AppleDisplayPipeV4State* adp, ADPV4GenPipe* genpip
     {
         return false;
     }
-    if (!adp_v4_gp_surface(state, &src) || src.format != APPLE_SURFACE_FORMAT_ARGB
+    if (!adp_v4_gp_surface(state, &src) || src.format != INFERNO_DMA_SURFACE_FORMAT_ARGB
         || adp_v4_gp_swizzle(state->pixel_format, order))
     {
         return false;
@@ -1375,16 +1373,17 @@ static bool adp_v4_gp_scanout(AppleDisplayPipeV4State* adp, ADPV4GenPipe* genpip
 
     ptr = adp_v4_dma_contiguous_ptr(adp, src.base[0], len);
     if (ptr != NULL) {
-        image = pixman_image_create_bits(PIXMAN_a8r8g8b8, adp->width, adp->height, ptr, src.stride[0]);
-        dpy_gfx_replace_surface(adp->console, qemu_create_displaysurface_pixman(image));
-        qemu_pixman_image_unref(image);
+        dpy_gfx_replace_surface(adp->console,
+                                qemu_create_displaysurface_from(adp->width, adp->height, src.stride[0], ptr));
         adp->direct_scanout = true;
         return true;
     }
 
     surface = qemu_console_surface(adp->console);
-    if (adp->direct_scanout || surface_format(surface) != PIXMAN_a8r8g8b8 || surface_stride(surface) != src.stride[0]) {
-        surface = qemu_create_displaysurface_from(adp->width, adp->height, PIXMAN_a8r8g8b8, src.stride[0], NULL);
+    if (adp->direct_scanout || surface_width(surface) != adp->width || surface_height(surface) != adp->height
+        || surface_stride(surface) != src.stride[0])
+    {
+        surface = qemu_create_displaysurface_from(adp->width, adp->height, src.stride[0], NULL);
         dpy_gfx_replace_surface(adp->console, surface);
         adp->direct_scanout = false;
     }
@@ -1485,12 +1484,11 @@ static void adp_v4_reset_hold(Object* obj, ResetType type)
     if (adp->boot_fb_valid) { adp_v4_boot_display(adp); }
 }
 
-static void adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_image_t* disp_image, uint32_t mode)
+static void adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, InfernoPixbuf* disp_image, uint32_t mode)
 {
     ADPV4GenPipeState state;
-    AppleSurface      surface;
-    AppleImage        image, tmp;
-    pixman_image_t*   src;
+    InfernoDMASurface surface;
+    InfernoPixbuf     image, tmp;
     uint8_t           order[4];
     uint32_t          width, height;
 
@@ -1510,35 +1508,32 @@ static void adp_v4_gp_draw(ADPV4GenPipe* genpipe, AddressSpace* dma_as, pixman_i
         return;
     }
 
-    if (!apple_surface_load(&image, dma_as, &surface)) { return; }
+    if (!inferno_dma_surface_load(&image, dma_as, &surface)) { return; }
 
-    if (image.kind != APPLE_IMAGE_ARGB) {
-        int ret = apple_image_convert(&tmp, &image, APPLE_IMAGE_ARGB, APPLE_SURFACE_MATRIX_BT709);
+    if (image.kind != INFERNO_PIXBUF_ARGB) {
+        int ret = inferno_pixbuf_convert(&tmp, &image, INFERNO_PIXBUF_ARGB, INFERNO_PIXBUF_MATRIX_BT709);
 
-        apple_image_destroy(&image);
+        inferno_pixbuf_destroy(&image);
         if (ret) {
-            apple_image_destroy(&tmp);
+            inferno_pixbuf_destroy(&tmp);
             return;
         }
         image = tmp;
     }
 
-    if (adp_v4_gp_swizzle(state.pixel_format, order)) { apple_image_shuffle(&image, order); }
+    if (adp_v4_gp_swizzle(state.pixel_format, order)) { inferno_pixbuf_shuffle(&image, order); }
 
     if (image.width != width || image.height != height) {
-        apple_image_scale(&tmp, &image, width, height);
-        apple_image_destroy(&image);
+        inferno_pixbuf_scale(&tmp, &image, width, height);
+        inferno_pixbuf_destroy(&image);
         image = tmp;
     }
 
-    if (mode == BLEND_MODE_ALPHA) { apple_image_premultiply(&image); }
+    if (mode == BLEND_MODE_ALPHA) { inferno_pixbuf_premultiply(&image); }
 
-    src = pixman_image_create_bits(PIXMAN_a8r8g8b8, width, height, (uint32_t*)image.plane[0], image.stride[0]);
-    pixman_image_composite(mode == BLEND_MODE_BYPASS ? PIXMAN_OP_SRC : PIXMAN_OP_OVER, src, NULL, disp_image, 0, 0, 0,
-                           0, REG_FIELD_EX32(state.dest_position, GP_POSITION, X),
-                           REG_FIELD_EX32(state.dest_position, GP_POSITION, Y), width, height);
-    qemu_pixman_image_unref(src);
-    apple_image_destroy(&image);
+    inferno_pixbuf_composite(disp_image, &image, REG_FIELD_EX32(state.dest_position, GP_POSITION, X),
+                             REG_FIELD_EX32(state.dest_position, GP_POSITION, Y), mode != BLEND_MODE_BYPASS);
+    inferno_pixbuf_destroy(&image);
 }
 
 static ADPV4GenPipe* adp_v4_single_enabled_gp(AppleDisplayPipeV4State* adp)
@@ -1559,17 +1554,11 @@ static void adp_v4_update_disp_bh(void* opaque)
 {
     AppleDisplayPipeV4State* adp = opaque;
     ADPV4GenPipe*            genpipe;
-    pixman_image_t*          disp_image;
-    pixman_color_t           bg = {
-        .red   = adp->blend_unit.bg[2] >> 8,
-        .green = adp->blend_unit.bg[1] >> 8,
-        .blue  = adp->blend_unit.bg[0] >> 8,
-        .alpha = 0xFFFF,
-    };
-    pixman_rectangle16_t rect  = {0, 0, adp->width, adp->height};
-    bool                 drawn = false;
-    uint32_t             config;
-    int                  i;
+    const uint32_t*          bg = adp->blend_unit.bg;
+    InfernoPixbuf*           disp_image;
+    bool                     drawn = false;
+    uint32_t                 config;
+    int                      i;
 
     genpipe = adp_v4_single_enabled_gp(adp);
     if (genpipe != NULL) {
@@ -1584,8 +1573,9 @@ static void adp_v4_update_disp_bh(void* opaque)
             adp->direct_scanout = false;
         }
 
-        disp_image = qemu_console_surface(adp->console)->image;
-        pixman_image_fill_rectangles(PIXMAN_OP_SRC, disp_image, &bg, 1, &rect);
+        disp_image = &qemu_console_surface(adp->console)->image;
+        inferno_pixbuf_fill(disp_image, 0, 0, adp->width, adp->height,
+                            0xFF000000 | (bg[2] >> 16 & 0xFF) << 16 | (bg[1] >> 16 & 0xFF) << 8 | (bg[0] >> 16 & 0xFF));
 
         for (i = 0; i < ADP_V4_LAYER_COUNT; ++i) {
             config = adp->blend_unit.layer_config[i];

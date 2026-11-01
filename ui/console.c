@@ -267,7 +267,7 @@ static void qemu_console_finalize(Object* obj)
     QemuConsole* c = QEMU_CONSOLE(obj);
 
     /* TODO: check this code path, and unregister from consoles */
-    g_clear_pointer(&c->surface, qemu_free_displaysurface);
+    g_clear_pointer(&c->surface, qemu_displaysurface_unref);
     g_clear_pointer(&c->ui_timer, timer_free);
 }
 
@@ -308,47 +308,30 @@ static void qemu_graphic_console_class_init(ObjectClass* oc, const void* data)
 
 static void qemu_graphic_console_init(Object* obj) { }
 
-void qemu_displaysurface_set_share_handle(DisplaySurface* surface, qemu_pixman_shareable handle, uint32_t offset)
-{
-    assert(surface->share_handle == SHAREABLE_NONE);
-
-    surface->share_handle        = handle;
-    surface->share_handle_offset = offset;
-}
-
 DisplaySurface* qemu_create_displaysurface(int width, int height)
 {
     trace_displaysurface_create(width, height);
 
-    return qemu_create_displaysurface_from(width, height, PIXMAN_x8r8g8b8, width * 4, NULL);
+    return qemu_create_displaysurface_from(width, height, width * 4, NULL);
 }
 
-DisplaySurface* qemu_create_displaysurface_from(int width, int height, pixman_format_code_t format, int linesize,
-                                                uint8_t* data)
+DisplaySurface* qemu_create_displaysurface_from(int width, int height, int linesize, uint8_t* data)
 {
     DisplaySurface* surface = g_new0(DisplaySurface, 1);
 
-    trace_displaysurface_create_from(surface, width, height, format);
-    surface->share_handle = SHAREABLE_NONE;
+    trace_displaysurface_create_from(surface, width, height);
 
-    if (data) { surface->image = pixman_image_create_bits(format, width, height, (void*)data, linesize); }
+    surface->image.kind      = INFERNO_PIXBUF_ARGB;
+    surface->image.width     = width;
+    surface->image.height    = height;
+    surface->image.stride[0] = linesize;
+    surface->refcount        = 1;
+
+    if (data) { surface->image.plane[0] = data; }
     else {
-        qemu_pixman_image_new_shareable(&surface->image, &surface->share_handle, "displaysurface", format, width,
-                                        height, linesize, &error_abort);
-        surface->flags = QEMU_ALLOCATED_FLAG;
+        surface->image.plane[0] = g_malloc0((size_t)linesize * height);
+        surface->flags          = QEMU_ALLOCATED_FLAG;
     }
-
-    assert(surface->image != NULL);
-    return surface;
-}
-
-DisplaySurface* qemu_create_displaysurface_pixman(pixman_image_t* image)
-{
-    DisplaySurface* surface = g_new0(DisplaySurface, 1);
-
-    trace_displaysurface_create_pixman(surface);
-    surface->share_handle = SHAREABLE_NONE;
-    surface->image        = pixman_image_ref(image);
 
     return surface;
 }
@@ -356,28 +339,30 @@ DisplaySurface* qemu_create_displaysurface_pixman(pixman_image_t* image)
 DisplaySurface* qemu_create_placeholder_surface(int w, int h, const char* msg)
 {
     DisplaySurface* surface = qemu_create_displaysurface(w, h);
-    pixman_color_t  bg      = QEMU_PIXMAN_COLOR_BLACK;
-    pixman_color_t  fg      = QEMU_PIXMAN_COLOR_GRAY;
-    pixman_image_t* glyph;
     int             len, x, y, i;
 
     len = strlen(msg);
     x   = (w / FONT_WIDTH - len) / 2;
     y   = (h / FONT_HEIGHT - 1) / 2;
     for (i = 0; i < len; i++) {
-        glyph = qemu_pixman_glyph_from_vgafont(FONT_HEIGHT, vgafont16, msg[i]);
-        qemu_pixman_glyph_render(glyph, surface->image, &fg, &bg, x + i, y, FONT_WIDTH, FONT_HEIGHT);
-        qemu_pixman_image_unref(glyph);
+        inferno_pixbuf_draw_glyph(&surface->image, (x + i) * FONT_WIDTH, y * FONT_HEIGHT,
+                                  vgafont16 + (uint8_t)msg[i] * FONT_HEIGHT, FONT_HEIGHT, 0xFFAAAAAA, 0xFF000000);
     }
     surface->flags |= QEMU_PLACEHOLDER_FLAG;
     return surface;
 }
 
-void qemu_free_displaysurface(DisplaySurface* surface)
+DisplaySurface* qemu_displaysurface_ref(DisplaySurface* surface)
 {
-    if (surface == NULL) { return; }
+    qatomic_inc(&surface->refcount);
+    return surface;
+}
+
+void qemu_displaysurface_unref(DisplaySurface* surface)
+{
+    if (surface == NULL || qatomic_fetch_dec(&surface->refcount) != 1) { return; }
     trace_displaysurface_free(surface);
-    qemu_pixman_image_unref(surface->image);
+    if (surface_is_allocated(surface)) { inferno_pixbuf_destroy(&surface->image); }
     g_free(surface);
 }
 
@@ -568,7 +553,7 @@ void dpy_gfx_replace_surface(QemuConsole* con, DisplaySurface* surface)
         if (con != dcl->con) { continue; }
         displaychangelistener_gfx_switch(dcl, new_surface, surface ? FALSE : TRUE);
     }
-    qemu_free_displaysurface(old_surface);
+    qemu_displaysurface_unref(old_surface);
 }
 
 static void dpy_refresh(DisplayState* s)
@@ -906,13 +891,6 @@ void qemu_console_resize(QemuConsole* s, int width, int height)
 }
 
 DisplaySurface* qemu_console_surface(QemuConsole* console) { return console->surface; }
-
-PixelFormat qemu_default_pixelformat(int bpp)
-{
-    pixman_format_code_t fmt = qemu_default_pixman_format(bpp, true);
-    PixelFormat          pf  = qemu_pixelformat_from_pixman(fmt);
-    return pf;
-}
 
 static QemuDisplay* dpys[DISPLAY_TYPE__MAX];
 

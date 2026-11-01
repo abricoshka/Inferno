@@ -65,19 +65,13 @@ static CKIUIState wxwidgets_state = {
 
 static void wxwidgets_gfx_switch(DisplayChangeListener* dcl, DisplaySurface* surface)
 {
-    CKIUIState*     state = container_of(dcl, CKIUIState, dcl);
-    pixman_image_t* image = surface->image;
+    CKIUIState* state = container_of(dcl, CKIUIState, dcl);
 
-    pixman_image_ref(image);
-    CKIUISetSurface(state->app, image, surface_data(surface), surface_width(surface), surface_height(surface),
-                    surface_stride(surface));
+    CKIUISetSurface(state->app, qemu_displaysurface_ref(surface), surface_data(surface), surface_width(surface),
+                    surface_height(surface), surface_stride(surface));
 }
 
-static void wxwidgets_release_surface(void* opaque) { pixman_image_unref(opaque); }
-
-/* pixman refcounts aren't atomic, drop it where QEMU drops its own. */
-void CKIUIReleaseSurface(void* image)
-{ aio_bh_schedule_oneshot(qemu_get_aio_context(), wxwidgets_release_surface, image); }
+void CKIUIReleaseSurface(void* surface) { qemu_displaysurface_unref(surface); }
 
 static void wxwidgets_gfx_update(DisplayChangeListener* dcl, int x, int y, int w, int h)
 {

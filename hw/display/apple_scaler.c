@@ -19,7 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/display/apple_scaler.h"
-#include "hw/display/apple_surface.h"
+#include "graphics/inferno_pixbuf.h"
 #include "hw/irq.h"
 #include "hw/registerfields.h"
 #include "hw/resettable.h"
@@ -304,24 +304,24 @@ static G_GNUC_UNUSED const char* apple_scaler_stringify_format(AppleScalerFormat
     }
 }
 
-static AppleSurfaceFormat apple_scaler_surface_format(AppleScalerFormat format)
+static InfernoDMASurfaceFormat apple_scaler_surface_format(AppleScalerFormat format)
 {
     switch (format) {
-        case APPLE_SCALER_FORMAT_BGRA          : return APPLE_SURFACE_FORMAT_ARGB;
-        case APPLE_SCALER_FORMAT_RGBA          : return APPLE_SURFACE_FORMAT_ABGR;
-        case APPLE_SCALER_FORMAT_L10R          : return APPLE_SURFACE_FORMAT_AR30;
-        case APPLE_SCALER_FORMAT_YUV_420       : return APPLE_SURFACE_FORMAT_NV12;
-        case APPLE_SCALER_FORMAT_YUV_422       : return APPLE_SURFACE_FORMAT_NV16;
-        case APPLE_SCALER_FORMAT_YUV_444       : return APPLE_SURFACE_FORMAT_NV24;
-        case APPLE_SCALER_FORMAT_YUVS_YUVF     : return APPLE_SURFACE_FORMAT_YUY2;
-        case APPLE_SCALER_FORMAT_X420_XF20     : return APPLE_SURFACE_FORMAT_P010;
-        case APPLE_SCALER_FORMAT_X422_XF22     : return APPLE_SURFACE_FORMAT_P210;
-        case APPLE_SCALER_FORMAT_X444_XF44_XW44: return APPLE_SURFACE_FORMAT_P410;
+        case APPLE_SCALER_FORMAT_BGRA          : return INFERNO_DMA_SURFACE_FORMAT_ARGB;
+        case APPLE_SCALER_FORMAT_RGBA          : return INFERNO_DMA_SURFACE_FORMAT_ABGR;
+        case APPLE_SCALER_FORMAT_L10R          : return INFERNO_DMA_SURFACE_FORMAT_AR30;
+        case APPLE_SCALER_FORMAT_YUV_420       : return INFERNO_DMA_SURFACE_FORMAT_NV12;
+        case APPLE_SCALER_FORMAT_YUV_422       : return INFERNO_DMA_SURFACE_FORMAT_NV16;
+        case APPLE_SCALER_FORMAT_YUV_444       : return INFERNO_DMA_SURFACE_FORMAT_NV24;
+        case APPLE_SCALER_FORMAT_YUVS_YUVF     : return INFERNO_DMA_SURFACE_FORMAT_YUY2;
+        case APPLE_SCALER_FORMAT_X420_XF20     : return INFERNO_DMA_SURFACE_FORMAT_P010;
+        case APPLE_SCALER_FORMAT_X422_XF22     : return INFERNO_DMA_SURFACE_FORMAT_P210;
+        case APPLE_SCALER_FORMAT_X444_XF44_XW44: return INFERNO_DMA_SURFACE_FORMAT_P410;
         case APPLE_SCALER_FORMAT_L008          :
         case APPLE_SCALER_FORMAT_L010          :
         case APPLE_SCALER_FORMAT_L012          :
-        case APPLE_SCALER_FORMAT_L016          : return APPLE_SURFACE_FORMAT_I400;
-        default                                : return APPLE_SURFACE_FORMAT_NONE;
+        case APPLE_SCALER_FORMAT_L016          : return INFERNO_DMA_SURFACE_FORMAT_I400;
+        default                                : return INFERNO_DMA_SURFACE_FORMAT_NONE;
     }
 }
 
@@ -438,13 +438,13 @@ static dma_addr_t apple_scaler_offset_bytes(uint32_t offsets_reg, uint32_t strid
 typedef struct
 {
     AppleScalerFormat format;
-    AppleSurface      surface;
+    InfernoDMASurface surface;
 } AppleScalerSurface;
 
 static bool apple_scaler_surface_init(AppleScalerSurface* surface, AppleScalerState* scaler, SourceDest srcdst)
 {
     const AppleScalerSrcDstConfig* cfg = &scaler->srcdst[srcdst];
-    AppleSurface*                  out = &surface->surface;
+    InfernoDMASurface*             out = &surface->surface;
 
     surface->format = apple_scaler_convert_hw_format(cfg->format, cfg->swizzle);
     out->format     = apple_scaler_surface_format(surface->format);
@@ -459,14 +459,14 @@ static bool apple_scaler_surface_init(AppleScalerSurface* surface, AppleScalerSt
                 apple_scaler_stringify_format(surface->format), cfg->base[CHROMA], cfg->base[LUMA],
                 cfg->offsets[CHROMA], cfg->offsets[LUMA]);
 
-    if (out->format == APPLE_SURFACE_FORMAT_NONE || out->width == 0 || out->height == 0) { return false; }
+    if (out->format == INFERNO_DMA_SURFACE_FORMAT_NONE || out->width == 0 || out->height == 0) { return false; }
 
     out->base[0] = cfg->base[LUMA]
                    + apple_scaler_offset_bytes(cfg->offsets[LUMA], cfg->stride[LUMA],
-                                               apple_surface_bytes_per_pixel(out->format, out->depth, 0));
+                                               inferno_dma_surface_bytes_per_pixel(out->format, out->depth, 0));
     out->base[1] = cfg->base[CHROMA]
                    + apple_scaler_offset_bytes(cfg->offsets[CHROMA], cfg->stride[CHROMA],
-                                               apple_surface_bytes_per_pixel(out->format, out->depth, 1));
+                                               inferno_dma_surface_bytes_per_pixel(out->format, out->depth, 1));
     return true;
 }
 
@@ -552,55 +552,55 @@ static bool apple_scaler_transform_is_identity(const AppleScalerTransform* trans
 static void apple_scaler_process(AppleScalerState* scaler, const AppleScalerSurface* src, const AppleScalerSurface* dst)
 {
     AppleScalerTransform transform = apple_scaler_transform(scaler);
-    AppleImageKind       dst_kind  = apple_surface_image_kind(dst->surface.format);
-    AppleImage           image, tmp;
+    InfernoPixbufKind    dst_kind  = inferno_dma_surface_pixbuf_kind(dst->surface.format);
+    InfernoPixbuf        image, tmp;
     int                  ret;
 
     if (apple_scaler_transform_is_identity(&transform) && src->format == dst->format
         && src->surface.width == dst->surface.width && src->surface.height == dst->surface.height)
     {
-        apple_surface_copy(&scaler->dma_as, &src->surface, &dst->surface);
+        inferno_dma_surface_copy(&scaler->dma_as, &src->surface, &dst->surface);
         return;
     }
 
-    if (!apple_surface_load(&image, &scaler->dma_as, &src->surface)) {
+    if (!inferno_dma_surface_load(&image, &scaler->dma_as, &src->surface)) {
         SCALER_INFO("conversion from %s failed", apple_scaler_stringify_format(src->format));
         return;
     }
 
     if (transform.rotation != kRotate0) {
-        apple_image_rotate(&tmp, &image, transform.rotation);
-        apple_image_destroy(&image);
+        inferno_pixbuf_rotate(&tmp, &image, transform.rotation);
+        inferno_pixbuf_destroy(&image);
         image = tmp;
     }
 
     if (transform.flip_x || transform.flip_y) {
-        apple_image_mirror(&tmp, &image, transform.flip_x);
-        apple_image_destroy(&image);
+        inferno_pixbuf_mirror(&tmp, &image, transform.flip_x);
+        inferno_pixbuf_destroy(&image);
         image = tmp;
     }
 
     if (image.width != dst->surface.width || image.height != dst->surface.height) {
-        apple_image_scale(&tmp, &image, dst->surface.width, dst->surface.height);
-        apple_image_destroy(&image);
+        inferno_pixbuf_scale(&tmp, &image, dst->surface.width, dst->surface.height);
+        inferno_pixbuf_destroy(&image);
         image = tmp;
     }
 
     if (image.kind != dst_kind) {
-        ret = apple_image_convert(&tmp, &image, dst_kind, APPLE_SURFACE_MATRIX_BT601);
-        apple_image_destroy(&image);
+        ret = inferno_pixbuf_convert(&tmp, &image, dst_kind, INFERNO_PIXBUF_MATRIX_BT601);
+        inferno_pixbuf_destroy(&image);
         if (ret) {
             SCALER_INFO("conversion to the destination layout failed: %d", ret);
-            apple_image_destroy(&tmp);
+            inferno_pixbuf_destroy(&tmp);
             return;
         }
         image = tmp;
     }
 
-    if (!apple_surface_store(&image, &scaler->dma_as, &dst->surface)) {
+    if (!inferno_dma_surface_store(&image, &scaler->dma_as, &dst->surface)) {
         SCALER_INFO("conversion to %s failed", apple_scaler_stringify_format(dst->format));
     }
-    apple_image_destroy(&image);
+    inferno_pixbuf_destroy(&image);
 }
 
 static void apple_scaler_bh(void* opaque)

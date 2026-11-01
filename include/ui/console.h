@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ui/qemu-pixman.h"
 #include "qom/object.h"
 #include "qemu/notify.h"
 #include "qapi/qapi-types-ui.h"

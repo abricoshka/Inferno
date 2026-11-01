@@ -388,7 +388,7 @@ public:
 
     struct Framebuffer
     {
-        void*       image{nullptr};    // pixman_image_t* reference owned by us
+        void*       surface{nullptr};  // DisplaySurface* reference owned by us
         const void* data{nullptr};
         int         width{0};
         int         height{0};
@@ -412,7 +412,7 @@ public:
         void* superseded;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            superseded = m_pending.image;
+            superseded = m_pending.surface;
             m_pending  = framebuffer;
             m_dirty    = wxRect();
         }
@@ -526,10 +526,10 @@ private:
         Framebuffer next;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_pending.image == nullptr) { return; }
+            if (m_pending.surface == nullptr) { return; }
             next = std::exchange(m_pending, Framebuffer{});
         }
-        if (m_framebuffer.image != nullptr) { CKIUIReleaseSurface(m_framebuffer.image); }
+        if (m_framebuffer.surface != nullptr) { CKIUIReleaseSurface(m_framebuffer.surface); }
 
         // Page flips switch the surface every frame, only a mode change resizes the window.
         const double scale = GetContentScaleFactor();
@@ -1584,8 +1584,8 @@ extern "C" void CKIUIShutdown(void* app)
 
 static CKIUIFrame* frameOf(void* app) { return static_cast<CKIUIApp*>(app)->window; }
 
-extern "C" void CKIUISetSurface(void* app, void* image, const void* data, int width, int height, int stride)
-{ frameOf(app)->canvas->setSurface({image, data, width, height, stride}); }
+extern "C" void CKIUISetSurface(void* app, void* surface, const void* data, int width, int height, int stride)
+{ frameOf(app)->canvas->setSurface({surface, data, width, height, stride}); }
 
 extern "C" void CKIUIInvalidate(void* app, int x, int y, int width, int height)
 { frameOf(app)->canvas->invalidate(x, y, width, height); }

@@ -69,10 +69,10 @@ extern "C"
     void  CKIUIShutdown(void* app);
 
     /*
-     * Takes ownership of one reference to `image` (a pixman_image_t*), which keeps `data` alive.
+     * Takes ownership of one reference to `surface` (a DisplaySurface*), which keeps `data` alive.
      * The UI side must hand it back with CKIUIReleaseSurface, from any thread, once it stops using `data`.
      */
-    void CKIUISetSurface(void* app, void* image, const void* data, int width, int height, int stride);
+    void CKIUISetSurface(void* app, void* surface, const void* data, int width, int height, int stride);
     void CKIUIInvalidate(void* app, int x, int y, int width, int height);
     /* ARGB32 (straight alpha) pixels, copied by the callee. data == NULL clears the cursor. */
     void CKIUISetCursor(void* app, int width, int height, int hotX, int hotY, const uint32_t* data);
@@ -83,7 +83,7 @@ extern "C"
 
     /* ---- Implemented by the C side (wxwidgets.c), called from the UI ---- */
 
-    void CKIUIReleaseSurface(void* image);
+    void CKIUIReleaseSurface(void* surface);
 
     void CKIUIKeyEvent(const char* qcode, bool down);
     void CKIUIReleaseAllKeys(void);

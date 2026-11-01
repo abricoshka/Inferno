@@ -21,6 +21,7 @@
 #include "qemu/osdep.h"
 #include "crypto/hash.h"
 #include "fs/apfs.h"
+#include "graphics/inferno_pixbuf.h"
 #include "hw/arm/dart.h"
 #include "hw/arm/dt.h"
 #include "hw/arm/iboot/boot.h"
@@ -46,7 +47,6 @@
 #include "system/tcg.h"
 #include "arm-powerctl.h"
 #include "target/arm/internals.h"
-#include <pixman.h>
 #ifdef CONFIG_PNG
     #include <png.h>
 #else
@@ -96,15 +96,11 @@ typedef struct
 
 struct AppleIBootSplash
 {
-    AppleBootInfo*     info;
-    QEMUTimer*         timer;
-    uint32_t           width;
-    uint32_t           height;
-    pixman_transform_t transform;
-    double             dest_width;
-    int16_t            dest_x;
-    int16_t            dest_y;
-    pixman_image_t*    image;
+    AppleBootInfo* info;
+    QEMUTimer*     timer;
+    InfernoPixbuf  image;
+    int            dest_x;
+    int            dest_y;
 };
 
 /// What one boot of an OS loads and where it puts it.
@@ -1214,11 +1210,11 @@ static void apple_iboot_setup_video(AppleBootInfo* info)
 
 static void apple_iboot_draw_splash(AppleIBootSplash* splash)
 {
-    AppleBootInfo*  info = splash->info;
-    hwaddr          size = (hwaddr)info->disp_height * info->disp_width * sizeof(uint32_t);
-    hwaddr          len  = size;
-    void*           fb;
-    pixman_image_t* disp_image;
+    AppleBootInfo* info = splash->info;
+    hwaddr         size = (hwaddr)info->disp_height * info->disp_width * sizeof(uint32_t);
+    hwaddr         len  = size;
+    InfernoPixbuf  disp_image;
+    void*          fb;
 
     fb = address_space_map(&address_space_memory, info->video_args.base_addr, &len, true, MEMTXATTRS_UNSPECIFIED);
     if (fb == NULL) { return; }
@@ -1228,11 +1224,14 @@ static void apple_iboot_draw_splash(AppleIBootSplash* splash)
         return;
     }
 
-    disp_image = pixman_image_create_bits(PIXMAN_a8r8g8b8, info->disp_width, info->disp_height, fb,
-                                          info->disp_width * sizeof(uint32_t));
-    pixman_image_composite(PIXMAN_OP_SRC, splash->image, NULL, disp_image, 0, 0, 0, 0, splash->dest_x, splash->dest_y,
-                           splash->dest_width, splash->dest_width);
-    pixman_image_unref(disp_image);
+    disp_image = (InfernoPixbuf){
+        .plane  = {fb},
+        .stride = {info->disp_width * sizeof(uint32_t)},
+        .width  = info->disp_width,
+        .height = info->disp_height,
+        .kind   = INFERNO_PIXBUF_ARGB,
+    };
+    inferno_pixbuf_composite(&disp_image, &splash->image, splash->dest_x, splash->dest_y, false);
 
     address_space_unmap(&address_space_memory, fb, len, true, len);
 }
@@ -1240,7 +1239,7 @@ static void apple_iboot_draw_splash(AppleIBootSplash* splash)
 static void apple_iboot_free_splash(AppleIBootSplash* splash)
 {
     timer_free(splash->timer);
-    pixman_image_unref(splash->image);
+    inferno_pixbuf_destroy(&splash->image);
     splash->info->splash = NULL;
     g_free(splash);
 }
@@ -1265,14 +1264,16 @@ static FILE* apple_iboot_open_splash(const char* name, char** path)
 // Please see `ui/icons/CKBrandingNotice.md`
 static void apple_iboot_show_splash(AppleBootInfo* info, const char* name)
 {
-    g_autofree char*  path = NULL;
-    FILE*             fp;
-    uint8_t           sig[8] = {0};
-    png_structp       png_ptr;
-    png_infop         info_ptr;
-    AppleIBootSplash* splash;
-    uint32_t*         data;
-    png_bytep*        row_ptrs;
+    static const uint8_t rgba_to_argb[4] = {2, 1, 0, 3};
+    g_autofree char*     path            = NULL;
+    FILE*                fp;
+    uint8_t              sig[8] = {0};
+    png_structp          png_ptr;
+    png_infop            info_ptr;
+    AppleIBootSplash*    splash;
+    InfernoPixbuf        png;
+    png_bytep*           row_ptrs;
+    double               dest_width;
 
     if (info->splash != NULL) { apple_iboot_free_splash(info->splash); }
 
@@ -1301,15 +1302,11 @@ static void apple_iboot_show_splash(AppleBootInfo* info, const char* name)
     png_set_filler(png_ptr, 0xFF, PNG_FILLER_AFTER);
     png_read_update_info(png_ptr, info_ptr);
 
-    splash         = g_new(AppleIBootSplash, 1);
-    splash->width  = png_get_image_width(png_ptr, info_ptr);
-    splash->height = png_get_image_height(png_ptr, info_ptr);
-    splash->image  = pixman_image_create_bits(PIXMAN_a8b8g8r8, splash->width, splash->height, NULL,
-                                              splash->width * sizeof(uint32_t));
-    data           = pixman_image_get_data(splash->image);
+    inferno_pixbuf_init(&png, INFERNO_PIXBUF_ARGB, png_get_image_width(png_ptr, info_ptr),
+                        png_get_image_height(png_ptr, info_ptr));
 
-    row_ptrs = g_new(png_bytep, splash->height);
-    for (size_t y = 0; y < splash->height; y++) { row_ptrs[y] = (png_bytep)(data + (y * splash->width)); }
+    row_ptrs = g_new(png_bytep, png.height);
+    for (size_t y = 0; y < png.height; y++) { row_ptrs[y] = png.plane[0] + y * png.stride[0]; }
 
     png_read_image(png_ptr, row_ptrs);
 
@@ -1317,16 +1314,15 @@ static void apple_iboot_show_splash(AppleBootInfo* info, const char* name)
     png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
     fclose(fp);
 
-    splash->info       = info;
-    splash->dest_width = (double)info->disp_width / 1.25;
-    splash->dest_x     = (info->disp_width / 2) - (splash->dest_width / 2);
-    splash->dest_y     = (info->disp_height / 2) - (splash->dest_width / 2);
+    inferno_pixbuf_shuffle(&png, rgba_to_argb);
 
-    pixman_image_set_filter(splash->image, PIXMAN_FILTER_BEST, NULL, 0);
-    pixman_transform_init_identity(&splash->transform);
-    pixman_transform_scale(&splash->transform, NULL, pixman_double_to_fixed((double)splash->width / splash->dest_width),
-                           pixman_double_to_fixed((double)splash->height / splash->dest_width));
-    pixman_image_set_transform(splash->image, &splash->transform);
+    dest_width     = info->disp_width / 1.25;
+    splash         = g_new(AppleIBootSplash, 1);
+    splash->info   = info;
+    splash->dest_x = info->disp_width / 2 - dest_width / 2;
+    splash->dest_y = info->disp_height / 2 - dest_width / 2;
+    inferno_pixbuf_scale(&splash->image, &png, dest_width, dest_width);
+    inferno_pixbuf_destroy(&png);
 
     apple_iboot_draw_splash(splash);
 

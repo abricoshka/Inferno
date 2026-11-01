@@ -20,6 +20,7 @@
 #include "qemu/osdep.h"
 #include "hw/display/apple_displaypipe_v2.h"
 #include "hw/qdev-properties.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "ui/console.h"
 #include "framebuffer.h"

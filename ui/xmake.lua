@@ -1,6 +1,6 @@
 target("system")
 	add_files("clipboard.c", "console.c", "cursor.c", "input-keymap.c", "input-legacy.c", "input-barrier.c", "input.c",
-		"kbd-state.c", "keymaps.c", "qemu-pixman.c", "ui-hmp-cmds.c", "ui-qmp-cmds.c", "util.c", "console-vc.c")
+		"kbd-state.c", "keymaps.c", "ui-hmp-cmds.c", "ui-qmp-cmds.c", "util.c", "console-vc.c")
 	if inferno_have_vnc then
 		add_files("vnc.c", "vnc-enc-zlib.c", "vnc-enc-hextile.c", "vnc-enc-tight.c", "vnc-palette.c", "vnc-enc-zrle.c",
 			"vnc-auth-vencrypt.c", "vnc-ws.c", "vnc-jobs.c", "vnc-clipboard.c")
