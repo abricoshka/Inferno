@@ -1835,7 +1835,8 @@ static void apple_iboot_load_images(AppleBootInfo* info, AppleIBootOS* os)
             apple_iboot_read_firmware_ticket(info, &os->ticket, &os->ticket_length);
         }
         if (apple_iboot_read_preboot(PREBOOT_ROOT_HASH, &data, &len)) {
-            apple_boot_load_root_hash_data(chosen, PREBOOT_ROOT_HASH, data, len);
+            apple_boot_load_root_hash_data(chosen, PREBOOT_ROOT_HASH, data, len,
+                                           info->kernel_patchset < KERNEL_PATCHSET_FULL);
         }
     }
 

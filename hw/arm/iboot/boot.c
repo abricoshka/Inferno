@@ -208,7 +208,8 @@ AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize 
     return root;
 }
 
-void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len)
+void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len,
+                                    bool root_snapshot_enabled)
 {
     g_autoptr(GString) snapshot   = NULL;
     g_autofree uint8_t* file_data = NULL;
@@ -236,6 +237,8 @@ void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, u
         error_setg(&error_fatal, "`%s` has an oversized root hash (0x%x)", filename, hash_len);
         return;
     }
+
+    if (!root_snapshot_enabled) { return; }
 
     snapshot = g_string_new("com.apple.os.update-");
     for (uint32_t i = 0; i < hash_len; ++i) { g_string_append_printf(snapshot, "%02X", file_data[0x10 + i]); }

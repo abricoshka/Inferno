@@ -370,7 +370,8 @@ void apple_boot_load_raw_file(const char* filename, AddressSpace* as, hwaddr fil
 AppleDTNode* apple_boot_load_dt_data(const char* filename, uint8_t* data, gsize len);
 
 /// Consumes `data`.
-void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len);
+void apple_boot_load_root_hash_data(AppleDTNode* chosen, const char* filename, uint8_t* data, gsize len,
+                                    bool root_snapshot_enabled);
 
 /// Set the manifest properties of the AP ticket `ticket` as properties of `node`.
 void apple_boot_populate_manifest_props(AppleDTNode* node, const uint8_t* ticket, gsize ticket_len);
