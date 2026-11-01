@@ -1003,6 +1003,8 @@ static bool virtualhere_listen(USBVirtualHereState* s, Error** errp)
     qio_net_listener_set_client_func_full(s->listener, virtualhere_accept, s, NULL,
                                           iothread_get_g_main_context(s->iothread));
 
+    if (!s->mdns_enabled) { return true; }
+
     /* Discovery is a convenience; a client can still be pointed at us by hand. */
     s->mdns = mdns_service_register(s->server_name, VIRTUALHERE_SERVICE_TYPE, atoi(addr->u.inet.port), s->server_id,
                                     &local_err);
@@ -1089,6 +1091,7 @@ static const Property usb_virtualhere_props[] = {
     DEFINE_PROP_STRING("server-host", USBVirtualHereState, server_host),
     DEFINE_PROP_UINT32("compression-limit", USBVirtualHereState, compression_limit,
                        VIRTUALHERE_COMPRESSION_LIMIT_DEFAULT),
+    DEFINE_PROP_BOOL("mdns", USBVirtualHereState, mdns_enabled, false),
 };
 
 static void usb_virtualhere_class_init(ObjectClass* klass, const void* data)

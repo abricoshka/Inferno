@@ -54,6 +54,7 @@ struct USBVirtualHereState
     AioContext*     ctx;
     QIONetListener* listener;
     char*           addr;
+    bool            mdns_enabled;
     MDNSService*    mdns;
 
     Notifier exit_notifier;

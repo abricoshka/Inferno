@@ -56,4 +56,5 @@ typedef struct
     char*           usb_uplink_addr;
     USBUplinkType   usb_uplink_type;
     uint32_t        usb_uplink_compression_limit;
+    bool            usb_uplink_mdns;
 } AppleS8000MachineState;

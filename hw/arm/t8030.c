@@ -1319,7 +1319,7 @@ static void t8030_init(MachineState* machine)
 
     dev  = qdev_new(TYPE_APPLE_TYPEC);
     host = usb_uplink_new(t8030->usb_uplink_type, t8030->usb_uplink_addr, t8030->usb_uplink_compression_limit,
-                          &error_fatal);
+                          t8030->usb_uplink_mdns, &error_fatal);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(host), &error_fatal);
     object_property_set_link(OBJECT(dev), "host", OBJECT(host), &error_fatal);
     iommu = apple_dart_instance_iommu_mr(dart, 1, 0x3);
@@ -1706,6 +1706,7 @@ PROP_BOOT_STR_GETTER_SETTER(securerom_filename);
 PROP_STR_GETTER_SETTER(usb_uplink_addr);
 PROP_GETTER_SETTER(int, usb_uplink_type);
 PROP_VISIT_GETTER_SETTER(uint32, usb_uplink_compression_limit);
+PROP_GETTER_SETTER(bool, usb_uplink_mdns);
 PROP_STR_GETTER_SETTER(model_number);
 PROP_STR_GETTER_SETTER(region_info);
 PROP_STR_GETTER_SETTER(config_number);
@@ -1760,6 +1761,8 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     object_property_set_default_uint(oprop, VIRTUALHERE_COMPRESSION_LIMIT_DEFAULT);
     object_class_property_set_description(klass, "usb-uplink-compression-limit",
                                           "VirtualHere messages larger than this are LZ4-compressed");
+    object_class_property_add_bool(klass, "usb-uplink-mdns", t8030_get_usb_uplink_mdns, t8030_set_usb_uplink_mdns);
+    object_class_property_set_description(klass, "usb-uplink-mdns", "Advertise the VirtualHere server over mDNS");
     oprop = object_class_property_add_str(klass, "model", t8030_get_model_number, t8030_set_model_number);
     object_property_set_default_str(oprop, "CKI12");
     object_class_property_set_description(klass, "model", "Model Number");
