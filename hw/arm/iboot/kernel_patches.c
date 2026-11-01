@@ -263,21 +263,6 @@ static void ck_kp_apfs_patches(CKPatcherRange* range, KernelPatchset patchset)
                                     sizeof(root_rw_repl));
         }
 
-        // Bypass "Rooting from the live fs of a sealed volume is not allowed on a RELEASE build"
-        static const uint8_t no_snapshot_pattern[] = {
-            0xe8, 0x62, 0x40, 0xf9,    // ldr x8, [x23, #0xc0]
-            0x08, 0xe1, 0x40, 0x39,    // ldrb w8, [x8, #0x38]
-            0x00, 0x00, 0x28, 0x37,    // tbnz w8, #0x5, 0x...
-        };
-        static const uint8_t no_snapshot_mask[] = {
-            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
-        };
-        QEMU_BUILD_BUG_ON(sizeof(no_snapshot_pattern) != sizeof(no_snapshot_mask));
-        static const uint8_t no_snapshot_repl[] = {NOP};
-        ck_patcher_find_replace(range, "bypass no snapshot", no_snapshot_pattern, no_snapshot_mask,
-                                sizeof(no_snapshot_pattern), sizeof(uint32_t), 1, no_snapshot_repl, NULL, 8,
-                                sizeof(no_snapshot_repl));
-
         // Bypass "root volume seal is broken"
         static const uint8_t broken_root_seal_pattern[] = {
             0x00, 0x00, 0x00, 0x97,    // bl sub_...
@@ -985,6 +970,54 @@ static void ck_kp_wdt_timebase_patch(CKPatcherRange* range)
                              1, ck_kp_wdt_timebase_callback);
 }
 
+typedef struct
+{
+    CKPatcherRange* text;
+    vaddr           str;
+} CKKPStringXrefCtx;
+
+static bool ck_kp_live_fs_root_callback(void* ctx, uint8_t* buffer)
+{
+    CKKPStringXrefCtx* xref = ctx;
+    uint8_t*           tbnz = buffer + 2 * sizeof(uint32_t);
+    vaddr    target = (xref->text->addr + (tbnz - xref->text->ptr)) + ((int64_t)sextract32(ldl_le_p(tbnz), 5, 14) << 2);
+    uint8_t* insn   = xref->text->ptr + (target - xref->text->addr);
+
+    if (target < xref->text->addr || target + 32 * sizeof(uint32_t) > xref->text->addr + xref->text->length) {
+        return false;
+    }
+    for (uint32_t i = 0; i < 32; ++i, insn += sizeof(uint32_t)) {
+        vaddr va;
+        if (ck_patcher_adrp_add_va(insn, xref->text->addr + (insn - xref->text->ptr), &va) && va == xref->str) {
+            stl_le_p(tbnz, NOP);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void ck_kp_live_fs_root_patch(CKPatcherRange* text, CKPatcherRange* strings)
+{
+    static const uint8_t pattern[] = {
+        0x08, 0x60, 0x40, 0xF9,    // ldr x8, [x?, #0xc0]
+        0x08, 0xE1, 0x40, 0x39,    // ldrb w8, [x8, #0x38]
+        0x08, 0x00, 0x28, 0x37,    // tbnz w8, #5, ?
+    };
+    static const uint8_t mask[] = {
+        0x1F, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, 0x00, 0xF8, 0xFF,
+    };
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(mask));
+    CKKPStringXrefCtx ctx = {
+        .text = text,
+        .str  = ck_kp_find_cstring(strings, "Rooting from the live fs of a sealed volume is not allowed"),
+    };
+
+    if (text == NULL || ctx.str == 0) { return; }
+    ck_patcher_find_callback_ctx(text, "allow rooting from the live fs of a sealed volume", pattern, mask,
+                                 sizeof(pattern), sizeof(uint32_t), 1, &ctx, ck_kp_live_fs_root_callback);
+}
+
 static void ck_kp_apfs_snapshot_patch(CKPatcherRange* range)
 {
     static const uint8_t pattern[] = "com.apple.os.update-";
@@ -1020,6 +1053,7 @@ void ck_patch_kernel(MachoHeader64* hdr, KernelPatchset patchset)
         apfs_cstring = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT", "__cstring");
         if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, hdr, "__TEXT", "__cstring"); }
         ck_kp_apfs_snapshot_patch(apfs_cstring);
+        ck_kp_live_fs_root_patch(apfs_text, apfs_cstring);
     }
 
     amfi_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleMobileFileIntegrity");
