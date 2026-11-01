@@ -21,8 +21,9 @@
 
 #include "hw/arm/iboot/boot.h"
 #include "hw/arm/iboot/patcher.h"
+#include "qapi/qapi-types-machine-common.h"
 
-void ck_patch_kernel(MachoHeader64* hdr);
+void ck_patch_kernel(MachoHeader64* hdr, KernelPatchset patchset);
 /// Accept code-signature slot hash mismatches in TXM, so patched pages on SPTM kernels aren't killed.
 void ck_patch_txm(MachoHeader64* hdr);
 /// Let the sepOS kernel boot with a timebase other than 24 MHz.

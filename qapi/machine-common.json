@@ -101,3 +101,17 @@
 ##
 { 'struct': 'SmpCachePropertiesWrapper',
   'data': { 'caches': ['SmpCacheProperties'] } }
+
+##
+# @KernelPatchset:
+#
+# The set of patches applied to the kernel of an Apple machine.
+#
+# @minimal: only the patches needed to boot.
+#
+# @debug: the minimal patchset and a few which help with debugging.
+#
+# @full: the debug patchset and some jailbreak-like capabilities.
+##
+{ 'enum': 'KernelPatchset',
+  'data': [ 'minimal', 'debug', 'full' ] }

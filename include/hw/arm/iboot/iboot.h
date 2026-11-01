@@ -31,6 +31,7 @@
 #include "hw/arm/iboot/dfu.h"
 #include "hw/boards.h"
 #include "hw/display/apple_displaypipe_v4.h"
+#include "qapi/qapi-types-machine-common.h"
 
 /// The `region-id-<n>` of a carveout in `/chosen/carveout-memory-map`. XNU takes 55 to be iBoot's profiler region.
 typedef enum
@@ -103,11 +104,12 @@ typedef struct
                          hwaddr tz0_size);
 
     /* Machine properties. */
-    char*         securerom_filename;
-    char*         seprom_filename;
-    char*         trustcache_filename;
-    bool          kaslr_off;
-    AppleBootMode boot_mode;
+    char*          securerom_filename;
+    char*          seprom_filename;
+    char*          trustcache_filename;
+    bool           kaslr_off;
+    AppleBootMode  boot_mode;
+    KernelPatchset kernel_patchset;
 
     /// Set by `apple_iboot_reset`: the build version of the kernel it boots, or 0.
     uint32_t build_version;

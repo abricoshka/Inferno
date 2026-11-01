@@ -1699,6 +1699,7 @@ static char* t8030_get_boot_mode(Object* obj, Error** errp)
 
 PROP_VISIT_GETTER_SETTER(uint64, ecid);
 PROP_BOOT_GETTER_SETTER(bool, kaslr_off);
+PROP_BOOT_GETTER_SETTER(int, kernel_patchset);
 PROP_GETTER_SETTER(bool, force_dfu);
 PROP_BOOT_STR_GETTER_SETTER(seprom_filename);
 PROP_BOOT_STR_GETTER_SETTER(securerom_filename);
@@ -1741,6 +1742,10 @@ static void t8030_class_init(ObjectClass* klass, const void* data)
     object_class_property_set_description(klass, "ecid", "Device ECID");
     object_class_property_add_bool(klass, "kaslr-off", t8030_get_kaslr_off, t8030_set_kaslr_off);
     object_class_property_set_description(klass, "kaslr-off", "Disable KASLR");
+    oprop = object_class_property_add_enum(klass, "kernel-patchset", "KernelPatchset", &KernelPatchset_lookup,
+                                           t8030_get_kernel_patchset, t8030_set_kernel_patchset);
+    object_property_set_default_str(oprop, qapi_enum_lookup(&KernelPatchset_lookup, KERNEL_PATCHSET_MINIMAL));
+    object_class_property_set_description(klass, "kernel-patchset", "Kernel Patchset");
     object_class_property_add_bool(klass, "force-dfu", t8030_get_force_dfu, t8030_set_force_dfu);
     object_class_property_set_description(klass, "force-dfu", "Force DFU");
     object_class_property_add_str(klass, "usb-uplink-addr", t8030_get_usb_uplink_addr, t8030_set_usb_uplink_addr);

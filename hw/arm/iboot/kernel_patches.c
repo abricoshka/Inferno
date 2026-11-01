@@ -21,6 +21,7 @@
 #include "hw/arm/iboot/kernel_patches.h"
 #include "fs/apfs.h"
 #include "fs/hfs.h"
+#include "qapi-types-machine-common.h"
 #include "hw/arm/iboot/patcher.h"
 #include "qapi/error.h"
 #include "qemu/bitops.h"
@@ -191,7 +192,7 @@ static bool ck_kp_root_hash_callback(void* ctx, uint8_t* buffer)
     return true;
 }
 
-static void ck_kp_apfs_patches(CKPatcherRange* range)
+static void ck_kp_apfs_patches(CKPatcherRange* range, KernelPatchset patchset)
 {
     static const uint8_t root_auth_pattern[] = {
         0x08, 0xE0, 0x40, 0x39,    // ldrb w8, [x?, #0x38]
@@ -202,38 +203,6 @@ static void ck_kp_apfs_patches(CKPatcherRange* range)
     QEMU_BUILD_BUG_ON(sizeof(root_auth_pattern) != sizeof(root_auth_mask));
     ck_patcher_find_callback(range, "bypass root authentication", root_auth_pattern, root_auth_mask,
                              sizeof(root_auth_pattern), sizeof(uint32_t), 1, ck_kp_root_auth_callback);
-
-    static const uint8_t root_rw_pattern[] = {
-        0x00, 0x00, 0x00, 0x94,    // bl ?
-        0x00, 0x00, 0x70, 0x37,    // tbnz w0, 0xE, ?
-        0xA0, 0x03, 0x40, 0xB9,    // ldr x?, [x29/sp, ?]
-        0x00, 0x78, 0x1F, 0x12,    // and w?, w?, 0xFFFFFFFE
-        0xA0, 0x03, 0x00, 0xB9,    // str x?, [x29/sp, ?]
-    };
-    static const uint8_t root_rw_mask[] = {
-        0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF, 0xA0, 0x03,
-        0xFE, 0xFF, 0x00, 0xFC, 0xFF, 0xFF, 0xA0, 0x03, 0xC0, 0xFF,
-    };
-    QEMU_BUILD_BUG_ON(sizeof(root_rw_pattern) != sizeof(root_rw_mask));
-    static const uint8_t root_rw_repl[] = {MOV_W0_WZR_BYTES};
-    if (!ck_patcher_find_replace(range, "allow mounting root as R/W", root_rw_pattern, root_rw_mask,
-                                 sizeof(root_rw_pattern), sizeof(uint32_t), 1, root_rw_repl, NULL, 4,
-                                 sizeof(root_rw_repl)))
-    {
-        static const uint8_t root_rw_pattern_new[] = {
-            0x00, 0x00, 0x00, 0x94,    // bl ?
-            0x00, 0x00, 0x70, 0x37,    // tbnz w0, 0xE, ?
-            0x00, 0x00, 0x80, 0x52,    // mov w0, #0
-            0x00, 0x00, 0x00, 0x14,    // bl ?
-        };
-        static const uint8_t root_rw_mask_new[] = {
-            0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFC,
-        };
-        QEMU_BUILD_BUG_ON(sizeof(root_rw_pattern_new) != sizeof(root_rw_mask_new));
-        ck_patcher_find_replace(range, "allow mounting root as R/W (new)", root_rw_pattern_new, root_rw_mask_new,
-                                sizeof(root_rw_pattern_new), sizeof(uint32_t), 1, root_rw_repl, NULL, 4,
-                                sizeof(root_rw_repl));
-    }
 
     static const uint8_t root_hash_pattern[] = {
         0x88, 0x62, 0x40, 0xF9,    // ldr x8, [x20, #0xC0]
@@ -259,6 +228,70 @@ static void ck_kp_apfs_patches(CKPatcherRange* range)
         ck_patcher_find_replace(range, "bypass sealed volume data hash verification", data_hash_pattern, data_hash_mask,
                                 sizeof(data_hash_pattern), sizeof(uint32_t), 1, data_hash_repl, NULL, 12,
                                 sizeof(data_hash_repl));
+    }
+
+    if (patchset >= KERNEL_PATCHSET_FULL) {
+        static const uint8_t root_rw_pattern[] = {
+            0x00, 0x00, 0x00, 0x94,    // bl ?
+            0x00, 0x00, 0x70, 0x37,    // tbnz w0, 0xE, ?
+            0xA0, 0x03, 0x40, 0xB9,    // ldr x?, [x29/sp, ?]
+            0x00, 0x78, 0x1F, 0x12,    // and w?, w?, 0xFFFFFFFE
+            0xA0, 0x03, 0x00, 0xB9,    // str x?, [x29/sp, ?]
+        };
+        static const uint8_t root_rw_mask[] = {
+            0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF, 0xA0, 0x03,
+            0xFE, 0xFF, 0x00, 0xFC, 0xFF, 0xFF, 0xA0, 0x03, 0xC0, 0xFF,
+        };
+        QEMU_BUILD_BUG_ON(sizeof(root_rw_pattern) != sizeof(root_rw_mask));
+        static const uint8_t root_rw_repl[] = {MOV_W0_WZR_BYTES};
+        if (!ck_patcher_find_replace(range, "allow mounting root as R/W", root_rw_pattern, root_rw_mask,
+                                     sizeof(root_rw_pattern), sizeof(uint32_t), 1, root_rw_repl, NULL, 4,
+                                     sizeof(root_rw_repl)))
+        {
+            static const uint8_t root_rw_pattern_new[] = {
+                0x00, 0x00, 0x00, 0x94,    // bl ?
+                0x00, 0x00, 0x70, 0x37,    // tbnz w0, 0xE, ?
+                0x00, 0x00, 0x80, 0x52,    // mov w0, #0
+                0x00, 0x00, 0x00, 0x14,    // bl ?
+            };
+            static const uint8_t root_rw_mask_new[] = {
+                0x00, 0x00, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0xFC,
+            };
+            QEMU_BUILD_BUG_ON(sizeof(root_rw_pattern_new) != sizeof(root_rw_mask_new));
+            ck_patcher_find_replace(range, "allow mounting root as R/W (new)", root_rw_pattern_new, root_rw_mask_new,
+                                    sizeof(root_rw_pattern_new), sizeof(uint32_t), 1, root_rw_repl, NULL, 4,
+                                    sizeof(root_rw_repl));
+        }
+
+        // Bypass "Rooting from the live fs of a sealed volume is not allowed on a RELEASE build"
+        static const uint8_t no_snapshot_pattern[] = {
+            0xe8, 0x62, 0x40, 0xf9,    // ldr x8, [x23, #0xc0]
+            0x08, 0xe1, 0x40, 0x39,    // ldrb w8, [x8, #0x38]
+            0x00, 0x00, 0x28, 0x37,    // tbnz w8, #0x5, 0x...
+        };
+        static const uint8_t no_snapshot_mask[] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF,
+        };
+        QEMU_BUILD_BUG_ON(sizeof(no_snapshot_pattern) != sizeof(no_snapshot_mask));
+        static const uint8_t no_snapshot_repl[] = {NOP};
+        ck_patcher_find_replace(range, "bypass no snapshot", no_snapshot_pattern, no_snapshot_mask,
+                                sizeof(no_snapshot_pattern), sizeof(uint32_t), 1, no_snapshot_repl, NULL, 8,
+                                sizeof(no_snapshot_repl));
+
+        // Bypass "root volume seal is broken"
+        static const uint8_t broken_root_seal_pattern[] = {
+            0x00, 0x00, 0x00, 0x97,    // bl sub_...
+            0x00, 0x00, 0x70, 0x37,    // tbnz w0, #0xe, 0x...
+            0x20, 0x00, 0x80, 0x52,    // mov w0, #0x1
+        };
+        static const uint8_t broken_root_seal_mask[] = {
+            0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+        QEMU_BUILD_BUG_ON(sizeof(broken_root_seal_pattern) != sizeof(broken_root_seal_mask));
+        static const uint8_t broken_root_seal_repl[] = {NOP};
+        ck_patcher_find_replace(range, "bypass broken root seal", broken_root_seal_pattern, broken_root_seal_mask,
+                                sizeof(broken_root_seal_pattern), sizeof(uint32_t), 1, broken_root_seal_repl, NULL, 4,
+                                sizeof(broken_root_seal_repl));
     }
 }
 
@@ -952,30 +985,42 @@ static void ck_kp_wdt_timebase_patch(CKPatcherRange* range)
                              1, ck_kp_wdt_timebase_callback);
 }
 
-void ck_patch_kernel(MachoHeader64* hdr)
+static void ck_kp_apfs_snapshot_patch(CKPatcherRange* range)
 {
-    MachoHeader64*             apfs_hdr;
-    g_autofree CKPatcherRange* apfs_text;
-    g_autofree CKPatcherRange* apfs_cstring;
-    g_autofree CKPatcherRange* corecrypto_text;
-    g_autofree CKPatcherRange* amfi_text;
-    g_autofree CKPatcherRange* img4_text;
-    MachoHeader64*             image4_hdr;
-    g_autofree CKPatcherRange* image4_text    = NULL;
-    g_autofree CKPatcherRange* image4_cstring = NULL;
-    g_autofree CKPatcherRange* fwupdate_text;
-    g_autofree CKPatcherRange* wdt_text;
-    g_autofree CKPatcherRange* kernel_text;
-    g_autofree CKPatcherRange* kernel_const;
-    g_autofree CKPatcherRange* kernel_ppltext;
+    static const uint8_t pattern[] = "com.apple.os.update-";
+    static const uint8_t repl[]    = "shitcode.os.bullshit";
+    QEMU_BUILD_BUG_ON(sizeof(pattern) != sizeof(repl));
+    ck_patcher_find_replace(range, "disable APFS snapshots", pattern, NULL, sizeof(pattern), 0, 0, repl, NULL, 0,
+                            sizeof(repl));
+}
+
+void ck_patch_kernel(MachoHeader64* hdr, KernelPatchset patchset)
+{
+    MachoHeader64*             apfs_hdr        = NULL;
+    g_autofree CKPatcherRange* apfs_text       = NULL;
+    g_autofree CKPatcherRange* apfs_cstring    = NULL;
+    g_autofree CKPatcherRange* corecrypto_text = NULL;
+    g_autofree CKPatcherRange* amfi_text       = NULL;
+    g_autofree CKPatcherRange* img4_text       = NULL;
+    MachoHeader64*             image4_hdr      = NULL;
+    g_autofree CKPatcherRange* image4_text     = NULL;
+    g_autofree CKPatcherRange* image4_cstring  = NULL;
+    g_autofree CKPatcherRange* fwupdate_text   = NULL;
+    g_autofree CKPatcherRange* wdt_text        = NULL;
+    g_autofree CKPatcherRange* kernel_text     = NULL;
+    g_autofree CKPatcherRange* kernel_const    = NULL;
+    g_autofree CKPatcherRange* kernel_ppltext  = NULL;
 
     apfs_hdr  = ck_kp_find_image_header(hdr, "com.apple.filesystems.apfs");
     apfs_text = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT_EXEC", "__text");
-    ck_kp_apfs_patches(apfs_text);
+    ck_kp_apfs_patches(apfs_text, patchset);
     corecrypto_text = ck_kp_find_image_text(hdr, "com.apple.kec.corecrypto");
     ck_kp_apfs_data_hash_patch(apfs_text, corecrypto_text);
-    apfs_cstring = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT", "__cstring");
-    if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, hdr, "__TEXT", "__cstring"); }
+    if (patchset >= KERNEL_PATCHSET_FULL) {
+        apfs_cstring = ck_kp_find_section_range(hdr, apfs_hdr, "__TEXT", "__cstring");
+        if (apfs_cstring == NULL) { apfs_cstring = ck_kp_find_section_range(hdr, hdr, "__TEXT", "__cstring"); }
+        ck_kp_apfs_snapshot_patch(apfs_cstring);
+    }
 
     amfi_text = ck_kp_find_image_text(hdr, "com.apple.driver.AppleMobileFileIntegrity");
     ck_kp_amfi_patches(amfi_text);
@@ -997,8 +1042,8 @@ void ck_patch_kernel(MachoHeader64* hdr)
     }
 
     kernel_text = ck_kp_get_kernel_section(hdr, "__TEXT_EXEC", "__text");
-    ck_kp_mac_mount_patch(kernel_text);
-    ck_kp_kprintf_patch(kernel_text);
+    if (patchset >= KERNEL_PATCHSET_FULL) { ck_kp_mac_mount_patch(kernel_text); }
+    if (patchset >= KERNEL_PATCHSET_DEBUG) { ck_kp_kprintf_patch(kernel_text); }
     ck_kp_amx_patch(kernel_text);
     ck_kp_cs_patches(kernel_text);
     kernel_const = ck_kp_get_kernel_section(hdr, "__TEXT", "__const");

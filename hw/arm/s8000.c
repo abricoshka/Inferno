@@ -723,6 +723,7 @@ static char* s8000_get_boot_mode(Object* obj, Error** errp)
 
 PROP_VISIT_GETTER_SETTER(uint64, ecid);
 PROP_BOOT_GETTER_SETTER(bool, kaslr_off);
+PROP_BOOT_GETTER_SETTER(int, kernel_patchset);
 PROP_GETTER_SETTER(bool, force_dfu);
 PROP_BOOT_STR_GETTER_SETTER(trustcache_filename);
 PROP_BOOT_STR_GETTER_SETTER(seprom_filename);
@@ -756,6 +757,10 @@ static void s8000_class_init(ObjectClass* klass, const void* data)
     object_class_property_set_description(klass, "boot-mode", "Boot Mode");
     object_class_property_add_bool(klass, "kaslr-off", s8000_get_kaslr_off, s8000_set_kaslr_off);
     object_class_property_set_description(klass, "kaslr-off", "Disable KASLR");
+    oprop = object_class_property_add_enum(klass, "kernel-patchset", "KernelPatchset", &KernelPatchset_lookup,
+                                           s8000_get_kernel_patchset, s8000_set_kernel_patchset);
+    object_property_set_default_str(oprop, qapi_enum_lookup(&KernelPatchset_lookup, KERNEL_PATCHSET_MINIMAL));
+    object_class_property_set_description(klass, "kernel-patchset", "Kernel Patchset");
     oprop = object_class_property_add(klass, "ecid", "uint64", s8000_get_ecid, s8000_set_ecid, NULL, NULL);
     object_property_set_default_uint(oprop, 0x1122334455667788);
     object_class_property_set_description(klass, "ecid", "Device ECID");
