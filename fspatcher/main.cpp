@@ -55,7 +55,7 @@ namespace
             this->assembler.write_ret(this->image.file, this->image.header, addr);
         }
 
-        void apply(const bool opengles)
+        void apply()
         {
             // Stop usage of Metal.
             this->patch_ret_false("_CI_ENABLE_METAL_GPU");
@@ -77,25 +77,21 @@ namespace
             catch (const std::out_of_range& e) {
                 std::cerr << "Warning: " << e.what() << ".\n";
             }
+            // Stop crash from assumption of OpenGLES availability.
+            this->patch_ret_false("_wrapGLIsUsable", "+[CIContext(Internal) internalContextWithEAGLContext:options:]");
+            try {
+                this->patch_ret_false("_wrapGLIsAccelerated");
+            }
+            catch (const std::out_of_range& e) {
+                std::cerr << "Warning: " << e.what() << ".\n";
+            }
 
-            if (!opengles) {
-                // Stop crash from assumption of OpenGLES availability.
-                this->patch_ret_false("_wrapGLIsUsable",
-                                      "+[CIContext(Internal) internalContextWithEAGLContext:options:]");
-                try {
-                    this->patch_ret_false("_wrapGLIsAccelerated");
-                }
-                catch (const std::out_of_range& e) {
-                    std::cerr << "Warning: " << e.what() << ".\n";
-                }
-
-                // Force CoreImage software rendering on iOS 18/26.
-                try {
-                    this->patch_ret_true("_isWidget");
-                }
-                catch (const std::out_of_range& e) {
-                    std::cerr << "Warning: " << e.what() << ".\n";
-                }
+            // Force CoreImage software rendering on iOS 18/26.
+            try {
+                this->patch_ret_true("_isWidget");
+            }
+            catch (const std::out_of_range& e) {
+                std::cerr << "Warning: " << e.what() << ".\n";
             }
         }
     };
@@ -247,35 +243,32 @@ namespace
             assembler(assembler)
         { }
 
-        void apply(const bool opengles)
+        void apply()
         {
             // Neutralise CIF10 support which also neutralises framebuffer compression.
             this->assembler.write_ret(
                 this->image.file, this->image.header,
                 this->image.resolve_sym("___CADeviceSupportsCIF10_block_invoke", "___CADeviceUseCIF10_block_invoke"));
 
-            if (!opengles) {
-                // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
-                const auto asyncDispatchRenderer =
-                    this->image.resolve_sym("__ZN2CA3OGL22AsynchronousDispatcher8rendererEv");
-                auto cache_file = this->image.file.open();
-                fix_async_dispatcher(cache_file, asyncDispatchRenderer,
-                                     "__ZN2CA3OGL22AsynchronousDispatcher10stop_timerEv");
-                fix_async_dispatcher(cache_file, asyncDispatchRenderer,
-                                     "__ZN2CA3OGLL17release_iosurfaceEP11__IOSurface");
+            // iOS <=14, bug in two functions: a missing null check on return value of `::renderer` causing a crash.
+            const auto asyncDispatchRenderer =
+                this->image.resolve_sym("__ZN2CA3OGL22AsynchronousDispatcher8rendererEv");
+            auto cache_file = this->image.file.open();
+            fix_async_dispatcher(cache_file, asyncDispatchRenderer,
+                                 "__ZN2CA3OGL22AsynchronousDispatcher10stop_timerEv");
+            fix_async_dispatcher(cache_file, asyncDispatchRenderer, "__ZN2CA3OGLL17release_iosurfaceEP11__IOSurface");
 
-                // Always return null on these functions that will return null regardless, to reduce load.
-                this->nullify("__ZN2CA12WindowServer10EAGLServer8rendererEv",
-                              "__ZN2CA12WindowServer11AccelServer8rendererEv");
-                this->nullify(asyncDispatchRenderer);
+            // Always return null on these functions that will return null regardless, to reduce load.
+            this->nullify("__ZN2CA12WindowServer10EAGLServer8rendererEv",
+                          "__ZN2CA12WindowServer11AccelServer8rendererEv");
+            this->nullify(asyncDispatchRenderer);
 
-                // Unlike `MetalContext`, `SWContext` doesn't track IOSurface surfaces, which `push_surface` asserts on.
-                try {
-                    this->track_iosurface_surfaces(cache_file);
-                }
-                catch (const std::exception& e) {
-                    std::cerr << "Warning: Failed to fix `SWContext` IOSurface surface tracking: " << e.what() << ".\n";
-                }
+            // Unlike `MetalContext`, `SWContext` doesn't track IOSurface surfaces, which `push_surface` asserts on.
+            try {
+                this->track_iosurface_surfaces(cache_file);
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Warning: Failed to fix `SWContext` IOSurface surface tracking: " << e.what() << ".\n";
             }
         }
     };
@@ -354,7 +347,7 @@ namespace
 
         void apply()
         {
-            // There's either Metal or software rendering, no OpenGLES.
+            // There's either Metal or software rendering.
             const auto objc_alloc_init = this->objc_image.resolve_sym("_objc_alloc_init");
             const auto nu_sw_renderer  = this->image.resolve_objc_class("NUSoftwareRenderer");
             auto       address = this->image.resolve_sym("-[NUDevice_iOS _newRendererWithCIContextOptions:error:]",
@@ -633,8 +626,7 @@ namespace
         bool                  revert_only   = false;
         bool                  dryRun        = false;
         bool                  unredact_logs = false;
-        bool                  opengles      = false;
-        bool                  metal         = false;
+        bool                  no_sw         = false;
 
         CLI::App app{"Inferno Filesystem Patcher"};
         argv = app.ensure_utf8(argv);
@@ -646,11 +638,7 @@ namespace
         revertOnlyOpt->excludes(dryRunOpt);
         dryRunOpt->excludes(revertOnlyOpt);
         app.add_flag("--unredact-logs", unredact_logs, "Patch libsystem_trace.dylib to unredact logs");
-        const auto openglesOpt =
-            app.add_flag("--opengles", opengles, "Apply minimal patches necessary for the lack of Metal rendering");
-        const auto metalOpt = app.add_flag("--metal", metal, "Apply no rendering patches");
-        openglesOpt->excludes(metalOpt);
-        metalOpt->excludes(openglesOpt);
+        app.add_flag("--no-sw", no_sw, "Apply no software rendering patches");
 
         CLI11_PARSE(app, argc, argv);
 
@@ -681,9 +669,9 @@ namespace
         Assembler assembler(patcher);
 
         std::cout << "Building patches...\n";
-        if (!metal) {
-            CoreImagePatches(analyser, assembler).apply(opengles);
-            QuartzCorePatches(analyser, assembler).apply(opengles);
+        if (!no_sw) {
+            CoreImagePatches(analyser, assembler).apply();
+            QuartzCorePatches(analyser, assembler).apply();
             SpringBoardFoundationPatches(analyser, assembler).apply();
             CMCapturePatches(analyser, assembler).apply();
             NeutrinoCorePatches(analyser, assembler).apply();
