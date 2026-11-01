@@ -151,6 +151,9 @@ static void apple_a7iop_v4_reg_write(void* opaque, hwaddr addr, const uint64_t d
                 apple_a7iop_mailbox_update_irq(s->iop_mailbox);
             }
             break;
+        case 0x24000:
+            // making PMP shut up
+            break;
         default: {
             qemu_log_mask(LOG_UNIMP,
                           "A7IOP_V4(%s): Unknown write to 0x" HWADDR_FMT_plx " of value 0x" HWADDR_FMT_plx "\n",
