@@ -28,6 +28,7 @@
 #include "hw/arm/iboot/dfu.h"
 #include "hw/arm/iboot/iboot.h"
 #include "hw/arm/iboot/kernel_patches.h"
+#include "hw/arm/iboot/virt_patches.h"
 #include "hw/arm/mem.h"
 #include "hw/arm/sep/emu.h"
 #include "hw/display/apple_displaypipe_v4.h"
