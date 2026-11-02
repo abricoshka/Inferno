@@ -50,7 +50,6 @@ pkgconfig_feature("zstd", "libzstd >=1.4.0", "zstd cluster compression for qcow2
 pkgconfig_feature("curl", "libcurl >=7.29.0", "curl block driver")
 pkgconfig_feature("libssh", "libssh >=0.8.7", "SSH block driver")
 pkgconfig_feature("libnfs", "libnfs >=1.9.3 <6.0.0", "NFS block driver")
-pkgconfig_feature("glusterfs", "glusterfs-api >=3", "GlusterFS block driver")
 pkgconfig_feature("blkio", "blkio", "libblkio block driver")
 pkgconfig_feature("fuse", "fuse3 >=3.1", "FUSE block exports")
 pkgconfig_feature("linux_io_uring", "liburing >=0.3", "io_uring AIO", "linux")

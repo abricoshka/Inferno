@@ -436,8 +436,8 @@ static void raw_probe_alignment(BlockDriverState* bs, int fd, Error** errp)
     /*
      * If we could not get the sizes so far, we can only guess them. First try
      * to detect request alignment, since it is more likely to succeed. Then
-     * try to detect buf_align, which cannot be detected in some cases (e.g.
-     * Gluster). If buf_align cannot be detected, we fallback to the value of
+     * try to detect buf_align, which cannot be detected in some cases.
+     * If buf_align cannot be detected, we fallback to the value of
      * request_alignment.
      */
 

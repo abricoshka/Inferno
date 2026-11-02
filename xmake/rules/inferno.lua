@@ -37,11 +37,6 @@ rule("inferno.genh")
 		define("HAVE_GLIB_WITH_SLICE_ALLOCATOR", not version_at_least("glib", "2.75.3"))
 		define("CONFIG_FUSE_LSEEK", version_at_least("fuse", "3.8"))
 		define("CONFIG_BLKIO_WRITE_EROS_FUA", version_at_least("blkio", "1.4.0"))
-		define("CONFIG_GLUSTERFS_XLATOR_OPT", version_at_least("glusterfs", "4"))
-		define("CONFIG_GLUSTERFS_DISCARD", version_at_least("glusterfs", "5"))
-		for _, name in ipairs({"FALLOCATE", "ZEROFILL", "FTRUNCATE_HAS_STAT", "IOCB_HAS_STAT"}) do
-			define("CONFIG_GLUSTERFS_" .. name, version_at_least("glusterfs", "6"))
-		end
 		define("CONFIG_TSAN", target:policy("build.sanitizer.thread"))
 
 		local cpu = target:values("inferno.cpu")

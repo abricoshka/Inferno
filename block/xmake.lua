@@ -37,9 +37,6 @@ target("block")
 	if has_package("curl") then
 		add_files("curl.c")
 	end
-	if has_package("glusterfs") then
-		add_files("gluster.c")
-	end
 	if has_package("libnfs") then
 		add_files("nfs.c")
 	end

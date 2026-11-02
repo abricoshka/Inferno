@@ -231,7 +231,7 @@ target_end()
 target("block")
 	set_kind("object")
 	add_deps("genh", "crypto", "io")
-	add_packages("glib", "zlib", "zstd", "linux_io_uring", "blkio", "curl", "glusterfs", "libnfs", "libssh", {public = true})
+	add_packages("glib", "zlib", "zstd", "linux_io_uring", "blkio", "curl", "libnfs", "libssh", {public = true})
 	add_options("lzfse", "linux_aio", "bzip2", "rbd")
 target_end()
 
