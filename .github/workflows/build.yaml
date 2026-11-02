@@ -1,0 +1,81 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build_windows:
+    name: Windows Build (Gaia)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Inferno
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-git
+            mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-libyuv
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-libtasn1
+            mingw-w64-ucrt-x86_64-xmake
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nettle
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-wxwidgets3.2-msw
+
+      - name: Build and install LZFSE
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+
+          git clone --depth 1 https://github.com/lzfse/lzfse.git
+
+          cmake -S lzfse -B lzfse/build \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_INSTALL_PREFIX="$MINGW_PREFIX"
+
+          cmake --build lzfse/build --parallel
+          cmake --install lzfse/build
+
+          test -f "$MINGW_PREFIX/include/lzfse.h"
+
+      - name: Configure
+        shell: msys2 {0}
+        run: xmake f -m release --qom_cast_debug=n -y
+
+      - name: Build
+        shell: msys2 {0}
+        run: xmake -y
+
+      - name: Inspect build output
+        shell: msys2 {0}
+        run: |
+          echo "Generated executables and libraries:"
+          find . -type f \( \
+            -iname '*.exe' -o \
+            -iname '*.dll' \
+          \) -not -path './.git/*' | sort
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferno-gaia-windows-x86_64
+          path: build/
+          if-no-files-found: error
+          retention-days: 14
